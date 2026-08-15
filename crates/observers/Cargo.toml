@@ -1,0 +1,23 @@
+[package]
+name = "mortsom-observers"
+description = "Mortsom observers: read-only UI, notification, relay, wallet and artifact evidence sources."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mortsom-common = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+mostro-core = { workspace = true }
+nostr-sdk = { workspace = true }
+chrono = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,81 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/common",
+    "crates/coordinator",
+    "crates/app-contract",
+    "crates/android-driver",
+    "crates/environment",
+    "crates/observers",
+    "crates/scenario-kit",
+    "crates/app-adapters/mobile-legacy",
+    "crates/app-adapters/mobile-v2",
+    "scenarios",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/MostroP2P/mortsom"
+rust-version = "1.88"
+
+[workspace.dependencies]
+# Internal crates
+mortsom-common = { path = "crates/common" }
+mortsom-app-contract = { path = "crates/app-contract" }
+mortsom-android-driver = { path = "crates/android-driver" }
+mortsom-environment = { path = "crates/environment" }
+mortsom-observers = { path = "crates/observers" }
+mortsom-scenario-kit = { path = "crates/scenario-kit" }
+mortsom-adapter-mobile-legacy = { path = "crates/app-adapters/mobile-legacy" }
+mortsom-adapter-mobile-v2 = { path = "crates/app-adapters/mobile-v2" }
+mortsom-scenarios = { path = "scenarios" }
+
+# Protocol types — pinned exactly; fixes the nostr line at 0.45.
+mostro-core = "=0.14.5"
+nostr-sdk = "0.45.1"
+nostr = { version = "0.45.1", default-features = false, features = ["std", "nip06", "nip44", "nip59"] }
+nwc = "0.45.0"
+
+# Async runtime and process management
+tokio = { version = "1.53.1", features = ["full"] }
+async-trait = "0.1.92"
+futures = "0.3.34"
+
+# CLI, configuration, serialization
+clap = { version = "4.6.6", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+toml = "1.1.4"
+figment = { version = "0.10.19", features = ["toml"] }
+
+# Errors and diagnostics
+thiserror = "2.0.20"
+anyhow = "1.0.104"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
+
+# HTTP (WebDriver protocol client)
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls"] }
+base64 = "0.22.1"
+
+# Misc
+uuid = { version = "1.24.1", features = ["v4", "serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+inventory = "0.3.24"
+
+# Dev-dependencies
+mockall = "0.15.0"
+wiremock = "0.6.5"
+tempfile = "3.27.0"
+assert_cmd = "2.2.2"
+tokio-test = "0.4.5"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "warn"
+expect_used = "warn"

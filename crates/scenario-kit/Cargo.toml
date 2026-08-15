@@ -1,0 +1,23 @@
+[package]
+name = "mortsom-scenario-kit"
+description = "Mortsom scenario kit: domain actions, bounded waits, assertions and the scenario registry."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mortsom-common = { workspace = true }
+mortsom-app-contract = { workspace = true }
+mortsom-observers = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+inventory = { workspace = true }
+futures = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "mortsom-android-driver"
+description = "Mortsom Android driver: W3C WebDriver client for Appium/UiAutomator2 plus AVD, emulator and adb primitives."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mortsom-common = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

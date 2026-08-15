@@ -1,0 +1,17 @@
+[package]
+name = "mortsom-app-contract"
+description = "Mortsom application contract: the AppAdapter trait, normalized business states, capabilities and fixtures shared by every adapter."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mortsom-common = { workspace = true }
+serde = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

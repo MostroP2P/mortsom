@@ -1,0 +1,19 @@
+[package]
+name = "mortsom-scenarios"
+description = "Mortsom scenario catalogue: smoke, regression, recovery and adversarial scenarios expressed against the scenario kit."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mortsom-common = { workspace = true }
+mortsom-app-contract = { workspace = true }
+mortsom-scenario-kit = { workspace = true }
+tokio = { workspace = true }
+inventory = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

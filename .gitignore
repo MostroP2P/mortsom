@@ -1,0 +1,6 @@
+/target
+/artifacts
+mortsom.toml
+*.local.toml
+.env
+.env.*
