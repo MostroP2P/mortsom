@@ -2,6 +2,7 @@
 //! reporting and the `mortsom` command-line interface.
 
 pub mod artifacts;
+pub mod budget;
 pub mod cli;
 pub mod config;
 pub mod doctor;
