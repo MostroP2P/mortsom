@@ -17,7 +17,7 @@ dart_defines = ["MOSTRO_PUB_KEY=${MORTSOM_MOSTRO_PUBKEY}"]
 
 [android]
 avd_image = "system-images;android-35;google_apis;x86_64"
-device_profile = "Pixel_6"
+device_profile = "pixel_6"           # avdmanager device id (see `avdmanager list device -c`)
 api_level = 35
 boot_timeout_secs = 180
 ui_timeout_secs = 30

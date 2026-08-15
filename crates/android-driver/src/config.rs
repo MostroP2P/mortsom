@@ -21,6 +21,16 @@ pub struct AndroidConfig {
     /// Name of the clean snapshot restored between scenarios.
     #[serde(default = "default_snapshot")]
     pub snapshot_name: String,
+    /// Prefix of the per-actor AVD names (`<prefix>-alice`, `<prefix>-bob`).
+    #[serde(default = "default_avd_prefix")]
+    pub avd_name_prefix: String,
+    /// Console port of the first emulator; each actor uses `base + 2 * index`
+    /// (adb uses the next odd port), so Alice and Bob never share a port.
+    #[serde(default = "default_console_port")]
+    pub base_console_port: u16,
+    /// Emulator RAM in megabytes.
+    #[serde(default = "default_ram_mb")]
+    pub emulator_ram_mb: u32,
 }
 
 fn default_boot_timeout() -> u64 {
@@ -33,6 +43,18 @@ fn default_ui_timeout() -> u64 {
 
 fn default_snapshot() -> String {
     "mortsom-clean".to_owned()
+}
+
+fn default_avd_prefix() -> String {
+    "mortsom".to_owned()
+}
+
+fn default_console_port() -> u16 {
+    5554
+}
+
+fn default_ram_mb() -> u32 {
+    3072
 }
 
 impl AndroidConfig {
@@ -61,6 +83,36 @@ impl AndroidConfig {
         if self.snapshot_name.is_empty() {
             errors.push("android.snapshot_name must not be empty".to_owned());
         }
+        if self.avd_name_prefix.is_empty()
+            || !self
+                .avd_name_prefix
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+        {
+            errors.push("android.avd_name_prefix must be a non-empty AVD-safe name".to_owned());
+        }
+        // Emulator console ports are even numbers in 5554..=5682.
+        if self.emulator_ram_mb < 1024 {
+            errors.push("android.emulator_ram_mb must be at least 1024".to_owned());
+        }
+        if self.base_console_port < 5554
+            || self.base_console_port > 5680
+            || !self.base_console_port.is_multiple_of(2)
+        {
+            errors.push(
+                "android.base_console_port must be an even port between 5554 and 5680".to_owned(),
+            );
+        }
+    }
+
+    /// Console port for an actor slot; adb listens on the next port.
+    pub fn console_port(&self, slot: u16) -> u16 {
+        self.base_console_port + 2 * slot
+    }
+
+    /// adb port for an actor slot.
+    pub fn adb_port(&self, slot: u16) -> u16 {
+        self.console_port(slot) + 1
     }
 
     /// Filesystem path of the system image relative to the SDK root.
@@ -94,6 +146,9 @@ mod tests {
             boot_timeout_secs: 180,
             ui_timeout_secs: 30,
             snapshot_name: "mortsom-clean".into(),
+            avd_name_prefix: "mortsom".into(),
+            base_console_port: 5554,
+            emulator_ram_mb: 3072,
         }
     }
 
@@ -122,6 +177,20 @@ mod tests {
         assert_eq!(config.boot_timeout_secs, 180);
         assert_eq!(config.ui_timeout_secs, 30);
         assert_eq!(config.snapshot_name, "mortsom-clean");
+        assert_eq!(config.avd_name_prefix, "mortsom");
+        assert_eq!(config.console_port(0), 5554);
+        assert_eq!(config.console_port(1), 5556);
+        assert_eq!(config.adb_port(1), 5557);
+        assert_eq!(config.emulator_ram_mb, 3072);
+    }
+
+    #[test]
+    fn bad_prefix_and_odd_port_are_rejected() {
+        let mut config = valid();
+        config.avd_name_prefix = "bad name".into();
+        config.base_console_port = 5555;
+
+        assert_eq!(errors_of(&config).len(), 2);
     }
 
     #[test]
