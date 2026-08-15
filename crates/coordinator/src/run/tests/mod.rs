@@ -12,7 +12,7 @@ use mortsom_app_contract::{
     DeviceContext, Identity, OrderDraft, OrderReference, OrderState, PaymentHandoff, PaymentPath,
     VisibleOrder, WalletConnection,
 };
-use mortsom_environment::docker::{ContainerSpec, DockerError};
+use mortsom_environment::docker::{ContainerRuntime, ContainerSpec, DockerError};
 use mortsom_observers::wallet::PaymentState;
 use mortsom_scenario_kit::registry::ScenarioFuture;
 use nostr_sdk::prelude::{EventBuilder, FinalizeEvent, Keys, Kind, PublicKey, Tag};
@@ -55,6 +55,13 @@ fn world(allow_mainnet: bool) -> World {
     .replace("health_timeout_secs = 60", "health_timeout_secs = 1")
     .replace("state_timeout_secs = 180", "state_timeout_secs = 5")
     .replace("settle_timeout_secs = 600", "settle_timeout_secs = 5")
+    .replace(
+        "expiration_timeout_secs = 1200",
+        "expiration_timeout_secs = 5",
+    )
+    .replace("quiet_window_secs = 20", "quiet_window_secs = 1")
+    .replace("background_secs = 15", "background_secs = 1")
+    .replace("outage_secs = 20", "outage_secs = 1")
     .replace("host_port = 7000", "host_port = 47500")
     .replace(
         "allow_mainnet = false",
@@ -114,6 +121,7 @@ fn runner() -> FakeRunner {
 #[derive(Default)]
 struct FakeDocker {
     running: Mutex<Vec<String>>,
+    restarted: Mutex<Vec<String>>,
 }
 #[async_trait]
 impl ContainerRuntime for FakeDocker {
@@ -126,6 +134,10 @@ impl ContainerRuntime for FakeDocker {
     }
     async fn stop_and_remove(&self, name: &str) -> Result<(), DockerError> {
         self.running.lock().unwrap().retain(|n| n != name);
+        Ok(())
+    }
+    async fn restart(&self, name: &str) -> Result<(), DockerError> {
+        self.restarted.lock().unwrap().push(name.to_owned());
         Ok(())
     }
     async fn logs(&self, _: &str) -> Result<String, DockerError> {
@@ -214,6 +226,12 @@ impl UiSession for FakeSession {
     async fn clear_app(&self) -> Result<(), AppiumError> {
         Ok(())
     }
+    async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
+        Ok(())
+    }
+    async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
+        Ok(())
+    }
     async fn end(&self) -> Result<(), AppiumError> {
         Ok(())
     }
@@ -225,6 +243,12 @@ struct FakeAdapter {
     capabilities: CapabilitySet,
     fail_release: bool,
     cancelled: Mutex<Vec<String>>,
+    /// Orders where one side already asked for a cooperative cancel.
+    coop_pending: Mutex<Vec<String>>,
+    /// Orders created so far (ids are `o1`, `o2`, ...).
+    created: Mutex<u32>,
+    /// Cancel is accepted by the UI but the daemon never closes the order.
+    stubborn: bool,
 }
 
 impl FakeAdapter {
@@ -234,6 +258,9 @@ impl FakeAdapter {
             capabilities: CapabilitySet::new(Capability::ALL),
             fail_release: false,
             cancelled: Mutex::new(Vec::new()),
+            coop_pending: Mutex::new(Vec::new()),
+            created: Mutex::new(0),
+            stubborn: false,
         }
     }
     fn set(&self, id: &str, state: OrderState) {
@@ -295,9 +322,13 @@ impl AppAdapter for FakeAdapter {
         _: &DeviceContext<'_>,
         _: &OrderDraft,
     ) -> Result<VisibleOrder, AdapterError> {
-        self.set("o1", OrderState::Pending);
+        let mut created = self.created.lock().unwrap();
+        *created += 1;
+        let id = format!("o{created}");
+        drop(created);
+        self.set(&id, OrderState::Pending);
         Ok(VisibleOrder {
-            id: Some("o1".into()),
+            id: Some(id),
             state: OrderState::Pending,
         })
     }
@@ -348,19 +379,58 @@ impl AppAdapter for FakeAdapter {
     }
     async fn cancel_if_open(
         &self,
-        _: &DeviceContext<'_>,
+        device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<CancelOutcome, AdapterError> {
         let mut orders = self.orders.lock().unwrap();
+        let taker = device.actor == mortsom_android_driver::avd::Actor::Bob;
         match orders.get(&order.id).copied() {
             None => Ok(CancelOutcome::NotFound),
             Some(state) if state.is_terminal() => Ok(CancelOutcome::AlreadyClosed),
+            // Mostro republishes an unfunded order the taker walks away from.
+            Some(OrderState::Taken) if taker && !self.stubborn => {
+                orders.insert(order.id.clone(), OrderState::Pending);
+                Ok(CancelOutcome::Cancelled)
+            }
+            // A funded order needs both sides: the first request only marks it.
+            Some(OrderState::Active | OrderState::FiatSent)
+                if !self.coop_pending.lock().unwrap().contains(&order.id) =>
+            {
+                self.coop_pending.lock().unwrap().push(order.id.clone());
+                Ok(CancelOutcome::Cancelled)
+            }
+            Some(_) if self.stubborn => Ok(CancelOutcome::Cancelled),
             Some(_) => {
                 orders.insert(order.id.clone(), OrderState::Cancelled);
                 self.cancelled.lock().unwrap().push(order.id.clone());
                 Ok(CancelOutcome::Cancelled)
             }
         }
+    }
+    async fn visible_actions(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<Vec<String>, AdapterError> {
+        // Alice is always the seller/maker in these fakes.
+        let state = self.orders.lock().unwrap().get(&order.id).copied();
+        let seller = device.actor == mortsom_android_driver::avd::Actor::Alice;
+        Ok(match (state, seller) {
+            (Some(OrderState::Taken), true) => vec!["pay-invoice".into(), "cancel".into()],
+            (Some(OrderState::Taken), false) => vec!["cancel".into()],
+            (Some(OrderState::Active), true) => vec!["cancel".into(), "dispute".into()],
+            (Some(OrderState::Active), false) => vec!["fiat-sent".into(), "cancel".into()],
+            (Some(OrderState::FiatSent), true) => vec!["release".into(), "dispute".into()],
+            _ => vec![],
+        })
+    }
+    async fn cancel_payment(
+        &self,
+        _: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<(), AdapterError> {
+        self.set(&order.id, OrderState::Cancelled);
+        Ok(())
     }
     async fn observe_order(
         &self,
@@ -392,6 +462,11 @@ impl WalletReader for SettledReader {
 
 /// Detached observer plus a task that keeps publishing order states so the
 /// relay correlation of any scenario is satisfied.
+/// Order ids the fake daemon publishes states for.
+const FAKE_ORDER_IDS: [&str; 12] = [
+    "o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8", "o9", "o10", "o11", "o12",
+];
+
 struct FakeObserver;
 #[async_trait]
 impl ObserverFactory for FakeObserver {
@@ -401,16 +476,21 @@ impl ObserverFactory for FakeObserver {
         let feeder = Arc::clone(&observer);
         tokio::spawn(async move {
             for _ in 0..200 {
-                for status in [
-                    "pending",
-                    "waiting-payment",
-                    "active",
-                    "fiat-sent",
-                    "success",
-                ] {
+                for (id, status) in FAKE_ORDER_IDS.iter().flat_map(|id| {
+                    [
+                        "pending",
+                        "waiting-payment",
+                        "active",
+                        "fiat-sent",
+                        "success",
+                        "canceled",
+                    ]
+                    .into_iter()
+                    .map(move |s| (*id, s))
+                }) {
                     let event = EventBuilder::new(Kind::Custom(38383), "")
                         .tags([
-                            Tag::parse(["d", "o1"]).unwrap(),
+                            Tag::parse(["d", id]).unwrap(),
                             Tag::parse(["s", status]).unwrap(),
                         ])
                         .finalize(&keys)
@@ -430,7 +510,7 @@ async fn run(
     options: RunOptions,
     confirm: bool,
 ) -> Result<RunSummary, String> {
-    let docker = FakeDocker::default();
+    let docker = Arc::new(FakeDocker::default());
     let runner = runner();
     let env = env_for(world, confirm);
     let wallets = |_: &str, _: &Secret| -> Result<Arc<dyn WalletReader>, String> {
@@ -439,8 +519,8 @@ async fn run(
     let deps = RunDeps {
         runner: &runner,
         ui: &FakeUi,
-        docker: &docker,
-        probe: &AlwaysReady,
+        docker: Arc::clone(&docker) as Arc<dyn ContainerRuntime>,
+        probe: Arc::new(AlwaysReady),
         adapter,
         env: &env,
         wallets: &wallets,
@@ -699,3 +779,5 @@ fn walk_text(dir: &Path) -> String {
     }
     out
 }
+
+mod phase5;

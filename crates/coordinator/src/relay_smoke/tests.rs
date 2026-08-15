@@ -52,6 +52,9 @@ impl ContainerRuntime for FakeRuntime {
         self.removed.lock().unwrap().push(name.to_owned());
         Ok(())
     }
+    async fn restart(&self, _name: &str) -> Result<(), DockerError> {
+        Ok(())
+    }
     async fn logs(&self, _name: &str) -> Result<String, DockerError> {
         Ok(format!("relay log with secret {ALICE}\n"))
     }
@@ -114,6 +117,7 @@ fn event(kind: u16, tags: &[&[&str]]) -> ObservedEvent {
             .map(|t| t.iter().map(|s| (*s).to_owned()).collect())
             .collect(),
         content: Some(String::new()),
+        raw: None,
     }
 }
 

@@ -114,4 +114,18 @@ pub trait AppAdapter: Send + Sync {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<AppOrderState, AdapterError>;
+    /// Names of the trade actions the app currently offers for `order`
+    /// (normalized: `pay-invoice`, `add-invoice`, `fiat-sent`, `release`,
+    /// `cancel`, `dispute`, `rate`), used by unauthorized-action checks.
+    async fn visible_actions(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<Vec<String>, AdapterError>;
+    /// Cancels the order from the pay-invoice screen instead of paying.
+    async fn cancel_payment(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<(), AdapterError>;
 }

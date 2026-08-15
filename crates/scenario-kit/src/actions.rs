@@ -11,7 +11,7 @@ use tracing::info;
 
 use crate::context::{Context, ScenarioError};
 use crate::timeline::TimelineKind;
-use crate::waits::wait_until;
+use crate::waits::{stays_absent, wait_until};
 
 /// Poll interval for state observations.
 pub const STATE_POLL: Duration = Duration::from_secs(3);
@@ -134,6 +134,95 @@ pub async fn wait_app_state(
                 order.id, ctx.state_timeout
             )))
         }
+    }
+}
+
+/// Waits (bounded by `timeout`) until `actor`'s app shows `order` in one of
+/// `accepted` and returns which. Any other terminal state fails fast.
+pub async fn wait_app_state_in(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+    accepted: &[OrderState],
+    timeout: Duration,
+) -> Result<OrderState, ScenarioError> {
+    let session = ctx.actor(actor)?;
+    let device = session.device(ctx.ui_timeout);
+    let found = wait_until(timeout, STATE_POLL, || async {
+        match ctx.adapter.observe_order(&device, order).await {
+            Ok(state) if accepted.contains(&state.state) => Some(Ok(state)),
+            Ok(state) if state.state.is_terminal() => Some(Err(ScenarioError::product(format!(
+                "order {} reached terminal `{}` while waiting for {}",
+                order.id,
+                state.raw_label,
+                names(accepted)
+            )))),
+            _ => None,
+        }
+    })
+    .await;
+    match found {
+        Some(Ok(state)) => {
+            ctx.timeline.push(
+                TimelineKind::UiState,
+                Some(actor.as_str()),
+                format!(
+                    "order {} shows {} (`{}`)",
+                    order.id, state.state, state.raw_label
+                ),
+                None,
+            );
+            Ok(state.state)
+        }
+        Some(Err(e)) => Err(e),
+        None => Err(ScenarioError::product(format!(
+            "order {} did not reach {} on {actor} within {timeout:?}",
+            order.id,
+            names(accepted)
+        ))),
+    }
+}
+
+fn names(states: &[OrderState]) -> String {
+    states
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Negative observation: `actor`'s app keeps showing `order` in `expected`
+/// for the whole `window`; any other state within it is a product failure.
+pub async fn expect_state_holds(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+    expected: OrderState,
+    window: Duration,
+) -> Result<(), ScenarioError> {
+    let session = ctx.actor(actor)?;
+    let device = session.device(ctx.ui_timeout);
+    let deviation = stays_absent(window, STATE_POLL, || async {
+        match ctx.adapter.observe_order(&device, order).await {
+            Ok(state) if state.state != expected => Some(state.raw_label),
+            _ => None,
+        }
+    })
+    .await;
+    match deviation {
+        None => {
+            ctx.timeline.push(
+                TimelineKind::Assertion,
+                Some(actor.as_str()),
+                format!("order {} stayed {expected} for {window:?}", order.id),
+                None,
+            );
+            Ok(())
+        }
+        Some(raw) => Err(ScenarioError::product(format!(
+            "order {} left {expected} (`{raw}`) on {actor} within {window:?}",
+            order.id
+        ))),
     }
 }
 
@@ -440,236 +529,39 @@ pub fn is_observable(path: PaymentPath) -> bool {
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use async_trait::async_trait;
-    use mortsom_android_driver::appium::AppiumError;
-    use mortsom_android_driver::ui::UiSession;
-    use mortsom_app_contract::{
-        AdapterError, Apk, AppAdapter, AppOrderState, AppProfile, BuildContext, CancelOutcome,
-        CapabilitySet, DeviceContext, Identity, PaymentHandoff, TestEnvironment, VisibleOrder,
-        WalletConnection,
-    };
-    use mortsom_common::{Lane, Secret};
-    use mortsom_observers::relay::{ObserverScope, RelayObserver};
-    use mortsom_observers::wallet::{WalletObserver, WalletReader};
-    use nostr_sdk::prelude::Keys;
-
     use super::*;
-    use crate::budget::{Budget, SpendCaps};
-    use crate::cleanup::CleanupRegistry;
-    use crate::evidence::NullSink;
-    use crate::timeline::Timeline;
+    use crate::test_support::{StateAdapter, context};
 
-    struct StateAdapter(Mutex<OrderState>);
+    #[tokio::test]
+    async fn expect_state_holds_watches_the_whole_window() {
+        let adapter = Arc::new(StateAdapter(Mutex::new(OrderState::Active)));
+        let ctx = context(adapter.clone());
+        let order = OrderReference::new("o1");
+        expect_state_holds(
+            &ctx,
+            Actor::Bob,
+            &order,
+            OrderState::Active,
+            Duration::from_millis(30),
+        )
+        .await
+        .unwrap();
 
-    #[async_trait]
-    impl AppAdapter for StateAdapter {
-        fn profile(&self) -> AppProfile {
-            AppProfile {
-                name: "fake".into(),
-                package: "p".into(),
-            }
-        }
-        fn capabilities(&self) -> CapabilitySet {
-            CapabilitySet::default()
-        }
-        async fn build(
-            &self,
-            _: &BuildContext,
-            _: &dyn mortsom_android_driver::process::CommandRunner,
-        ) -> Result<Apk, AdapterError> {
-            Err(AdapterError::infrastructure("no"))
-        }
-        async fn onboard(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &TestEnvironment,
-        ) -> Result<Identity, AdapterError> {
-            Err(AdapterError::infrastructure("no"))
-        }
-        async fn displayed_identity(
-            &self,
-            _: &DeviceContext<'_>,
-        ) -> Result<Identity, AdapterError> {
-            Err(AdapterError::infrastructure("no"))
-        }
-        async fn configure_node_and_relay(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &TestEnvironment,
-        ) -> Result<(), AdapterError> {
-            Ok(())
-        }
-        async fn configure_nwc(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &str,
-            _: &Secret,
-        ) -> Result<WalletConnection, AdapterError> {
-            Err(AdapterError::infrastructure("no"))
-        }
-        async fn create_order(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &OrderDraft,
-        ) -> Result<VisibleOrder, AdapterError> {
-            Err(AdapterError::infrastructure("no"))
-        }
-        async fn find_and_take_order(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &OrderReference,
-        ) -> Result<(), AdapterError> {
-            Ok(())
-        }
-        async fn pay_hold_invoice(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &OrderReference,
-        ) -> Result<PaymentHandoff, AdapterError> {
-            Err(AdapterError::infrastructure("no"))
-        }
-        async fn provide_buyer_invoice(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &OrderReference,
-        ) -> Result<Option<Secret>, AdapterError> {
-            Ok(None)
-        }
-        async fn confirm_fiat_sent(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &OrderReference,
-        ) -> Result<(), AdapterError> {
-            Ok(())
-        }
-        async fn release(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &OrderReference,
-        ) -> Result<(), AdapterError> {
-            Ok(())
-        }
-        async fn cancel_if_open(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &OrderReference,
-        ) -> Result<CancelOutcome, AdapterError> {
-            Ok(CancelOutcome::NotFound)
-        }
-        async fn observe_order(
-            &self,
-            _: &DeviceContext<'_>,
-            _: &OrderReference,
-        ) -> Result<AppOrderState, AdapterError> {
-            let state = *self.0.lock().unwrap();
-            Ok(AppOrderState {
-                state,
-                raw_label: state.as_str().into(),
-            })
-        }
-    }
-
-    struct NoUi;
-    #[async_trait]
-    impl UiSession for NoUi {
-        async fn exists(&self, _: &str) -> Result<bool, AppiumError> {
-            Ok(false)
-        }
-        async fn wait_for(&self, _: &str, _: Duration) -> Result<(), AppiumError> {
-            Ok(())
-        }
-        async fn wait_gone(&self, _: &str, _: Duration) -> Result<(), AppiumError> {
-            Ok(())
-        }
-        async fn tap(&self, _: &str) -> Result<(), AppiumError> {
-            Ok(())
-        }
-        async fn type_text(&self, _: &str, _: &str) -> Result<(), AppiumError> {
-            Ok(())
-        }
-        async fn text_of(&self, _: &str) -> Result<String, AppiumError> {
-            Ok(String::new())
-        }
-        async fn is_enabled(&self, _: &str) -> Result<bool, AppiumError> {
-            Ok(true)
-        }
-        async fn label_of(&self, _: &str) -> Result<String, AppiumError> {
-            Ok(String::new())
-        }
-        async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
-            Ok(vec![])
-        }
-        async fn page_source(&self) -> Result<String, AppiumError> {
-            Ok(String::new())
-        }
-        async fn background(&self, _: u64) -> Result<(), AppiumError> {
-            Ok(())
-        }
-        async fn terminate_app(&self) -> Result<(), AppiumError> {
-            Ok(())
-        }
-        async fn activate_app(&self) -> Result<(), AppiumError> {
-            Ok(())
-        }
-        async fn clear_app(&self) -> Result<(), AppiumError> {
-            Ok(())
-        }
-        async fn end(&self) -> Result<(), AppiumError> {
-            Ok(())
-        }
-    }
-
-    struct NoWallet;
-    #[async_trait]
-    impl WalletReader for NoWallet {
-        async fn lookup(
-            &self,
-            _: &str,
-        ) -> Result<Option<(u64, u64, mortsom_observers::wallet::PaymentState)>, String> {
-            Ok(None)
-        }
-    }
-
-    fn context(adapter: Arc<dyn AppAdapter>) -> Context {
-        Context {
-            adapter,
-            actors: vec![
-                crate::context::ActorSession {
-                    actor: Actor::Alice,
-                    ui: Arc::new(NoUi),
-                    wallet_label: "alice".into(),
-                },
-                crate::context::ActorSession {
-                    actor: Actor::Bob,
-                    ui: Arc::new(NoUi),
-                    wallet_label: "bob".into(),
-                },
-            ],
-            env: TestEnvironment {
-                mostro_pubkey: "x".into(),
-                relay_url: "ws://r".into(),
-                lane: Lane::Local,
-            },
-            relay: Arc::new(RelayObserver::detached(ObserverScope::daemon_only(
-                Keys::generate().public_key(),
-            ))),
-            wallets: Arc::new(WalletObserver::new(vec![(
-                "alice".into(),
-                Arc::new(NoWallet) as Arc<dyn WalletReader>,
-            )])),
-            budget: Arc::new(Mutex::new(Budget::new(SpendCaps::new(10, 10).unwrap()))),
-            cleanup: Arc::new(CleanupRegistry::default()),
-            timeline: Arc::new(Timeline::default()),
-            evidence: Arc::new(NullSink),
-            mainnet: None,
-            amount_sats: 5,
-            fiat_code: "USD".into(),
-            fiat_amount: 1,
-            payment_method: "cash".into(),
-            ui_timeout: Duration::from_millis(10),
-            state_timeout: Duration::from_millis(300),
-            settle_timeout: Duration::from_millis(10),
-        }
+        let flipper = adapter.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            *flipper.0.lock().unwrap() = OrderState::Cancelled;
+        });
+        let err = expect_state_holds(
+            &ctx,
+            Actor::Bob,
+            &order,
+            OrderState::Active,
+            Duration::from_millis(500),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.message.contains("left active (`cancelled`)"), "{err}");
     }
 
     #[tokio::test]
@@ -683,7 +575,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(err.message.contains("terminal `canceled`"));
+        assert!(err.message.contains("terminal `cancelled`"));
         assert!(
             started.elapsed() < Duration::from_millis(250),
             "must not wait out the deadline"

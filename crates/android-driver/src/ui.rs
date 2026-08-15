@@ -41,6 +41,10 @@ pub trait UiSession: Send + Sync {
     async fn activate_app(&self) -> Result<(), AppiumError>;
     /// Clear app data.
     async fn clear_app(&self) -> Result<(), AppiumError>;
+    /// Enable or disable network connectivity (Wi-Fi and mobile data).
+    async fn set_connectivity(&self, enabled: bool) -> Result<(), AppiumError>;
+    /// Rotate the device to landscape or portrait.
+    async fn set_orientation(&self, landscape: bool) -> Result<(), AppiumError>;
     /// End the session.
     async fn end(&self) -> Result<(), AppiumError>;
 }
@@ -88,6 +92,12 @@ impl UiSession for AppiumSession {
     }
     async fn clear_app(&self) -> Result<(), AppiumError> {
         AppiumSession::clear_app(self).await
+    }
+    async fn set_connectivity(&self, enabled: bool) -> Result<(), AppiumError> {
+        AppiumSession::set_connectivity(self, enabled).await
+    }
+    async fn set_orientation(&self, landscape: bool) -> Result<(), AppiumError> {
+        AppiumSession::set_orientation(self, landscape).await
     }
     async fn end(&self) -> Result<(), AppiumError> {
         AppiumSession::end(self).await

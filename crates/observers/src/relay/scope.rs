@@ -56,6 +56,18 @@ impl ObserverScope {
                 .author(self.mostro_pubkey)
                 .kinds(DAEMON_KINDS)
                 .limit(0),
+            // Protocol traffic to and from the daemon (metadata only, the
+            // content is encrypted): on an isolated run relay every such
+            // message belongs to this run, which is what makes "no duplicate
+            // action after a restart" observable (spec §8).
+            Filter::new()
+                .kind(Kind::PrivateDirectMessage)
+                .pubkey(self.mostro_pubkey)
+                .limit(0),
+            Filter::new()
+                .kind(Kind::PrivateDirectMessage)
+                .author(self.mostro_pubkey)
+                .limit(0),
         ];
         if !self.order_ids.is_empty() {
             filters.push(
@@ -104,13 +116,15 @@ impl ObserverScope {
         }
         if event.kind == Kind::PrivateDirectMessage {
             // Spec §4.3: the observer records events for run identities, so
-            // any DM addressed to or authored by an actor is evidence, even
-            // one exchanged directly between Alice and Bob.
-            let to_actor = event
+            // any DM addressed to or authored by the daemon or an actor is
+            // evidence, even one exchanged directly between Alice and Bob.
+            let to_run_identity = event
                 .tags
                 .public_keys()
-                .any(|p| self.actor_pubkeys.contains(&p));
-            return to_actor || self.actor_pubkeys.contains(&event.pubkey);
+                .any(|p| p == self.mostro_pubkey || self.actor_pubkeys.contains(&p));
+            return to_run_identity
+                || event.pubkey == self.mostro_pubkey
+                || self.actor_pubkeys.contains(&event.pubkey);
         }
         false
     }

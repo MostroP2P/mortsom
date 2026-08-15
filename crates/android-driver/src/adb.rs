@@ -255,6 +255,20 @@ impl Adb {
         .stdout)
     }
 
+    /// Name of the AVD behind this serial (`adb emu avd name`); `None` when
+    /// no emulator answers on the serial.
+    pub async fn avd_name(&self, runner: &dyn CommandRunner) -> Option<String> {
+        let output = run_ok(runner, &self.command(&["emu", "avd", "name"]), ADB_TIMEOUT)
+            .await
+            .ok()?;
+        output
+            .stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && *line != "OK")
+            .map(str::to_owned)
+    }
+
     /// Asks the emulator console to shut down (`adb emu kill`).
     pub async fn emu_kill(&self, runner: &dyn CommandRunner) -> Result<(), AdbError> {
         run_ok(runner, &self.command(&["emu", "kill"]), ADB_TIMEOUT).await?;
@@ -414,6 +428,19 @@ mod tests {
         );
         let missing = adb.package_version(&runner, "other").await.unwrap_err();
         assert!(matches!(missing, AdbError::NotInstalled { .. }));
+    }
+
+    #[tokio::test]
+    async fn avd_name_reads_the_console_answer_or_none() {
+        let runner = FakeRunner::default();
+        runner.script("adb -s emulator-5556 emu avd name", "mortsom-bob\nOK\n");
+        assert_eq!(
+            adb().avd_name(&runner).await.as_deref(),
+            Some("mortsom-bob")
+        );
+        let silent = FakeRunner::default();
+        silent.script_failure("adb -s emulator-5556 emu avd name", "error: device offline");
+        assert_eq!(adb().avd_name(&silent).await, None);
     }
 
     #[tokio::test]

@@ -27,6 +27,9 @@ const CHANNEL_CAPACITY: usize = 1024;
 /// refresh replaces the previous subscriptions instead of accumulating.
 const SUBSCRIPTION_PREFIX: &str = "mortsom-observer";
 
+/// NIP-17 direct message kind (protocol v2 transport).
+const PRIVATE_DM_KIND: u16 = 14;
+
 /// One observed relay event, normalized for evidence. Encrypted content
 /// (kind 14) is never stored; public content is kept as-is and redacted at
 /// the artifact boundary.
@@ -50,6 +53,10 @@ pub struct ObservedEvent {
     pub tags: Vec<Vec<String>>,
     /// Content for public kinds; `None` for encrypted direct messages.
     pub content: Option<String>,
+    /// The signed event as JSON for public kinds (replayable evidence);
+    /// `None` for direct messages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw: Option<String>,
 }
 
 impl ObservedEvent {
@@ -185,6 +192,19 @@ impl RelayObserver {
         self.resubscribe().await
     }
 
+    /// Adds an actor identity to the scope (direct messages to and from it
+    /// are observed as metadata only).
+    pub async fn add_actor(
+        &self,
+        pubkey: nostr_sdk::prelude::PublicKey,
+    ) -> Result<(), ObserverError> {
+        lock(&self.inner.scope).add_actor(pubkey);
+        if !self.inner.live {
+            return Ok(());
+        }
+        self.resubscribe().await
+    }
+
     /// Replaces the current subscriptions with the scope's filter set. Ids
     /// are stable, so nothing accumulates on the relay across refreshes.
     async fn resubscribe(&self) -> Result<(), ObserverError> {
@@ -238,6 +258,7 @@ impl RelayObserver {
             created_at: event.created_at.as_secs(),
             tags: event.tags.iter().map(|t| t.as_slice().to_vec()).collect(),
             content: scope::keeps_content(event.kind).then(|| event.content.clone()),
+            raw: scope::keeps_content(event.kind).then(|| event.as_json()),
         };
         log.push(observed.clone());
         drop(log);
@@ -255,6 +276,23 @@ impl RelayObserver {
     /// Ordered copy of everything observed so far.
     pub fn snapshot(&self) -> Vec<ObservedEvent> {
         lock(&self.inner.log).clone()
+    }
+
+    /// Sequence number of the last logged event (0 when empty); a baseline
+    /// for "nothing new after this point" observations.
+    pub fn last_seq(&self) -> u64 {
+        lock(&self.inner.log).last().map_or(0, |e| e.seq)
+    }
+
+    /// Protocol messages (kind 14) sent by anyone other than the daemon
+    /// after `seq`: on an isolated run relay these are the actors' actions.
+    pub fn actor_messages_since(&self, seq: u64) -> Vec<ObservedEvent> {
+        let daemon = lock(&self.inner.scope).mostro_pubkey.to_hex();
+        lock(&self.inner.log)
+            .iter()
+            .filter(|e| e.seq > seq && e.kind == PRIVATE_DM_KIND && e.author != daemon)
+            .cloned()
+            .collect()
     }
 
     /// Waits until an event satisfying `predicate` exists in the log or

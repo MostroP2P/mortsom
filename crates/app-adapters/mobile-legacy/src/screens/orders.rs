@@ -194,6 +194,40 @@ pub async fn cancel_if_open(
     Ok(CancelOutcome::Cancelled)
 }
 
+/// Normalized names of the trade actions currently visible for `order`.
+pub async fn visible_actions(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<Vec<String>, AdapterError> {
+    open_trade(device, order).await?;
+    let mut actions = Vec::new();
+    for (id, name) in [
+        (Ids::TRADE_PAY_INVOICE, "pay-invoice"),
+        (Ids::TRADE_ADD_INVOICE, "add-invoice"),
+        (Ids::TRADE_FIAT_SENT, "fiat-sent"),
+        (Ids::TRADE_RELEASE, "release"),
+        (Ids::TRADE_CANCEL, "cancel"),
+        (Ids::TRADE_DISPUTE, "dispute"),
+        (Ids::trade_action("rate").as_str(), "rate"),
+    ] {
+        if present(device, id).await? {
+            actions.push(name.to_owned());
+        }
+    }
+    Ok(actions)
+}
+
+/// Opens the pay screen and cancels the order from there.
+pub async fn cancel_payment(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<(), AdapterError> {
+    open_trade(device, order).await?;
+    tap(device, Ids::TRADE_PAY_INVOICE).await?;
+    tap(device, Ids::PAY_CANCEL).await?;
+    expect(device, Ids::ORDER_ADD_FAB).await
+}
+
 /// Returns to the order book from wherever the app is (drawer screens and
 /// trade detail have a back control; the book itself has the FAB).
 pub async fn go_home(device: &DeviceContext<'_>) -> Result<(), AdapterError> {

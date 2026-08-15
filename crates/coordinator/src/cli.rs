@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
 
@@ -43,6 +44,12 @@ pub struct Cli {
 pub enum Command {
     /// List registered scenarios with tags, requirements and value flag.
     List,
+    /// Remove what a crashed or interrupted run left on this host (its relay
+    /// container, Mortsom's emulators) and report orders it left open.
+    Cleanup {
+        /// Run id (the artifacts directory name).
+        run: String,
+    },
     /// Run scenarios end to end (relay, devices, apps, observers, cleanup).
     Run {
         /// Scenario names.
@@ -127,6 +134,7 @@ pub async fn run(cli: Cli) -> ExitCode {
     let _sink = init_logging();
     match cli.command {
         Command::List => list_scenarios(),
+        Command::Cleanup { run } => cleanup_command(&cli.config, &run).await,
         Command::Run { scenarios, tag } => run_command(&cli.config, scenarios, tag).await,
         Command::App { command } => run_app(&cli.config, command).await,
         Command::Device { command } => run_device(&cli.config, command).await,
@@ -151,6 +159,29 @@ pub async fn run(cli: Cli) -> ExitCode {
                 ExitCode::from(1)
             }
         }
+    }
+}
+
+async fn cleanup_command(config_path: &std::path::Path, run_id: &str) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let env = |name: &str| std::env::var(name).ok();
+    let deps = crate::cleanup_run::CleanupDeps {
+        runner: &TokioRunner,
+        docker: &DockerCli::default(),
+        env: &env,
+    };
+    let summary = crate::cleanup_run::cleanup_run(&config, run_id, &deps).await;
+    print!("{}", summary.render());
+    if summary.clean {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 
@@ -393,8 +424,8 @@ async fn run_command(
     let deps = RunDeps {
         runner: &TokioRunner,
         ui: &ui,
-        docker: &docker,
-        probe: &NostrProbe,
+        docker: Arc::new(docker),
+        probe: Arc::new(NostrProbe),
         adapter,
         env: &env,
         wallets: &wallets,

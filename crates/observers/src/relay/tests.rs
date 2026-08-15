@@ -32,13 +32,13 @@ fn observer(scope: ObserverScope) -> RelayObserver {
 fn scope_filters_grow_with_orders_and_actors() {
     let daemon = Keys::generate();
     let mut scope = ObserverScope::daemon_only(daemon.public_key());
-    assert_eq!(scope.filters().len(), 1);
+    assert_eq!(scope.filters().len(), 3);
 
     scope.add_order("o1");
     scope.add_order("o1");
     scope.add_actor(Keys::generate().public_key());
     assert_eq!(scope.order_ids, vec!["o1"]);
-    assert_eq!(scope.filters().len(), 4);
+    assert_eq!(scope.filters().len(), 6);
 }
 
 #[test]
@@ -81,6 +81,40 @@ fn scope_matches_only_run_evidence() {
     assert!(scope.matches(&dm_from_alice));
     assert!(!scope.matches(&dm_stranger));
     assert!(!scope.matches(&stranger_info));
+
+    // A trade-key message to the daemon is run evidence on the run relay.
+    let dm_to_daemon = event(
+        &stranger,
+        Kind::PrivateDirectMessage,
+        &[&["p", &daemon.public_key().to_hex()]],
+    );
+    assert!(scope.matches(&dm_to_daemon));
+}
+
+#[test]
+fn actor_messages_since_counts_only_non_daemon_dms_after_baseline() {
+    let daemon = Keys::generate();
+    let trade_key = Keys::generate();
+    let obs = observer(ObserverScope::daemon_only(daemon.public_key()));
+    // Distinct tags keep the two messages from sharing an event id.
+    let to_daemon = |keys: &Keys, nonce: &str| {
+        event(
+            keys,
+            Kind::PrivateDirectMessage,
+            &[&["p", &daemon.public_key().to_hex()], &["nonce", nonce]],
+        )
+    };
+    assert_eq!(obs.last_seq(), 0);
+    obs.ingest("r", &to_daemon(&trade_key, "1"));
+    let baseline = obs.last_seq();
+    assert_eq!(baseline, 1);
+    obs.ingest("r", &event(&daemon, Kind::PrivateDirectMessage, &[]));
+    assert!(obs.actor_messages_since(baseline).is_empty());
+    obs.ingest("r", &to_daemon(&trade_key, "2"));
+    let after = obs.actor_messages_since(baseline);
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0].seq, 3);
+    assert!(after[0].content.is_none() && after[0].raw.is_none());
 }
 
 #[test]
@@ -106,6 +140,8 @@ fn ingest_dedupes_sequences_and_drops_encrypted_content() {
     assert_eq!(first.content.as_deref(), Some("content"));
     assert_eq!(first.tag("mostro_version"), Some("1"));
     assert_eq!(second.content, None, "kind 14 content is never stored");
+    assert!(second.raw.is_none(), "kind 14 is never replayable");
+    assert!(first.raw.as_deref().is_some_and(|r| r.contains("\"sig\"")));
     assert_eq!(observer.snapshot().len(), 2);
     assert!(
         observer
@@ -189,9 +225,9 @@ async fn resubscribe_replaces_ids_instead_of_accumulating() {
     observer.add_order("o2").await.unwrap();
     let third = observer.subscription_ids();
 
-    assert_eq!(first.len(), 1);
-    assert_eq!(second.len(), 2, "daemon + orders");
-    assert_eq!(third.len(), 2, "same filter groups, refreshed in place");
+    assert_eq!(first.len(), 3);
+    assert_eq!(second.len(), 4, "daemon + orders");
+    assert_eq!(third.len(), 4, "same filter groups, refreshed in place");
     assert_eq!(second, third);
     assert!(
         third

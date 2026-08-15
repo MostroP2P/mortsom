@@ -16,6 +16,7 @@ use thiserror::Error;
 use crate::budget::Budget;
 use crate::cleanup::CleanupRegistry;
 use crate::evidence::EvidenceSink;
+use crate::recovery::RelayControl;
 use crate::timeline::Timeline;
 
 /// A scenario failure with its explicit category.
@@ -104,6 +105,8 @@ pub struct Context {
     pub relay: Arc<RelayObserver>,
     /// Wallet observer.
     pub wallets: Arc<WalletObserver>,
+    /// Relay fault injection (restart, replay).
+    pub relay_control: Arc<dyn RelayControl>,
     /// Cap accounting.
     pub budget: Arc<Mutex<Budget>>,
     /// Cleanup registry.
@@ -128,6 +131,21 @@ pub struct Context {
     pub state_timeout: Duration,
     /// Deadline for a payment to settle.
     pub settle_timeout: Duration,
+    /// Deadline for the daemon to expire an unpaid taken order.
+    pub expiration_timeout: Duration,
+    /// Interruption timing for recovery scenarios.
+    pub recovery: RecoveryTiming,
+}
+
+/// How long recovery scenarios interrupt and then watch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RecoveryTiming {
+    /// Window after an interruption in which no repeated action may appear.
+    pub quiet_window: Duration,
+    /// Seconds an app is kept in the background.
+    pub background_secs: u64,
+    /// Length of an injected connectivity outage.
+    pub outage: Duration,
 }
 
 impl Context {

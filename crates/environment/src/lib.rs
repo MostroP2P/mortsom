@@ -14,5 +14,7 @@ pub use config::{MostroConfig, MostroMode, RelayConfig, WalletMode, WalletsConfi
 pub use daemon::{DaemonInfo, DaemonProbe, RelayProbe};
 pub use daemon_settings::{DaemonSettings, TimeoutLimits, evaluate_settings};
 pub use docker::{ContainerRuntime, ContainerSpec, DockerCli, DockerError};
-pub use relay::{RelayError, RelayHandle, RelayTeardown, start_relay, teardown_relay};
+pub use relay::{
+    RelayError, RelayHandle, RelayTeardown, restart_relay, start_relay, teardown_relay,
+};
 pub use wallet::{WalletProbe, WalletProbeError};

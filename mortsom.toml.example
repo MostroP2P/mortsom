@@ -63,3 +63,7 @@ fiat_amount = 1
 payment_method = "cash"
 state_timeout_secs = 180          # order state must appear on both apps and the relay
 settle_timeout_secs = 600         # payment settlement deadline
+expiration_timeout_secs = 1200   # daemon expiration_seconds (900) plus grace
+quiet_window_secs = 20            # recovery: no repeated protocol action within this window
+background_secs = 15              # recovery: time an app spends in the background
+outage_secs = 20                  # recovery: injected connectivity outage

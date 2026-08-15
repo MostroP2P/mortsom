@@ -4,6 +4,7 @@
 pub mod app_setup;
 pub mod artifacts;
 pub mod bootstrap;
+pub mod cleanup_run;
 pub mod cli;
 pub mod config;
 pub mod device_smoke;

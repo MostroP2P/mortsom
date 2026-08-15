@@ -81,6 +81,10 @@ mod tests {
             payment_method: "cash".into(),
             state_timeout_secs: 1,
             settle_timeout_secs: 1,
+            expiration_timeout_secs: 1,
+            quiet_window_secs: 1,
+            background_secs: 1,
+            outage_secs: 1,
         }
     }
 

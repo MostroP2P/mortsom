@@ -50,6 +50,20 @@ pub struct RunConfig {
     /// Deadline for a payment to settle.
     #[serde(default = "default_settle_timeout")]
     pub settle_timeout_secs: u64,
+    /// Deadline for the daemon to expire an unpaid taken order (its
+    /// `expiration_seconds`, default 900, plus grace).
+    #[serde(default = "default_expiration_timeout")]
+    pub expiration_timeout_secs: u64,
+    /// Window after an interruption during which no repeated protocol
+    /// action may appear (recovery scenarios).
+    #[serde(default = "default_quiet_window")]
+    pub quiet_window_secs: u64,
+    /// Seconds an app is kept in the background (recovery scenarios).
+    #[serde(default = "default_background")]
+    pub background_secs: u64,
+    /// Length of an injected connectivity outage (recovery scenarios).
+    #[serde(default = "default_outage")]
+    pub outage_secs: u64,
 }
 
 fn default_jobs() -> u32 {
@@ -78,6 +92,18 @@ fn default_state_timeout() -> u64 {
 }
 fn default_settle_timeout() -> u64 {
     600
+}
+fn default_expiration_timeout() -> u64 {
+    1200
+}
+fn default_quiet_window() -> u64 {
+    20
+}
+fn default_background() -> u64 {
+    15
+}
+fn default_outage() -> u64 {
+    20
 }
 
 impl RunConfig {
@@ -127,9 +153,12 @@ impl RunConfig {
                 "run.fiat_amount must be positive and run.payment_method non-empty".to_owned(),
             );
         }
-        if self.state_timeout_secs == 0 || self.settle_timeout_secs == 0 {
+        if self.state_timeout_secs == 0
+            || self.settle_timeout_secs == 0
+            || self.expiration_timeout_secs == 0
+        {
             errors.push(
-                "run.state_timeout_secs and run.settle_timeout_secs must be positive".to_owned(),
+                "run.state_timeout_secs, run.settle_timeout_secs and run.expiration_timeout_secs must be positive".to_owned(),
             );
         }
         if self.lane == Lane::Canary && !self.allow_mainnet {
@@ -159,6 +188,10 @@ mod tests {
             payment_method: "cash".into(),
             state_timeout_secs: 180,
             settle_timeout_secs: 600,
+            expiration_timeout_secs: 1200,
+            quiet_window_secs: 20,
+            background_secs: 15,
+            outage_secs: 20,
         }
     }
 

@@ -5,13 +5,19 @@ use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
 use futures::FutureExt;
+use mortsom_android_driver::avd::Actor;
+use mortsom_app_contract::{CancelOutcome, OrderReference, OrderState};
 use mortsom_common::FailureCategory;
 use mortsom_scenario_kit::cleanup::CleanupResult;
 use mortsom_scenario_kit::context::Context;
 use mortsom_scenario_kit::outcome::{Outcome, ScenarioResult};
 use mortsom_scenario_kit::registry::ScenarioDef;
 use mortsom_scenario_kit::timeline::TimelineKind;
+use mortsom_scenario_kit::waits::wait_until;
 use tracing::{info, warn};
+
+/// Poll interval while waiting for a cancelled order to show as closed.
+const CLEANUP_POLL: Duration = Duration::from_millis(500);
 
 /// Runs `def` against `ctx`, retrying once only for a classified
 /// infrastructure failure when `infra_retries` allows it.
@@ -122,26 +128,14 @@ fn describe(outcome: &Outcome) -> String {
     }
 }
 
-/// Cancels every registered order that the scenario did not resolve, on
-/// the maker's device, recording each outcome. Idempotent per order: only
-/// pending entries are visited, so repeated sweeps do nothing extra.
+/// Cancels every registered order that the scenario did not resolve and
+/// verifies the result on screen: the maker cancels first; when the order
+/// is funded (both sides must agree) the counterpart cancels too. An order
+/// still open afterwards is recorded as failed, never as done. Idempotent
+/// per order: only pending entries are visited.
 pub async fn sweep_cleanup(ctx: &Context) {
     for entry in ctx.cleanup.pending() {
-        let result = match ctx.actor(entry.actor) {
-            Ok(session) => match ctx
-                .adapter
-                .cancel_if_open(&session.device(ctx.ui_timeout), &entry.order)
-                .await
-            {
-                Ok(outcome) => CleanupResult::Done { outcome },
-                Err(e) => CleanupResult::Failed {
-                    message: e.to_string(),
-                },
-            },
-            Err(e) => CleanupResult::Failed {
-                message: e.to_string(),
-            },
-        };
+        let result = cleanup_order(ctx, entry.actor, &entry.order).await;
         ctx.timeline.push(
             TimelineKind::Cleanup,
             Some(entry.actor.as_str()),
@@ -150,4 +144,80 @@ pub async fn sweep_cleanup(ctx: &Context) {
         );
         ctx.cleanup.record(&entry.order.id, result);
     }
+}
+
+async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> CleanupResult {
+    let outcome = match cancel_as(ctx, maker, order).await {
+        Ok(outcome) => outcome,
+        Err(message) => return CleanupResult::Failed { message },
+    };
+    if outcome != CancelOutcome::Cancelled {
+        return CleanupResult::Done { outcome };
+    }
+    // The maker's request alone closes an unfunded order; a funded one
+    // needs the counterpart's agreement.
+    match observed_state(ctx, maker, order).await {
+        Some(state) if state.is_terminal() => return CleanupResult::Done { outcome },
+        Some(OrderState::Active | OrderState::FiatSent) => {}
+        Some(state) => {
+            return CleanupResult::Failed {
+                message: format!("still {state} after the maker cancelled"),
+            };
+        }
+        None => {
+            return CleanupResult::Failed {
+                message: "state unreadable after the maker cancelled".into(),
+            };
+        }
+    }
+    let Some(taker) = Actor::ALL.into_iter().find(|a| *a != maker) else {
+        return CleanupResult::Failed {
+            message: "no counterpart to accept the cancel".into(),
+        };
+    };
+    match cancel_as(ctx, taker, order).await {
+        Ok(_) => {}
+        Err(message) => return CleanupResult::Failed { message },
+    }
+    match observed_state(ctx, maker, order).await {
+        Some(state) if state.is_terminal() => CleanupResult::Done { outcome },
+        Some(state) => CleanupResult::Failed {
+            message: format!("still {state} after both sides cancelled"),
+        },
+        None => CleanupResult::Failed {
+            message: "state unreadable after both sides cancelled".into(),
+        },
+    }
+}
+
+async fn cancel_as(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+) -> Result<CancelOutcome, String> {
+    let session = ctx.actor(actor).map_err(|e| e.to_string())?;
+    ctx.adapter
+        .cancel_if_open(&session.device(ctx.ui_timeout), order)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// The state `actor`'s app shows once it stops changing, bounded by the
+/// state timeout; `None` when it cannot be read.
+async fn observed_state(ctx: &Context, actor: Actor, order: &OrderReference) -> Option<OrderState> {
+    let session = ctx.actor(actor).ok()?;
+    let device = session.device(ctx.ui_timeout);
+    wait_until(ctx.state_timeout, CLEANUP_POLL, || async {
+        match ctx.adapter.observe_order(&device, order).await {
+            Ok(state) if state.state.is_terminal() => Some(state.state),
+            _ => None,
+        }
+    })
+    .await
+    .or(ctx
+        .adapter
+        .observe_order(&device, order)
+        .await
+        .ok()
+        .map(|s| s.state))
 }

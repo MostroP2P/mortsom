@@ -379,6 +379,26 @@ impl AppiumSession {
         self.activate_app().await
     }
 
+    /// Enables or disables both Wi-Fi and mobile data (`mobile: setConnectivity`).
+    pub async fn set_connectivity(&self, enabled: bool) -> Result<(), AppiumError> {
+        self.session
+            .execute(
+                "mobile: setConnectivity",
+                vec![json!({ "wifi": enabled, "data": enabled })],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Rotates the device (`POST /orientation`).
+    pub async fn set_orientation(&self, landscape: bool) -> Result<(), AppiumError> {
+        let orientation = if landscape { "LANDSCAPE" } else { "PORTRAIT" };
+        self.session
+            .post("orientation", &json!({ "orientation": orientation }))
+            .await?;
+        Ok(())
+    }
+
     /// Clears the app's data (`mobile: clearApp`), leaving it stopped.
     pub async fn clear_app(&self) -> Result<(), AppiumError> {
         self.session
@@ -494,6 +514,10 @@ mod tests {
             .mount(&server)
             .await;
         for (script, args) in [
+            (
+                "mobile: setConnectivity",
+                json!({"wifi": false, "data": false}),
+            ),
             ("mobile: backgroundApp", json!({"seconds": 1})),
             (
                 "mobile: terminateApp",
@@ -531,6 +555,15 @@ mod tests {
         s.wait_gone("missing", Duration::from_secs(1))
             .await
             .unwrap();
+        Mock::given(method("POST"))
+            .and(path("/session/s1/orientation"))
+            .and(body_partial_json(json!({"orientation": "LANDSCAPE"})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": null})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        s.set_connectivity(false).await.unwrap();
+        s.set_orientation(true).await.unwrap();
         s.background(1).await.unwrap();
         assert!(matches!(
             s.background(MAX_BACKGROUND_SECS + 1).await.unwrap_err(),

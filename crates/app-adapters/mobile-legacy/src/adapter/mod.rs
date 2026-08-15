@@ -204,6 +204,22 @@ impl AppAdapter for MobileLegacyAdapter {
         orders::cancel_if_open(device, order).await
     }
 
+    async fn visible_actions(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<Vec<String>, AdapterError> {
+        orders::visible_actions(device, order).await
+    }
+
+    async fn cancel_payment(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<(), AdapterError> {
+        orders::cancel_payment(device, order).await
+    }
+
     async fn observe_order(
         &self,
         device: &DeviceContext<'_>,

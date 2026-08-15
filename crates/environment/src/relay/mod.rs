@@ -265,6 +265,30 @@ async fn wait_ready(
     }
 }
 
+/// Restarts the run relay in place and waits until it answers again. The
+/// container keeps its name, port and data directory.
+pub async fn restart_relay(
+    runtime: &dyn ContainerRuntime,
+    probe: &dyn ReadinessProbe,
+    handle: &RelayHandle,
+    ready_timeout: Duration,
+) -> Result<(), RelayError> {
+    runtime.restart(&handle.container_name).await?;
+    if wait_ready(runtime, probe, handle, ready_timeout).await {
+        return Ok(());
+    }
+    let logs = runtime
+        .logs(&handle.container_name)
+        .await
+        .unwrap_or_default();
+    Err(RelayError::NotReady {
+        container_name: handle.container_name.clone(),
+        host_port: handle.host_port,
+        timeout: ready_timeout,
+        logs,
+    })
+}
+
 /// Result of tearing a relay down.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelayTeardown {
@@ -313,6 +337,8 @@ pub async fn teardown_relay(
     }
     (result, logs)
 }
+
+pub mod replay;
 
 #[cfg(test)]
 mod tests;

@@ -99,6 +99,12 @@ impl UiSession for FakeSession {
     async fn clear_app(&self) -> Result<(), AppiumError> {
         Ok(())
     }
+    async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
+        Ok(())
+    }
+    async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
+        Ok(())
+    }
     async fn end(&self) -> Result<(), AppiumError> {
         self.0.ended.lock().unwrap().push(self.1.clone());
         Ok(())

@@ -110,6 +110,9 @@ impl ContainerRuntime for FakeDocker {
         self.running.lock().unwrap().retain(|n| n != name);
         Ok(())
     }
+    async fn restart(&self, _: &str) -> Result<(), DockerError> {
+        Ok(())
+    }
     async fn logs(&self, _: &str) -> Result<String, DockerError> {
         Ok("relay".into())
     }
@@ -336,6 +339,12 @@ impl UiSession for FakeSession {
         Ok(())
     }
     async fn clear_app(&self) -> Result<(), AppiumError> {
+        Ok(())
+    }
+    async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
+        Ok(())
+    }
+    async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
         Ok(())
     }
     async fn end(&self) -> Result<(), AppiumError> {

@@ -5,6 +5,7 @@
 //! sweeps cleanup, and writes the joined evidence.
 
 mod execute;
+mod relay_control;
 mod sink;
 
 use std::path::{Path, PathBuf};
@@ -27,12 +28,14 @@ use mortsom_observers::relay::{ObserverScope, RelayObserver};
 use mortsom_observers::wallet::{WalletObserver, WalletReader};
 use mortsom_scenario_kit::budget::{Budget, SpendCaps, Totals};
 use mortsom_scenario_kit::cleanup::{CleanupRegistry, CleanupReport};
-use mortsom_scenario_kit::context::{ActorSession, Context, MainnetClearance};
+use mortsom_scenario_kit::context::{ActorSession, Context, MainnetClearance, RecoveryTiming};
 use mortsom_scenario_kit::outcome::{Outcome, ScenarioResult};
+use mortsom_scenario_kit::recovery::{NoRelayControl, RelayControl};
 use mortsom_scenario_kit::registry::{ScenarioDef, select};
 use mortsom_scenario_kit::timeline::{Timeline, TimelineKind};
+use relay_control::LiveRelayControl;
 use serde::{Deserialize, Serialize};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::artifacts::{RunArtifacts, files};
 use crate::bootstrap::{ActorSetup, bootstrap_actor};
@@ -105,10 +108,10 @@ pub struct RunDeps<'a> {
     pub runner: &'a dyn CommandRunner,
     /// UI driver.
     pub ui: &'a dyn UiDriver,
-    /// Container runtime.
-    pub docker: &'a dyn ContainerRuntime,
+    /// Container runtime (shared with the relay control handed to scenarios).
+    pub docker: Arc<dyn ContainerRuntime>,
     /// Relay readiness probe.
-    pub probe: &'a dyn ReadinessProbe,
+    pub probe: Arc<dyn ReadinessProbe>,
     /// Application adapter.
     pub adapter: Arc<dyn AppAdapter>,
     /// Environment lookup.
@@ -326,8 +329,8 @@ impl<'a> World<'a> {
     async fn bring_up(&mut self, summary: &mut RunSummary) -> Result<(), String> {
         let relay_timeout = Duration::from_secs(self.config.mostro.health_timeout_secs);
         let relay = start_relay(
-            self.deps.docker,
-            self.deps.probe,
+            self.deps.docker.as_ref(),
+            self.deps.probe.as_ref(),
             &self.config.relay,
             summary.run_id.as_str(),
             self.artifacts.dir(),
@@ -391,6 +394,7 @@ impl<'a> World<'a> {
                 &mut summary.checks,
             )
             .await;
+            self.observe_actor(&actor).await;
             summary.actors.push(actor);
         }
         self.farm = Some(farm);
@@ -435,6 +439,40 @@ impl<'a> World<'a> {
             "alice and bob booted, same build installed",
         );
         Ok(farm)
+    }
+
+    /// Widens the observer scope to the actor's displayed identity so its
+    /// direct messages are logged as metadata (spec §4.3). An unparsable or
+    /// missing identity is already a failed bootstrap check; it is only
+    /// noted here.
+    async fn observe_actor(&self, actor: &ActorSetup) {
+        let Some(observer) = &self.observer else {
+            return;
+        };
+        let Some(identity) = &actor.identity else {
+            return;
+        };
+        match nostr_sdk::prelude::PublicKey::parse(&identity.public_key) {
+            Ok(pubkey) => {
+                if let Err(e) = observer.add_actor(pubkey).await {
+                    warn!(actor = %actor.actor, error = %e, "cannot scope observer to actor");
+                }
+            }
+            Err(e) => warn!(actor = %actor.actor, error = %e, "actor identity is not a pubkey"),
+        }
+    }
+
+    /// Fault injection over the run relay; refuses when no relay is up.
+    fn relay_control(&self) -> Arc<dyn RelayControl> {
+        match &self.relay {
+            Some(handle) => Arc::new(LiveRelayControl::new(
+                Arc::clone(&self.deps.docker),
+                Arc::clone(&self.deps.probe),
+                handle.clone(),
+                Duration::from_secs(self.config.mostro.health_timeout_secs),
+            )),
+            None => Arc::new(NoRelayControl),
+        }
     }
 
     fn env(&self) -> TestEnvironment {
@@ -486,6 +524,7 @@ impl<'a> World<'a> {
             env: self.env(),
             relay: Arc::clone(observer),
             wallets: Arc::clone(wallets),
+            relay_control: self.relay_control(),
             budget: Arc::clone(&self.budget),
             cleanup: Arc::clone(&self.cleanup),
             timeline: Arc::clone(&self.timeline),
@@ -501,6 +540,12 @@ impl<'a> World<'a> {
             ui_timeout: Duration::from_secs(config.android.ui_timeout_secs),
             state_timeout: Duration::from_secs(config.run.state_timeout_secs),
             settle_timeout: Duration::from_secs(config.run.settle_timeout_secs),
+            expiration_timeout: Duration::from_secs(config.run.expiration_timeout_secs),
+            recovery: RecoveryTiming {
+                quiet_window: Duration::from_secs(config.run.quiet_window_secs),
+                background_secs: config.run.background_secs,
+                outage: Duration::from_secs(config.run.outage_secs),
+            },
         };
         let result = execute_scenario(
             def,
@@ -566,7 +611,7 @@ impl<'a> World<'a> {
             );
         }
         if let Some(relay) = self.relay.take() {
-            let (teardown, logs) = teardown_relay(self.deps.docker, &relay, false).await;
+            let (teardown, logs) = teardown_relay(self.deps.docker.as_ref(), &relay, false).await;
             if let Err(e) = self.artifacts.write_text("relay-container.log", &logs) {
                 error!(error = %e, "cannot write relay log");
             }

@@ -90,6 +90,8 @@ pub trait ContainerRuntime: Send + Sync {
     /// Stops and removes the container with this exact name. Removing a
     /// container that does not exist is not an error.
     async fn stop_and_remove(&self, name: &str) -> Result<(), DockerError>;
+    /// Restarts a running container in place (same name, ports and data).
+    async fn restart(&self, name: &str) -> Result<(), DockerError>;
     /// Container logs (stdout and stderr).
     async fn logs(&self, name: &str) -> Result<String, DockerError>;
     /// Names of containers (running or not) whose name starts with `prefix`.
@@ -168,6 +170,12 @@ impl ContainerRuntime for DockerCli {
             }
             Err(e) => Err(e),
         }
+    }
+
+    async fn restart(&self, name: &str) -> Result<(), DockerError> {
+        self.exec(&["restart".into(), name.into()])
+            .await
+            .map(|_| ())
     }
 
     async fn logs(&self, name: &str) -> Result<String, DockerError> {

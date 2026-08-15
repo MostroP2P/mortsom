@@ -43,6 +43,9 @@ impl ContainerRuntime for FakeRuntime {
         self.removed.lock().unwrap().push(name.to_owned());
         Ok(())
     }
+    async fn restart(&self, _name: &str) -> Result<(), DockerError> {
+        Ok(())
+    }
     async fn logs(&self, _name: &str) -> Result<String, DockerError> {
         Ok(self.logs.clone())
     }
@@ -178,6 +181,9 @@ impl ContainerRuntime for RacyRuntime {
     }
     async fn stop_and_remove(&self, name: &str) -> Result<(), DockerError> {
         self.inner.stop_and_remove(name).await
+    }
+    async fn restart(&self, name: &str) -> Result<(), DockerError> {
+        self.inner.restart(name).await
     }
     async fn logs(&self, name: &str) -> Result<String, DockerError> {
         self.inner.logs(name).await
@@ -319,4 +325,38 @@ async fn teardown_removes_container_and_data_unless_kept() {
     let (gone, _) = teardown_relay(&runtime, &handle, false).await;
     assert!(gone.removed && gone.data_removed);
     assert!(!handle.data_dir.exists());
+}
+
+#[tokio::test]
+async fn restart_waits_for_readiness_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let runtime = FakeRuntime::healthy();
+    let handle = start_relay(
+        &runtime,
+        &FakeProbe(true),
+        &config(),
+        "r",
+        dir.path(),
+        Duration::from_secs(1),
+    )
+    .await
+    .unwrap();
+
+    restart_relay(&runtime, &FakeProbe(true), &handle, Duration::from_secs(1))
+        .await
+        .unwrap();
+    let err = restart_relay(
+        &runtime,
+        &FakeProbe(false),
+        &handle,
+        Duration::from_millis(20),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(err, RelayError::NotReady { .. }));
+    assert!(
+        runtime.is_running(&handle.container_name).await.unwrap(),
+        "restart never removes the container"
+    );
 }
