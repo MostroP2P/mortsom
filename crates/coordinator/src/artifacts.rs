@@ -101,6 +101,33 @@ impl RunArtifacts {
         writeln!(file, "{line}")
     }
 
+    /// Writes a binary step artifact (screenshot). Pixels cannot be text-
+    /// redacted; screenshots are published only through the CI redaction
+    /// step described in spec §11.
+    pub fn write_step_bytes(
+        &self,
+        actor: &str,
+        step: &str,
+        suffix: &str,
+        bytes: &[u8],
+    ) -> io::Result<()> {
+        std::fs::write(self.step_file(actor, step, suffix)?, bytes)
+    }
+
+    /// Writes a redacted text step artifact (accessibility hierarchy).
+    pub fn write_step_text(
+        &self,
+        actor: &str,
+        step: &str,
+        suffix: &str,
+        text: &str,
+    ) -> io::Result<()> {
+        std::fs::write(
+            self.step_file(actor, step, suffix)?,
+            self.redactor.redact(text),
+        )
+    }
+
     fn redacted_value<T: Serialize>(&self, value: &T) -> io::Result<serde_json::Value> {
         let tree = serde_json::to_value(value)?;
         Ok(redact_tree(tree, &self.redactor))
@@ -209,6 +236,34 @@ mod tests {
         assert_eq!(events.lines().count(), 2);
         assert!(!events.contains("hunter2"));
         assert!(summary.contains("<redacted>"));
+    }
+
+    #[test]
+    fn step_artifacts_are_written_per_actor() {
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = artifacts(root.path());
+
+        artifacts
+            .write_step_bytes("alice", "01-launch", "screen.png", b"\x89PNG")
+            .unwrap();
+        artifacts
+            .write_step_text("bob", "01-launch", "ui.xml", "<a>hunter2</a>")
+            .unwrap();
+
+        assert!(
+            artifacts
+                .dir()
+                .join("alice/steps/01-launch-screen.png")
+                .is_file()
+        );
+        let xml =
+            std::fs::read_to_string(artifacts.dir().join("bob/steps/01-launch-ui.xml")).unwrap();
+        assert_eq!(xml, "<a><redacted></a>");
+        assert!(
+            artifacts
+                .write_step_bytes("eve", "../x", "png", b"")
+                .is_err()
+        );
     }
 
     #[test]

@@ -40,6 +40,7 @@ nostr-sdk = { workspace = true }
 nwc = { workspace = true }
 
 [dev-dependencies]
+mortsom-android-driver = { workspace = true, features = ["testing"] }
 tempfile = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }

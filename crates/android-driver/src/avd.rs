@@ -268,6 +268,9 @@ mod tests {
             avd_name_prefix: "mortsom".into(),
             base_console_port: 5554,
             emulator_ram_mb: 3072,
+            headless: true,
+            appium_port: 4723,
+            base_system_port: 8200,
         }
     }
 

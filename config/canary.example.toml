@@ -14,6 +14,8 @@ flavor = "mortsom"
 apk_path = "env:MORTSOM_APK_PATH"
 mostro_pubkey = "env:MORTSOM_MOSTRO_PUBKEY"
 dart_defines = ["MOSTRO_PUB_KEY=${MORTSOM_MOSTRO_PUBKEY}"]
+package = "network.mostro.app"    # application id of the build under test
+main_activity = ""                # empty: UiAutomator2 resolves the launcher activity
 
 [android]
 avd_image = "system-images;android-35;google_apis;x86_64"
@@ -22,6 +24,12 @@ api_level = 35
 boot_timeout_secs = 180
 ui_timeout_secs = 30
 snapshot_name = "mortsom-clean"
+avd_name_prefix = "mortsom"       # AVDs are <prefix>-alice and <prefix>-bob
+base_console_port = 5554          # alice 5554/5555, bob 5556/5557
+emulator_ram_mb = 3072
+headless = true
+appium_port = 4723
+base_system_port = 8200           # UiAutomator2 systemPort per actor: 8200, 8201
 
 [relay]
 docker_image = "scsibug/nostr-rs-relay:latest"

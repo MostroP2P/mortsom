@@ -347,8 +347,9 @@ mod tests {
     }
 }
 
-/// Scripted runner shared by unit tests across this crate.
-#[cfg(test)]
+/// Scripted runner shared by unit tests across the workspace (enabled by
+/// the `testing` feature or `cfg(test)`).
+#[cfg(any(test, feature = "testing"))]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 pub mod tests_support {
     use std::collections::BTreeMap;

@@ -31,6 +31,15 @@ pub struct AndroidConfig {
     /// Emulator RAM in megabytes.
     #[serde(default = "default_ram_mb")]
     pub emulator_ram_mb: u32,
+    /// Run emulators without a window.
+    #[serde(default = "default_true")]
+    pub headless: bool,
+    /// Appium server port (loopback).
+    #[serde(default = "default_appium_port")]
+    pub appium_port: u16,
+    /// First UiAutomator2 `systemPort`; each actor uses `base + index`.
+    #[serde(default = "default_system_port")]
+    pub base_system_port: u16,
 }
 
 fn default_boot_timeout() -> u64 {
@@ -55,6 +64,18 @@ fn default_console_port() -> u16 {
 
 fn default_ram_mb() -> u32 {
     3072
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_appium_port() -> u16 {
+    4723
+}
+
+fn default_system_port() -> u16 {
+    8200
 }
 
 impl AndroidConfig {
@@ -92,6 +113,11 @@ impl AndroidConfig {
             errors.push("android.avd_name_prefix must be a non-empty AVD-safe name".to_owned());
         }
         // Emulator console ports are even numbers in 5554..=5682.
+        if self.appium_port == 0 || self.base_system_port == 0 {
+            errors.push(
+                "android.appium_port and android.base_system_port must be non-zero".to_owned(),
+            );
+        }
         if self.emulator_ram_mb < 1024 {
             errors.push("android.emulator_ram_mb must be at least 1024".to_owned());
         }
@@ -113,6 +139,11 @@ impl AndroidConfig {
     /// adb port for an actor slot.
     pub fn adb_port(&self, slot: u16) -> u16 {
         self.console_port(slot) + 1
+    }
+
+    /// UiAutomator2 system port for an actor slot.
+    pub fn system_port(&self, slot: u16) -> u16 {
+        self.base_system_port + slot
     }
 
     /// Filesystem path of the system image relative to the SDK root.
@@ -149,6 +180,9 @@ mod tests {
             avd_name_prefix: "mortsom".into(),
             base_console_port: 5554,
             emulator_ram_mb: 3072,
+            headless: true,
+            appium_port: 4723,
+            base_system_port: 8200,
         }
     }
 
@@ -182,6 +216,8 @@ mod tests {
         assert_eq!(config.console_port(1), 5556);
         assert_eq!(config.adb_port(1), 5557);
         assert_eq!(config.emulator_ram_mb, 3072);
+        assert_eq!(config.system_port(1), 8201);
+        assert!(config.headless);
     }
 
     #[test]

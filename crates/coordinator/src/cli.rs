@@ -10,8 +10,12 @@ use mortsom_common::logging::init_logging;
 use mortsom_environment::docker::{ContainerRuntime, DockerCli};
 use mortsom_environment::relay::NostrProbe;
 
+use mortsom_android_driver::process::TokioRunner;
+use mortsom_android_driver::ui::AppiumDriver;
+
 use crate::config::Config;
-use crate::doctor::{DoctorOptions, RealHost, RealNet, run_doctor};
+use crate::device_smoke::{DeviceSmokeOptions, run_device_smoke};
+use crate::doctor::{DoctorOptions, HostProbe, RealHost, RealNet, run_doctor};
 use crate::relay_smoke::{RelayObserverSource, SmokeOptions, run_relay_smoke};
 
 /// Default configuration file.
@@ -32,6 +36,12 @@ pub struct Cli {
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Emulator farm operations.
+    Device {
+        /// Device subcommand.
+        #[command(subcommand)]
+        command: DeviceCommand,
+    },
     /// Run-owned relay operations.
     Relay {
         /// Relay subcommand.
@@ -48,6 +58,14 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Device subcommands.
+#[derive(Debug, Subcommand)]
+pub enum DeviceCommand {
+    /// Bring two clean devices up, install the configured APK on both,
+    /// launch it, record the initial screens and tear everything down.
+    Smoke,
 }
 
 /// Relay subcommands.
@@ -78,6 +96,7 @@ pub async fn run(cli: Cli) -> ExitCode {
     // redacted `run.log` once the run id exists (`attach_run_log`).
     let _sink = init_logging();
     match cli.command {
+        Command::Device { command } => run_device(&cli.config, command).await,
         Command::Relay { command } => run_relay(&cli.config, command).await,
         Command::Doctor { no_network, json } => {
             let options = DoctorOptions { no_network };
@@ -163,6 +182,49 @@ async fn run_relay(config_path: &std::path::Path, command: RelayCommand) -> Exit
                         ExitCode::from(1)
                     } else {
                         ExitCode::SUCCESS
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+    }
+}
+
+async fn run_device(config_path: &std::path::Path, command: DeviceCommand) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    match command {
+        DeviceCommand::Smoke => {
+            let Some(appium) = RealHost.which("appium") else {
+                eprintln!("appium not found on PATH; run `mortsom doctor`");
+                return ExitCode::from(2);
+            };
+            let ui = AppiumDriver::new(appium);
+            let env = |name: &str| std::env::var(name).ok();
+            match run_device_smoke(
+                &config,
+                &DeviceSmokeOptions::default(),
+                &TokioRunner,
+                &ui,
+                &env,
+            )
+            .await
+            {
+                Ok(summary) => {
+                    print!("{}", summary.checks.render());
+                    println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);
+                    if summary.passed {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
                     }
                 }
                 Err(e) => {

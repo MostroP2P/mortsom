@@ -32,6 +32,16 @@ pub struct MobileConfig {
     /// Extra `--dart-define` values passed to the Flutter build. Never secrets.
     #[serde(default)]
     pub dart_defines: Vec<String>,
+    /// Android application id of the build under test.
+    #[serde(default = "default_package")]
+    pub package: String,
+    /// Launch activity; empty lets UiAutomator2 resolve the launcher.
+    #[serde(default)]
+    pub main_activity: String,
+}
+
+fn default_package() -> String {
+    "network.mostro.app".to_owned()
 }
 
 fn default_profile() -> String {
@@ -60,6 +70,9 @@ impl MobileConfig {
         }
         if PublicKey::from_str(&self.mostro_pubkey).is_err() {
             errors.push("mobile.mostro_pubkey is not a valid hex or npub public key".to_owned());
+        }
+        if self.package.is_empty() || !self.package.contains('.') {
+            errors.push("mobile.package must be a dotted Android application id".to_owned());
         }
         for define in &self.dart_defines {
             if !define.contains('=') {
@@ -92,6 +105,8 @@ mod tests {
             apk_path: String::new(),
             mostro_pubkey: HEX.into(),
             dart_defines: vec![format!("MOSTRO_PUB_KEY={HEX}")],
+            package: "network.mostro.app".into(),
+            main_activity: String::new(),
         }
     }
 
@@ -116,6 +131,7 @@ mod tests {
 
         assert_eq!(config.profile, DEFAULT_PROFILE);
         assert_eq!(config.flavor, "mortsom");
+        assert_eq!(config.package, "network.mostro.app");
         assert!(errors_of(&config).is_empty());
     }
 
