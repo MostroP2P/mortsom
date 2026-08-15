@@ -117,6 +117,7 @@ async fn removes_only_the_runs_container_and_mortsoms_own_emulators() {
     let docker = FakeDocker {
         containers: Mutex::new(vec![
             "mortsom-relay-run-a".into(),
+            "mortsom-relay-run-a2".into(),
             "mortsom-relay-run-b".into(),
         ]),
         ..Default::default()
@@ -132,14 +133,14 @@ async fn removes_only_the_runs_container_and_mortsoms_own_emulators() {
         env: &env,
     };
 
-    let summary = cleanup_run(&world.config, "run-a", &deps).await;
+    let summary = cleanup_run(&world.config, &"run-a".parse().unwrap(), &deps).await;
 
     assert!(summary.clean, "{}", summary.render());
     assert!(summary.run_dir_found && summary.cleanup_report_found);
     assert_eq!(
         *docker.removed.lock().unwrap(),
         vec!["mortsom-relay-run-a".to_owned()],
-        "the other run's relay is untouched"
+        "other runs' relays are untouched, even one whose id extends this one"
     );
     assert_eq!(summary.emulators[0].action, EmulatorAction::Killed);
     assert_eq!(summary.emulators[1].action, EmulatorAction::Foreign);
@@ -175,7 +176,7 @@ async fn reports_unresolved_orders_and_failures_instead_of_pretending() {
         env: &env,
     };
 
-    let summary = cleanup_run(&world.config, "run-c", &deps).await;
+    let summary = cleanup_run(&world.config, &"run-c".parse().unwrap(), &deps).await;
 
     assert!(!summary.clean);
     assert_eq!(summary.unresolved_orders, vec!["order-9".to_owned()]);
@@ -200,7 +201,7 @@ async fn missing_run_dir_and_sdk_are_reported_not_hidden() {
         env: &env,
     };
 
-    let summary = cleanup_run(&world.config, "never-ran", &deps).await;
+    let summary = cleanup_run(&world.config, &"never-ran".parse().unwrap(), &deps).await;
 
     assert!(!summary.run_dir_found);
     assert!(!summary.cleanup_report_found);
@@ -213,5 +214,45 @@ async fn missing_run_dir_and_sdk_are_reported_not_hidden() {
             .all(|e| e.action == EmulatorAction::NoSdk)
     );
     assert!(!summary.clean, "an uninspected host is not reported clean");
-    assert!(summary.render().contains("run directory: not found"));
+    assert!(summary.render().contains("orders UNKNOWN"));
+}
+
+#[tokio::test]
+async fn a_run_that_never_wrote_its_sweep_is_not_clean_even_when_the_host_is() {
+    let world = world();
+    std::fs::create_dir_all(world.dir.path().join("artifacts").join("run-crashed")).unwrap();
+    let docker = FakeDocker::default();
+    let runner = FakeRunner::default();
+    let env = env_for(&world, true);
+    let deps = CleanupDeps {
+        runner: &runner,
+        docker: &docker,
+        env: &env,
+    };
+
+    let summary = cleanup_run(&world.config, &"run-crashed".parse().unwrap(), &deps).await;
+
+    assert!(summary.run_dir_found && !summary.cleanup_report_found);
+    assert!(!summary.clean);
+    assert!(summary.render().contains("orders UNKNOWN"));
+}
+
+#[tokio::test]
+async fn an_unusable_adb_is_a_failure_not_an_absent_emulator() {
+    let world = world();
+    write_cleanup(&world, "run-d", &[]);
+    let docker = FakeDocker::default();
+    let runner = FakeRunner::default();
+    runner.script_timeout("adb -s emulator-5554 emu avd name");
+    let env = env_for(&world, true);
+    let deps = CleanupDeps {
+        runner: &runner,
+        docker: &docker,
+        env: &env,
+    };
+
+    let summary = cleanup_run(&world.config, &"run-d".parse().unwrap(), &deps).await;
+
+    assert_eq!(summary.emulators[0].action, EmulatorAction::Failed);
+    assert!(!summary.clean);
 }

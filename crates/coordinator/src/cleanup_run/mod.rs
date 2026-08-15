@@ -10,6 +10,7 @@ use mortsom_android_driver::avd::Actor;
 use mortsom_android_driver::emulator::DeviceSlot;
 use mortsom_android_driver::process::CommandRunner;
 use mortsom_android_driver::sdk::AndroidSdk;
+use mortsom_common::RunId;
 use mortsom_environment::docker::ContainerRuntime;
 use mortsom_scenario_kit::cleanup::CleanupReport;
 use serde::{Deserialize, Serialize};
@@ -94,10 +95,12 @@ impl CleanupRunSummary {
         let mut out = format!("cleanup of run {}\n", self.run_id);
         if !self.run_dir_found {
             out.push_str(
-                "  run directory: not found (nothing to read; host resources still checked)\n",
+                "  run directory: not found; orders UNKNOWN (host resources still checked)\n",
             );
         } else if !self.cleanup_report_found {
-            out.push_str("  cleanup.json: missing (the run did not reach its cleanup sweep)\n");
+            out.push_str(
+                "  cleanup.json: missing; the run did not reach its sweep, orders UNKNOWN: check the maker's app\n",
+            );
         }
         for order in &self.unresolved_orders {
             out.push_str(&format!(
@@ -146,18 +149,22 @@ pub struct CleanupDeps<'a> {
     pub env: &'a dyn Fn(&str) -> Option<String>,
 }
 
-/// Cleans up after `run_id`.
+/// Cleans up after `run_id` (validated: a single safe path segment).
 pub async fn cleanup_run(
     config: &Config,
-    run_id: &str,
+    run_id: &RunId,
     deps: &CleanupDeps<'_>,
 ) -> CleanupRunSummary {
+    let run_id = run_id.as_str();
     let run_dir = Path::new(&config.run.artifacts_dir).join(run_id);
     let run_dir_found = run_dir.is_dir();
     let (cleanup_report_found, unresolved_orders) = read_unresolved(&run_dir);
     let containers = remove_containers(deps.docker, config, run_id).await;
     let emulators = shut_down_emulators(deps, config).await;
-    let clean = unresolved_orders.is_empty()
+    // Orders count as verified only when the run's own sweep reported them;
+    // a run that died before its sweep leaves them unknown, not clean.
+    let clean = cleanup_report_found
+        && unresolved_orders.is_empty()
         && containers.iter().all(|c| c.removed)
         && emulators
             .iter()
@@ -213,8 +220,10 @@ async fn remove_containers(
             }];
         }
     };
+    // The relay is created with exactly this name; a prefix match could
+    // reach another run whose id happens to extend this one.
     let mut items = Vec::with_capacity(names.len());
-    for name in names.into_iter().filter(|n| n.starts_with(&name)) {
+    for name in names.into_iter().filter(|n| *n == name) {
         let result = docker.stop_and_remove(&name).await;
         items.push(ContainerItem {
             name,
@@ -267,8 +276,11 @@ async fn shut_down_slot(
             action,
             error,
         };
-    let Some(name) = adb.avd_name(runner).await else {
-        return item(None, EmulatorAction::NotRunning, None);
+    let name = match adb.avd_name(runner).await {
+        Ok(Some(name)) => name,
+        Ok(None) => return item(None, EmulatorAction::NotRunning, None),
+        // adb unusable: the slot was not inspected, so it is not clean.
+        Err(e) => return item(None, EmulatorAction::Failed, Some(e.to_string())),
     };
     if name != slot.avd_name {
         return item(Some(name), EmulatorAction::Foreign, None);

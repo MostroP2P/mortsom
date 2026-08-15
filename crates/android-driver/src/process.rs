@@ -362,6 +362,7 @@ pub mod tests_support {
     #[derive(Default)]
     pub struct FakeRunner {
         scripts: Mutex<BTreeMap<String, Output>>,
+        timeouts: Mutex<Vec<String>>,
         calls: Mutex<Vec<String>>,
         spawned: Mutex<Vec<String>>,
     }
@@ -394,6 +395,11 @@ pub mod tests_support {
                     stderr: stderr.to_owned(),
                 },
             );
+        }
+
+        /// Scripts a hang: commands starting with `prefix` time out.
+        pub fn script_timeout(&self, prefix: &str) {
+            self.timeouts.lock().unwrap().push(prefix.to_owned());
         }
 
         /// Every command run so far (`program-name args`).
@@ -431,9 +437,21 @@ pub mod tests_support {
 
     #[async_trait]
     impl CommandRunner for FakeRunner {
-        async fn run(&self, command: &Command, _timeout: Duration) -> Result<Output, ProcessError> {
+        async fn run(&self, command: &Command, timeout: Duration) -> Result<Output, ProcessError> {
             let key = Self::key(command);
             self.calls.lock().unwrap().push(key.clone());
+            if self
+                .timeouts
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|prefix| key.starts_with(prefix.as_str()))
+            {
+                return Err(ProcessError::Timeout {
+                    command: key,
+                    timeout,
+                });
+            }
             let scripts = self.scripts.lock().unwrap();
             let hit = scripts
                 .iter()

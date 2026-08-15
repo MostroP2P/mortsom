@@ -50,6 +50,24 @@ pub enum Command {
         /// Run id (the artifacts directory name).
         run: String,
     },
+    /// Build the sanitized publication bundle of a run (redacted text
+    /// evidence, screenshots by policy, manifest with retry classification).
+    Publish {
+        /// Run id.
+        run: String,
+        /// Output directory for the bundle.
+        #[arg(long)]
+        out: PathBuf,
+        /// Screenshot policy: `all` or `none` (pixels cannot be redacted).
+        #[arg(long, default_value = "all")]
+        screenshots: String,
+    },
+    /// Spend and outcome trend across runs, from their summaries.
+    Accounting {
+        /// Only runs of this lane (`local`, `ci`, `canary`).
+        #[arg(long)]
+        lane: Option<String>,
+    },
     /// Run scenarios end to end (relay, devices, apps, observers, cleanup).
     Run {
         /// Scenario names.
@@ -135,6 +153,12 @@ pub async fn run(cli: Cli) -> ExitCode {
     match cli.command {
         Command::List => list_scenarios(),
         Command::Cleanup { run } => cleanup_command(&cli.config, &run).await,
+        Command::Publish {
+            run,
+            out,
+            screenshots,
+        } => publish_command(&cli.config, &run, &out, &screenshots),
+        Command::Accounting { lane } => accounting_command(&cli.config, lane.as_deref()),
         Command::Run { scenarios, tag } => run_command(&cli.config, scenarios, tag).await,
         Command::App { command } => run_app(&cli.config, command).await,
         Command::Device { command } => run_device(&cli.config, command).await,
@@ -162,9 +186,84 @@ pub async fn run(cli: Cli) -> ExitCode {
     }
 }
 
+fn publish_command(
+    config_path: &std::path::Path,
+    run_id: &str,
+    out: &std::path::Path,
+    screenshots: &str,
+) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let run_id: mortsom_common::RunId = match run_id.parse() {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let screenshots = match screenshots.parse() {
+        Ok(policy) => policy,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let options = crate::publish::PublishOptions { screenshots };
+    match crate::publish::publish_run(&config, run_id.as_str(), out, options) {
+        Ok(manifest) => {
+            print!("{}", manifest.render());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
+fn accounting_command(config_path: &std::path::Path, lane: Option<&str>) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let lane = match lane.map(str::parse::<mortsom_common::Lane>).transpose() {
+        Ok(lane) => lane,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    match crate::accounting::build_accounting(std::path::Path::new(&config.run.artifacts_dir), lane)
+    {
+        Ok(report) => {
+            print!("{}", report.render());
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(1)
+        }
+    }
+}
+
 async fn cleanup_command(config_path: &std::path::Path, run_id: &str) -> ExitCode {
     let config = match Config::load(config_path) {
         Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let run_id: mortsom_common::RunId = match run_id.parse() {
+        Ok(id) => id,
         Err(e) => {
             eprintln!("{e}");
             return ExitCode::from(2);
@@ -176,7 +275,7 @@ async fn cleanup_command(config_path: &std::path::Path, run_id: &str) -> ExitCod
         docker: &DockerCli::default(),
         env: &env,
     };
-    let summary = crate::cleanup_run::cleanup_run(&config, run_id, &deps).await;
+    let summary = crate::cleanup_run::cleanup_run(&config, &run_id, &deps).await;
     print!("{}", summary.render());
     if summary.clean {
         ExitCode::SUCCESS
@@ -390,6 +489,15 @@ async fn run_command(
         Err(e) => {
             eprintln!("{e}");
             return ExitCode::from(2);
+        }
+    };
+    // One run per host: emulator slots and the canary budget are exclusive.
+    let _lock = match crate::lock::RunLock::acquire(std::path::Path::new(&config.run.artifacts_dir))
+    {
+        Ok(lock) => lock,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(3);
         }
     };
     let (Some(appium), Some(flutter)) = (RealHost.which("appium"), RealHost.which("flutter"))

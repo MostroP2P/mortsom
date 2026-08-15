@@ -255,18 +255,20 @@ impl Adb {
         .stdout)
     }
 
-    /// Name of the AVD behind this serial (`adb emu avd name`); `None` when
-    /// no emulator answers on the serial.
-    pub async fn avd_name(&self, runner: &dyn CommandRunner) -> Option<String> {
-        let output = run_ok(runner, &self.command(&["emu", "avd", "name"]), ADB_TIMEOUT)
-            .await
-            .ok()?;
-        output
-            .stdout
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty() && *line != "OK")
-            .map(str::to_owned)
+    /// Name of the AVD behind this serial (`adb emu avd name`). `Ok(None)`
+    /// when adb answers that no emulator is on the serial; an adb that cannot
+    /// start or hangs is an error, not an absent device.
+    pub async fn avd_name(&self, runner: &dyn CommandRunner) -> Result<Option<String>, AdbError> {
+        match run_ok(runner, &self.command(&["emu", "avd", "name"]), ADB_TIMEOUT).await {
+            Ok(output) => Ok(output
+                .stdout
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty() && *line != "OK")
+                .map(str::to_owned)),
+            Err(ProcessError::Failed { .. }) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Asks the emulator console to shut down (`adb emu kill`).
@@ -435,12 +437,16 @@ mod tests {
         let runner = FakeRunner::default();
         runner.script("adb -s emulator-5556 emu avd name", "mortsom-bob\nOK\n");
         assert_eq!(
-            adb().avd_name(&runner).await.as_deref(),
+            adb().avd_name(&runner).await.unwrap().as_deref(),
             Some("mortsom-bob")
         );
         let silent = FakeRunner::default();
         silent.script_failure("adb -s emulator-5556 emu avd name", "error: device offline");
-        assert_eq!(adb().avd_name(&silent).await, None);
+        assert_eq!(adb().avd_name(&silent).await.unwrap(), None);
+        // adb hanging is not "no device".
+        let hung = FakeRunner::default();
+        hung.script_timeout("adb -s emulator-5556 emu avd name");
+        assert!(adb().avd_name(&hung).await.is_err());
     }
 
     #[tokio::test]
