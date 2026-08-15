@@ -393,6 +393,12 @@ fn app_with_orders() -> FakeUi {
         &[Ids::PAY_INVOICE_TEXT, Ids::PAY_NWC],
     );
     ui.on_tap(Ids::TRADE_ADD_INVOICE, &[Ids::INVOICE_NWC_GENERATE]);
+    // Confirming navigates home: the detail disappears until the daemon answers.
+    ui.on_tap_hide(
+        Ids::INVOICE_NWC_CONFIRM,
+        &[Ids::ORDER_STATUS, Ids::INVOICE_NWC_CONFIRM],
+    );
+    ui.on_tap_hide(Ids::PAY_NWC, &[Ids::PAY_NWC, Ids::PAY_INVOICE_TEXT]);
     ui.on_tap(
         Ids::INVOICE_NWC_GENERATE,
         &[Ids::INVOICE_NWC_TEXT, Ids::INVOICE_NWC_CONFIRM],
