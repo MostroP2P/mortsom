@@ -33,6 +33,10 @@ cargo run -- doctor        # prerequisites, secrets, daemon, relay, wallets
 
 `mortsom doctor` performs no payment and creates no order.
 
+Secrets (`MORTSOM_*_NWC`, the daemon settings path) are accepted only as `env:`
+references, in every configuration layer including the gitignored
+`mortsom.local.toml` overlay; the loader reports every missing variable at once.
+
 ## Safety
 
 Mortsom moves real sats on mainnet through the wallets the operator provides.

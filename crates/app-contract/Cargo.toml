@@ -12,6 +12,10 @@ mortsom-common = { workspace = true }
 serde = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+nostr = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+toml = { workspace = true }

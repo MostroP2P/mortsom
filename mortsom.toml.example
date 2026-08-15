@@ -1,0 +1,52 @@
+# mortsom.toml -- committed, non-secret baseline (spec §16.1).
+#
+# Copy to `mortsom.toml` (gitignored) or layer overrides in
+# `mortsom.local.toml` (gitignored). Every secret is an `env:` reference; the
+# loader lists all missing variables at once and refuses to start anything
+# until they are present. Secrets never live in TOML -- not even in the
+# gitignored overlay: wallet URIs and the daemon settings path are accepted
+# only as `env:` references.
+
+[mobile]
+profile = "mobile-legacy"        # mobile-legacy | mobile-v2
+source_dir = "../mobile"
+flavor = "mortsom"
+apk_path = ""                     # empty means build from source_dir
+mostro_pubkey = "env:MORTSOM_MOSTRO_PUBKEY"
+dart_defines = ["MOSTRO_PUB_KEY=${MORTSOM_MOSTRO_PUBKEY}"]
+
+[android]
+avd_image = "system-images;android-35;google_apis;x86_64"
+device_profile = "Pixel_6"
+api_level = 35
+boot_timeout_secs = 180
+ui_timeout_secs = 30
+snapshot_name = "mortsom-clean"
+
+[relay]
+docker_image = "scsibug/nostr-rs-relay:latest"
+container_name_prefix = "mortsom-relay"
+host_port = 7000                  # first port tried; each run allocates a free one
+container_port = 8080
+
+[mostro]
+mode = "external_local"           # a locally managed Mostro daemon; never restarted by Mortsom
+settings_file = "env:MORTSOM_MOSTRO_SETTINGS_FILE"
+health_timeout_secs = 60
+relays = ["ws://host.docker.internal:7000"]
+
+[wallets]
+mode = "nwc"
+alice_nwc = "env:MORTSOM_ALICE_NWC"
+bob_nwc = "env:MORTSOM_BOB_NWC"
+
+[run]
+lane = "local"                    # local | ci | canary -- always explicit, never inferred
+amount_sats = 1000
+max_order_sats = 5000
+max_run_spend_sats = 20000
+jobs = 1
+artifacts_dir = "./artifacts"
+cleanup = true
+allow_mainnet = false             # value-moving scenarios also need MORTSOM_MAINNET_CONFIRM
+infra_retries = 1                 # only classified infrastructure failures retry, at most once
