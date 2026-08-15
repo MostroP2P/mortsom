@@ -35,6 +35,21 @@ pub struct RunConfig {
     /// Retries permitted for classified infrastructure failures (0 or 1).
     #[serde(default = "default_infra_retries")]
     pub infra_retries: u32,
+    /// Fiat currency code used by order drafts.
+    #[serde(default = "default_fiat_code")]
+    pub fiat_code: String,
+    /// Fiat amount used by order drafts.
+    #[serde(default = "default_fiat_amount")]
+    pub fiat_amount: u64,
+    /// Payment method label used by order drafts.
+    #[serde(default = "default_payment_method")]
+    pub payment_method: String,
+    /// Deadline for an order state to appear on both apps and the relay.
+    #[serde(default = "default_state_timeout")]
+    pub state_timeout_secs: u64,
+    /// Deadline for a payment to settle.
+    #[serde(default = "default_settle_timeout")]
+    pub settle_timeout_secs: u64,
 }
 
 fn default_jobs() -> u32 {
@@ -48,6 +63,21 @@ fn default_true() -> bool {
 }
 fn default_infra_retries() -> u32 {
     MAX_INFRA_RETRIES
+}
+fn default_fiat_code() -> String {
+    "USD".to_owned()
+}
+fn default_fiat_amount() -> u64 {
+    1
+}
+fn default_payment_method() -> String {
+    "cash".to_owned()
+}
+fn default_state_timeout() -> u64 {
+    180
+}
+fn default_settle_timeout() -> u64 {
+    600
 }
 
 impl RunConfig {
@@ -89,6 +119,19 @@ impl RunConfig {
                 self.infra_retries, MAX_INFRA_RETRIES
             ));
         }
+        if self.fiat_code.len() != 3 || !self.fiat_code.chars().all(|c| c.is_ascii_uppercase()) {
+            errors.push("run.fiat_code must be a three-letter uppercase code".to_owned());
+        }
+        if self.fiat_amount == 0 || self.payment_method.is_empty() {
+            errors.push(
+                "run.fiat_amount must be positive and run.payment_method non-empty".to_owned(),
+            );
+        }
+        if self.state_timeout_secs == 0 || self.settle_timeout_secs == 0 {
+            errors.push(
+                "run.state_timeout_secs and run.settle_timeout_secs must be positive".to_owned(),
+            );
+        }
         if self.lane == Lane::Canary && !self.allow_mainnet {
             errors.push("run.lane = canary requires run.allow_mainnet = true".to_owned());
         }
@@ -111,6 +154,11 @@ mod tests {
             cleanup: true,
             allow_mainnet: false,
             infra_retries: 1,
+            fiat_code: "USD".into(),
+            fiat_amount: 1,
+            payment_method: "cash".into(),
+            state_timeout_secs: 180,
+            settle_timeout_secs: 600,
         }
     }
 
@@ -147,6 +195,17 @@ mod tests {
         assert!(config.cleanup);
         assert!(!config.allow_mainnet);
         assert_eq!(config.infra_retries, 1);
+        assert_eq!(config.fiat_code, "USD");
+        assert_eq!(config.state_timeout_secs, 180);
+    }
+
+    #[test]
+    fn draft_defaults_are_validated() {
+        let mut config = valid();
+        config.fiat_code = "usd".into();
+        config.fiat_amount = 0;
+        config.settle_timeout_secs = 0;
+        assert_eq!(errors_of(&config).len(), 3);
     }
 
     #[test]

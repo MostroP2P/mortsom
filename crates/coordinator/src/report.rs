@@ -25,14 +25,16 @@ pub struct RunReport<'a> {
     pub passed: bool,
 }
 
-/// Writes the four report artifacts. `summary` is the command's own
+/// Writes the report artifacts. `summary` is the command's own
 /// machine-readable summary; `environment` and `cleanup` are free-form.
+/// `write_timeline` is false for commands that render their own timeline.
 pub fn write_report<S: Serialize, E: Serialize, C: Serialize>(
     artifacts: &RunArtifacts,
     report: &RunReport<'_>,
     summary: &S,
     environment: &E,
     cleanup: &C,
+    write_timeline: bool,
 ) -> Result<(), String> {
     artifacts
         .write_json(files::CLEANUP, cleanup)
@@ -43,9 +45,11 @@ pub fn write_report<S: Serialize, E: Serialize, C: Serialize>(
     artifacts
         .write_json(files::SUMMARY, summary)
         .map_err(|e| format!("cannot write summary.json: {e}"))?;
-    artifacts
-        .write_text(files::TIMELINE, &render_timeline(report))
-        .map_err(|e| format!("cannot write timeline.md: {e}"))?;
+    if write_timeline {
+        artifacts
+            .write_text(files::TIMELINE, &render_timeline(report))
+            .map_err(|e| format!("cannot write timeline.md: {e}"))?;
+    }
     info!(run = %report.run_id, command = report.command, passed = report.passed, "finished");
     Ok(())
 }
@@ -104,6 +108,7 @@ mod tests {
             &serde_json::json!({"a": 1}),
             &serde_json::json!({}),
             &serde_json::json!([]),
+            true,
         )
         .unwrap();
 

@@ -5,17 +5,14 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use mortsom_android_driver::avd::Actor;
-use mortsom_android_driver::farm::{Device, DeviceFarm, FarmSpec, TeardownItem};
+use mortsom_android_driver::farm::{DeviceFarm, FarmSpec, TeardownItem};
 use mortsom_android_driver::process::CommandRunner;
 use mortsom_android_driver::sdk::{AndroidSdk, avd_home};
 use mortsom_android_driver::ui::UiDriver;
-use mortsom_app_contract::{
-    AppAdapter, BuildContext, DeviceContext, Identity, TestEnvironment, WalletConnection,
-};
+use mortsom_app_contract::{AppAdapter, BuildContext, Identity, TestEnvironment};
 use mortsom_common::check::{CheckStatus, DoctorReport};
 use mortsom_common::logging::attach_run_log;
-use mortsom_common::{Lane, Redactor, RunId, Secret};
+use mortsom_common::{Lane, Redactor, RunId};
 use mortsom_environment::docker::ContainerRuntime;
 use mortsom_environment::relay::{
     ReadinessProbe, RelayHandle, RelayTeardown, start_relay, teardown_relay,
@@ -24,25 +21,13 @@ use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
 use crate::artifacts::RunArtifacts;
+use crate::bootstrap::{ActorSetup, bootstrap_actor};
 use crate::config::Config;
 use crate::evidence::StepRecorder;
 use crate::report::{RunReport, write_report};
 
 /// Grace for emulator shutdown.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(20);
-
-/// Per-actor outcome.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ActorSetup {
-    /// Actor name.
-    pub actor: String,
-    /// Identity as displayed after onboarding.
-    pub identity: Option<Identity>,
-    /// Identity displayed after a relaunch.
-    pub identity_after_restart: Option<Identity>,
-    /// Wallet connection (redacted).
-    pub wallet: Option<WalletConnection>,
-}
 
 /// Machine-readable outcome, written to `summary.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -169,14 +154,14 @@ pub async fn run_app_setup(
     };
     let recorder = StepRecorder::default();
     for device in farm.devices() {
-        let actor = setup_actor(
+        let actor = bootstrap_actor(
             config,
             deps.adapter,
             device,
             &env,
             &artifacts,
             &recorder,
-            &mut summary,
+            &mut summary.checks,
         )
         .await;
         summary.actors.push(actor);
@@ -279,170 +264,6 @@ async fn resolve_apk(config: &Config, deps: &SetupDeps<'_>) -> Result<PathBuf, S
         .map_err(|e| format!("build failed: {e}"))
 }
 
-/// Runs the per-actor journey: launch, onboard, node and relay, NWC, restart.
-/// Each step records evidence and one check; a failed step ends the journey.
-async fn setup_actor(
-    config: &Config,
-    adapter: &dyn AppAdapter,
-    device: &Device,
-    env: &TestEnvironment,
-    artifacts: &RunArtifacts,
-    recorder: &StepRecorder,
-    summary: &mut AppSetupSummary,
-) -> ActorSetup {
-    let actor = device.actor.as_str();
-    let ctx = DeviceContext {
-        actor: device.actor,
-        ui: device.session.as_ref(),
-        ui_timeout: Duration::from_secs(config.android.ui_timeout_secs),
-    };
-    let mut outcome = ActorSetup {
-        actor: actor.to_owned(),
-        identity: None,
-        identity_after_restart: None,
-        wallet: None,
-    };
-    let mut step = ActorStep {
-        actor,
-        ctx: &ctx,
-        artifacts,
-        recorder,
-        summary,
-    };
-    if step.run("launch", launch_app(&ctx)).await.is_err() {
-        return outcome;
-    }
-    match step.run("onboarding", adapter.onboard(&ctx, env)).await {
-        Ok(identity) => outcome.identity = Some(identity),
-        Err(()) => return outcome,
-    }
-    if step
-        .run(
-            "node-and-relay",
-            adapter.configure_node_and_relay(&ctx, env),
-        )
-        .await
-        .is_err()
-    {
-        return outcome;
-    }
-    let uri: &Secret = match device.actor {
-        Actor::Alice => &config.wallets.alice_nwc,
-        Actor::Bob => &config.wallets.bob_nwc,
-    };
-    if let Ok(wallet) = step
-        .run("nwc", adapter.configure_nwc(&ctx, actor, uri))
-        .await
-    {
-        if !wallet.connected {
-            step.fail("nwc-connected", "app does not show a connected wallet");
-        }
-        outcome.wallet = Some(wallet);
-    }
-    if let Ok(after) = step.run("restart", relaunch_and_read(adapter, &ctx)).await {
-        let same = outcome.identity.as_ref() == Some(&after);
-        step.verdict(
-            "identity-survives-restart",
-            same,
-            "same identity after relaunch",
-            "identity changed after relaunch",
-        );
-        outcome.identity_after_restart = Some(after);
-    }
-    outcome
-}
-
-/// Records one named step for an actor: evidence checkpoint plus a check.
-struct ActorStep<'a> {
-    actor: &'a str,
-    ctx: &'a DeviceContext<'a>,
-    artifacts: &'a RunArtifacts,
-    recorder: &'a StepRecorder,
-    summary: &'a mut AppSetupSummary,
-}
-
-impl ActorStep<'_> {
-    async fn run<T, E: std::fmt::Display>(
-        &mut self,
-        name: &str,
-        action: impl std::future::Future<Output = Result<T, E>>,
-    ) -> Result<T, ()> {
-        let result = action.await;
-        let suffix = if result.is_ok() { "" } else { "-failed" };
-        self.recorder
-            .checkpoint(
-                self.artifacts,
-                self.actor,
-                &format!("{name}{suffix}"),
-                self.ctx.ui,
-            )
-            .await;
-        match result {
-            Ok(value) => {
-                self.summary
-                    .checks
-                    .push(format!("{} {name}", self.actor), CheckStatus::Pass, "ok");
-                Ok(value)
-            }
-            Err(e) => {
-                self.summary.checks.push(
-                    format!("{} {name}", self.actor),
-                    CheckStatus::Fail,
-                    e.to_string(),
-                );
-                Err(())
-            }
-        }
-    }
-
-    fn fail(&mut self, name: &str, detail: &str) {
-        self.summary
-            .checks
-            .push(format!("{} {name}", self.actor), CheckStatus::Fail, detail);
-    }
-
-    fn verdict(&mut self, name: &str, ok: bool, pass: &str, fail: &str) {
-        let (status, detail) = if ok {
-            (CheckStatus::Pass, pass)
-        } else {
-            (CheckStatus::Fail, fail)
-        };
-        self.summary
-            .checks
-            .push(format!("{} {name}", self.actor), status, detail);
-    }
-}
-
-/// Clears app data and brings the app to the foreground.
-async fn launch_app(ctx: &DeviceContext<'_>) -> Result<(), String> {
-    ctx.ui
-        .clear_app()
-        .await
-        .map_err(|e| format!("clear app: {e}"))?;
-    ctx.ui
-        .activate_app()
-        .await
-        .map_err(|e| format!("activate app: {e}"))
-}
-
-async fn relaunch_and_read(
-    adapter: &dyn AppAdapter,
-    ctx: &DeviceContext<'_>,
-) -> Result<Identity, String> {
-    ctx.ui
-        .terminate_app()
-        .await
-        .map_err(|e| format!("terminate: {e}"))?;
-    ctx.ui
-        .activate_app()
-        .await
-        .map_err(|e| format!("activate: {e}"))?;
-    adapter
-        .displayed_identity(ctx)
-        .await
-        .map_err(|e| e.to_string())
-}
-
 fn check_identities(summary: &mut AppSetupSummary) {
     let ids: Vec<&Identity> = summary
         .actors
@@ -514,7 +335,7 @@ fn finish(artifacts: &RunArtifacts, summary: &mut AppSetupSummary) -> Result<(),
         checks: &summary.checks,
         passed: summary.passed,
     };
-    write_report(artifacts, &report, summary, &environment, &cleanup)
+    write_report(artifacts, &report, summary, &environment, &cleanup, true)
 }
 
 #[cfg(test)]

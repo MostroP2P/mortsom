@@ -84,6 +84,9 @@ pub enum ObserverError {
 
 struct Inner {
     client: Client,
+    /// False for detached observers (no relay): subscriptions are skipped
+    /// and events arrive only through `ingest`.
+    live: bool,
     scope: Mutex<ObserverScope>,
     log: Mutex<Vec<ObservedEvent>>,
     seen: Mutex<HashSet<String>>,
@@ -127,6 +130,7 @@ impl RelayObserver {
         let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
         let inner = Arc::new(Inner {
             client,
+            live: true,
             scope: Mutex::new(scope),
             log: Mutex::new(Vec::new()),
             seen: Mutex::new(HashSet::new()),
@@ -153,10 +157,31 @@ impl RelayObserver {
         Ok(observer)
     }
 
+    /// An observer without a relay connection: events arrive only through
+    /// [`RelayObserver::ingest`]. Used by fakes and tests of consumers.
+    pub fn detached(scope: ObserverScope) -> Self {
+        let (tx, _) = broadcast::channel(CHANNEL_CAPACITY);
+        Self {
+            inner: Arc::new(Inner {
+                client: Client::default(),
+                live: false,
+                scope: Mutex::new(scope),
+                log: Mutex::new(Vec::new()),
+                seen: Mutex::new(HashSet::new()),
+                subscriptions: Mutex::new(Vec::new()),
+                tx,
+            }),
+            task: Arc::new(Mutex::new(None)),
+        }
+    }
+
     /// Adds a run-created order id to the scope and refreshes the
     /// subscription so its events are observed from now on.
     pub async fn add_order(&self, order_id: &str) -> Result<(), ObserverError> {
         lock(&self.inner.scope).add_order(order_id);
+        if !self.inner.live {
+            return Ok(());
+        }
         self.resubscribe().await
     }
 

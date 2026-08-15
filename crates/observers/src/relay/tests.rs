@@ -17,6 +17,7 @@ fn observer(scope: ObserverScope) -> RelayObserver {
     RelayObserver {
         inner: Arc::new(Inner {
             client: Client::default(),
+            live: true,
             scope: Mutex::new(scope),
             log: Mutex::new(Vec::new()),
             seen: Mutex::new(HashSet::new()),
@@ -197,4 +198,25 @@ async fn resubscribe_replaces_ids_instead_of_accumulating() {
             .iter()
             .all(|id| id.to_string().starts_with("mortsom-observer-"))
     );
+}
+
+#[tokio::test]
+async fn detached_observer_scopes_orders_without_a_relay() {
+    let daemon = Keys::generate();
+    let observer = RelayObserver::detached(ObserverScope::daemon_only(daemon.public_key()));
+    let order = event(
+        &daemon,
+        Kind::Custom(NOSTR_ORDER_EVENT_KIND),
+        &[&["d", "o1"]],
+    );
+    assert!(
+        observer.ingest("ws://r", &order).is_none(),
+        "out of scope before add_order"
+    );
+
+    observer.add_order("o1").await.unwrap();
+
+    assert!(observer.ingest("ws://r", &order).is_some());
+    assert!(observer.subscription_ids().is_empty());
+    observer.stop().await;
 }

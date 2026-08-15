@@ -396,7 +396,14 @@ fn finish(artifacts: &RunArtifacts, summary: &mut SmokeSummary) -> Result<(), St
         checks: &summary.checks,
         passed: summary.passed,
     };
-    write_report(artifacts, &report, summary, &environment, &summary.teardown)
+    write_report(
+        artifacts,
+        &report,
+        summary,
+        &environment,
+        &summary.teardown,
+        true,
+    )
 }
 
 #[cfg(test)]

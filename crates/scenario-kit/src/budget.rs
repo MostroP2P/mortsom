@@ -6,8 +6,6 @@ use mortsom_common::FailureCategory;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::config::RunConfig;
-
 /// Per-order and per-run spend caps, always both present.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpendCaps {
@@ -18,17 +16,17 @@ pub struct SpendCaps {
 }
 
 impl SpendCaps {
-    /// Builds caps from `[run]`; zero is treated as missing.
-    pub fn from_run(run: &RunConfig) -> Result<Self, BudgetError> {
-        if run.max_order_sats == 0 {
+    /// Builds caps from configuration values; zero is treated as missing.
+    pub fn new(max_order_sats: u64, max_run_spend_sats: u64) -> Result<Self, BudgetError> {
+        if max_order_sats == 0 {
             return Err(BudgetError::MissingCap("run.max_order_sats"));
         }
-        if run.max_run_spend_sats == 0 {
+        if max_run_spend_sats == 0 {
             return Err(BudgetError::MissingCap("run.max_run_spend_sats"));
         }
         Ok(Self {
-            max_order_sats: run.max_order_sats,
-            max_run_spend_sats: run.max_run_spend_sats,
+            max_order_sats,
+            max_run_spend_sats,
         })
     }
 }
@@ -63,8 +61,9 @@ pub enum BudgetError {
         /// Cap.
         cap: u64,
     },
-    /// The settled amount plus fee exceeds what was reserved.
-    #[error("reservation {reservation}: settled {settled} + fee {fee} exceeds reserved {reserved}")]
+    /// The settled principal exceeds what was reserved. Routing fees are
+    /// not reservable in advance; they count against the run cap only.
+    #[error("reservation {reservation}: settled {settled} exceeds reserved {reserved} (fee {fee})")]
     Overspend {
         /// Reservation id.
         reservation: u64,
@@ -256,7 +255,8 @@ impl Budget {
             .ok_or(BudgetError::UnknownReservation(reservation.id))
     }
 
-    /// Records a settled payment. `settled + fee` may not exceed the reservation.
+    /// Records a settled payment. The principal may not exceed the
+    /// reservation; the routing fee is counted against the run cap.
     pub fn commit(
         &mut self,
         reservation: &Reservation,
@@ -265,7 +265,7 @@ impl Budget {
         payment_hash: Option<String>,
     ) -> Result<(), BudgetError> {
         let entry = self.entry_mut(reservation)?;
-        if settled_sats.saturating_add(fee_sats) > entry.reserved_sats {
+        if settled_sats > entry.reserved_sats {
             return Err(BudgetError::Overspend {
                 reservation: reservation.id,
                 settled: settled_sats,
@@ -338,7 +338,6 @@ impl Budget {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use mortsom_common::Lane;
 
     fn caps() -> SpendCaps {
         SpendCaps {
@@ -347,32 +346,18 @@ mod tests {
         }
     }
 
-    fn run(max_order: u64, max_run: u64) -> RunConfig {
-        RunConfig {
-            lane: Lane::Local,
-            amount_sats: 1,
-            max_order_sats: max_order,
-            max_run_spend_sats: max_run,
-            jobs: 1,
-            artifacts_dir: "a".into(),
-            cleanup: true,
-            allow_mainnet: false,
-            infra_retries: 0,
-        }
-    }
-
     #[test]
     fn zero_caps_are_missing_caps() {
         assert_eq!(
-            SpendCaps::from_run(&run(0, 10)).unwrap_err(),
+            SpendCaps::new(0, 10).unwrap_err(),
             BudgetError::MissingCap("run.max_order_sats")
         );
         assert_eq!(
-            SpendCaps::from_run(&run(10, 0)).unwrap_err(),
+            SpendCaps::new(10, 0).unwrap_err(),
             BudgetError::MissingCap("run.max_run_spend_sats")
         );
         assert_eq!(
-            SpendCaps::from_run(&run(10, 20)).unwrap(),
+            SpendCaps::new(10, 20).unwrap(),
             SpendCaps {
                 max_order_sats: 10,
                 max_run_spend_sats: 20
@@ -440,7 +425,8 @@ mod tests {
         let mut budget = Budget::new(caps());
         let r = budget.reserve("o1", 500).unwrap();
 
-        let err = budget.commit(&r, 500, 1, None).unwrap_err();
+        // Fees never trip the per-order check; the principal does.
+        let err = budget.commit(&r, 501, 0, None).unwrap_err();
 
         assert!(matches!(err, BudgetError::Overspend { .. }));
         assert_eq!(budget.ledger()[0].status, EntryStatus::Reserved);

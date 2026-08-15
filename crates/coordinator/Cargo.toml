@@ -38,6 +38,7 @@ futures = { workspace = true }
 mostro-core = { workspace = true }
 nostr-sdk = { workspace = true }
 nwc = { workspace = true }
+inventory = { workspace = true }
 
 [dev-dependencies]
 mortsom-android-driver = { workspace = true, features = ["testing"] }

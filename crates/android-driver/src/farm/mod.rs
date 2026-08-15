@@ -4,6 +4,7 @@
 //! order without stopping at the first error.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -81,8 +82,8 @@ pub struct Device {
     pub actor: Actor,
     /// Booted emulator.
     pub emulator: Emulator,
-    /// UI session.
-    pub session: Box<dyn UiSession>,
+    /// UI session, shareable with scenario contexts.
+    pub session: Arc<dyn UiSession>,
     /// Session spec used.
     pub spec: SessionSpec,
     /// Installed app version.
@@ -187,7 +188,7 @@ impl DeviceFarm {
                 Ok(session) => devices.push(Device {
                     actor,
                     emulator,
-                    session,
+                    session: Arc::from(session),
                     spec: session_spec,
                     version,
                 }),

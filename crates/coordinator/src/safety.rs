@@ -76,6 +76,11 @@ mod tests {
             cleanup: true,
             allow_mainnet,
             infra_retries: 0,
+            fiat_code: "USD".into(),
+            fiat_amount: 1,
+            payment_method: "cash".into(),
+            state_timeout_secs: 1,
+            settle_timeout_secs: 1,
         }
     }
 

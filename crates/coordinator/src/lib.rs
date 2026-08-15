@@ -3,7 +3,7 @@
 
 pub mod app_setup;
 pub mod artifacts;
-pub mod budget;
+pub mod bootstrap;
 pub mod cli;
 pub mod config;
 pub mod device_smoke;
@@ -11,6 +11,7 @@ pub mod doctor;
 pub mod evidence;
 pub mod relay_smoke;
 pub mod report;
+pub mod run;
 pub mod safety;
 
 pub use config::{Config, ConfigError, RunConfig};

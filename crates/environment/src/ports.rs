@@ -21,16 +21,22 @@ mod tests {
 
     #[test]
     fn allocates_the_base_when_free_and_skips_when_busy() {
-        // Pick a base the OS considers free right now.
-        let probe = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
-        let base = probe.local_addr().unwrap().port();
-        drop(probe);
-        assert_eq!(allocate_port(base), Some(base));
-
-        let holder = TcpListener::bind((Ipv4Addr::UNSPECIFIED, base)).unwrap();
+        // Hold a port so it is busy for sure, then allocate from it: the
+        // result must be a different, higher port in the window.
+        let holder = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
+        let base = holder.local_addr().unwrap().port();
         let next = allocate_port(base).unwrap();
         assert!(next > base && next < base + PORT_SEARCH_WINDOW, "{next}");
-        drop(holder);
+
+        // A port nobody holds is returned as is (retry against races with
+        // other tests grabbing ephemeral ports).
+        let free = (0..5).find_map(|_| {
+            let probe = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).ok()?;
+            let candidate = probe.local_addr().ok()?.port();
+            drop(probe);
+            (allocate_port(candidate) == Some(candidate)).then_some(candidate)
+        });
+        assert!(free.is_some(), "no free ephemeral port could be reproduced");
     }
 
     #[test]

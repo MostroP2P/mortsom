@@ -21,6 +21,7 @@ use crate::config::Config;
 use crate::device_smoke::{DeviceSmokeOptions, run_device_smoke};
 use crate::doctor::{DoctorOptions, HostProbe, RealHost, RealNet, run_doctor};
 use crate::relay_smoke::{RelayObserverSource, SmokeOptions, run_relay_smoke};
+use crate::run::{LiveObserver, RunDeps, RunOptions, run_scenarios};
 
 /// Default configuration file.
 pub const DEFAULT_CONFIG: &str = "mortsom.toml";
@@ -40,6 +41,16 @@ pub struct Cli {
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// List registered scenarios with tags, requirements and value flag.
+    List,
+    /// Run scenarios end to end (relay, devices, apps, observers, cleanup).
+    Run {
+        /// Scenario names.
+        scenarios: Vec<String>,
+        /// Run every scenario carrying this tag.
+        #[arg(long)]
+        tag: Option<String>,
+    },
     /// Application-level operations through the UI.
     App {
         /// App subcommand.
@@ -115,6 +126,8 @@ pub async fn run(cli: Cli) -> ExitCode {
     // redacted `run.log` once the run id exists (`attach_run_log`).
     let _sink = init_logging();
     match cli.command {
+        Command::List => list_scenarios(),
+        Command::Run { scenarios, tag } => run_command(&cli.config, scenarios, tag).await,
         Command::App { command } => run_app(&cli.config, command).await,
         Command::Device { command } => run_device(&cli.config, command).await,
         Command::Relay { command } => run_relay(&cli.config, command).await,
@@ -308,6 +321,109 @@ async fn run_app(config_path: &std::path::Path, command: AppCommand) -> ExitCode
                     ExitCode::from(2)
                 }
             }
+        }
+    }
+}
+
+fn list_scenarios() -> ExitCode {
+    mortsom_scenarios::link();
+    if let Err(e) = mortsom_scenario_kit::registry::validate() {
+        eprintln!("{e}");
+        return ExitCode::from(2);
+    }
+    for def in mortsom_scenario_kit::registry::all() {
+        println!(
+            "{:<28} tags=[{}] requires=[{}] moves_value={} timeout={}s",
+            def.name,
+            def.tags.join(","),
+            def.requires
+                .iter()
+                .map(|c| c.as_str())
+                .collect::<Vec<_>>()
+                .join(","),
+            def.moves_value,
+            def.timeout_secs
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+async fn run_command(
+    config_path: &std::path::Path,
+    scenarios: Vec<String>,
+    tag: Option<String>,
+) -> ExitCode {
+    mortsom_scenarios::link();
+    let config = match Config::load(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let (Some(appium), Some(flutter)) = (RealHost.which("appium"), RealHost.which("flutter"))
+    else {
+        eprintln!("appium and flutter must be on PATH; run `mortsom doctor`");
+        return ExitCode::from(2);
+    };
+    let ui = AppiumDriver::new(appium);
+    let docker = DockerCli::default();
+    let seed = RelayHandle {
+        container_name: String::new(),
+        host_port: config.relay.host_port,
+        data_dir: std::path::PathBuf::new(),
+        image: String::new(),
+    }
+    .emulator_url();
+    let adapter: std::sync::Arc<dyn mortsom_app_contract::AppAdapter> = std::sync::Arc::new(
+        MobileLegacyAdapter::new(config.mobile.package.clone(), flutter, seed),
+    );
+    let env = |name: &str| std::env::var(name).ok();
+    let wallets =
+        |label: &str,
+         uri: &mortsom_common::Secret|
+         -> Result<std::sync::Arc<dyn mortsom_observers::wallet::WalletReader>, String> {
+            mortsom_observers::wallet::NwcReader::new(label, uri, crate::run::WALLET_LOOKUP_TIMEOUT)
+                .map(|r| {
+                    std::sync::Arc::new(r)
+                        as std::sync::Arc<dyn mortsom_observers::wallet::WalletReader>
+                })
+                .map_err(|e| e.to_string())
+        };
+    let deps = RunDeps {
+        runner: &TokioRunner,
+        ui: &ui,
+        docker: &docker,
+        probe: &NostrProbe,
+        adapter,
+        env: &env,
+        wallets: &wallets,
+        observer: &LiveObserver,
+    };
+    let options = RunOptions {
+        scenarios,
+        tag,
+        shutdown_grace: None,
+    };
+    match run_scenarios(&config, &options, &deps).await {
+        Ok(summary) => {
+            print!("{}", summary.checks.render());
+            for result in &summary.results {
+                println!(
+                    "{:<28} {:?} (attempts {})",
+                    result.name, result.outcome, result.attempts
+                );
+            }
+            println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);
+            if summary.passed {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(2)
         }
     }
 }

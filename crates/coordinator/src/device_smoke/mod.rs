@@ -343,7 +343,14 @@ fn finish(artifacts: &RunArtifacts, summary: &mut DeviceSmokeSummary) -> Result<
         checks: &summary.checks,
         passed: summary.passed,
     };
-    write_report(artifacts, &report, summary, &environment, &summary.teardown)
+    write_report(
+        artifacts,
+        &report,
+        summary,
+        &environment,
+        &summary.teardown,
+        true,
+    )
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@ rust-version.workspace = true
 mortsom-common = { workspace = true }
 mortsom-app-contract = { workspace = true }
 mortsom-scenario-kit = { workspace = true }
+mortsom-android-driver = { workspace = true }
 tokio = { workspace = true }
 inventory = { workspace = true }
 tracing = { workspace = true }
