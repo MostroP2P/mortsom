@@ -8,11 +8,14 @@
 pub mod env_resolve;
 pub mod failure;
 pub mod lane;
+pub mod logging;
 pub mod redact;
+pub mod run_id;
 pub mod secret;
 
 pub use env_resolve::{MissingEnv, resolve_env_with};
 pub use failure::FailureCategory;
 pub use lane::Lane;
 pub use redact::Redactor;
+pub use run_id::RunId;
 pub use secret::Secret;

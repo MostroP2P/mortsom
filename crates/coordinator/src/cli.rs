@@ -5,6 +5,8 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use mortsom_common::logging::init_logging;
+
 use crate::doctor::{DoctorOptions, RealHost, RealNet, run_doctor};
 
 /// Default configuration file.
@@ -39,6 +41,9 @@ pub enum Command {
 
 /// Runs the parsed command and returns the process exit code.
 pub async fn run(cli: Cli) -> ExitCode {
+    // Stderr immediately; commands that own a run directory attach the
+    // redacted `run.log` once the run id exists (`attach_run_log`).
+    let _sink = init_logging();
     match cli.command {
         Command::Doctor { no_network, json } => {
             let options = DoctorOptions { no_network };
