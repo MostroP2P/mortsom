@@ -18,6 +18,10 @@ tracing = { workspace = true }
 mostro-core = { workspace = true }
 nostr-sdk = { workspace = true }
 chrono = { workspace = true }
+futures = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = { workspace = true }
