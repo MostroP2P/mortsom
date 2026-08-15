@@ -219,6 +219,7 @@ pub async fn check_wallet(
     net: &dyn NetProbes,
     label: &str,
     uri: &Secret,
+    caps: Liquidity,
     report: &mut DoctorReport,
 ) {
     let name = format!("wallet {label}");
@@ -227,17 +228,38 @@ pub async fn check_wallet(
         return;
     }
     match net.wallet(label, uri).await {
-        Ok(probe) => report.push(
-            name,
-            CheckStatus::Pass,
-            format!(
+        Ok(probe) => {
+            let detail = format!(
                 "reachable; alias {}, network {}, {} sats, methods [{}]",
                 probe.alias.as_deref().unwrap_or("-"),
                 probe.network.as_deref().unwrap_or("-"),
                 probe.balance_sats,
                 probe.methods.join(", ")
-            ),
-        ),
+            );
+            // Pre-flight liquidity (spec §5): a wallet that cannot cover
+            // the run cap fails the check before any sats move.
+            let floor = caps.max_run_spend_sats.max(caps.max_order_sats);
+            let (status, detail) = if probe.balance_sats < floor {
+                (
+                    CheckStatus::Fail,
+                    format!(
+                        "{detail}; below the run cap ({floor} sats): top up the dedicated wallet, do not lower the cap"
+                    ),
+                )
+            } else {
+                (CheckStatus::Pass, detail)
+            };
+            report.push(name, status, detail);
+        }
         Err(e) => report.push(name, CheckStatus::Fail, e.to_string()),
     }
+}
+
+/// The spend caps a wallet must be able to cover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Liquidity {
+    /// Per-order cap.
+    pub max_order_sats: u64,
+    /// Per-run cap.
+    pub max_run_spend_sats: u64,
 }

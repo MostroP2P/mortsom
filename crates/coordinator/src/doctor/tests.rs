@@ -121,6 +121,7 @@ struct FakeNet {
     port: PortState,
     daemon: DaemonProbe,
     wallets_ok: bool,
+    balance_sats: u64,
 }
 
 impl FakeNet {
@@ -156,6 +157,7 @@ impl FakeNet {
                 }),
             },
             wallets_ok: true,
+            balance_sats: 25_000,
         }
     }
 }
@@ -175,7 +177,7 @@ impl NetProbes for FakeNet {
                 alias: Some("testwallet".into()),
                 network: Some("mainnet".into()),
                 methods: vec!["pay_invoice".into(), "get_balance".into()],
-                balance_sats: 12_345,
+                balance_sats: self.balance_sats,
             })
         } else {
             Err(WalletProbeError::Timeout {
@@ -557,4 +559,28 @@ async fn docker_daemon_down_and_missing_driver_are_reported() {
             .contains("Cannot connect")
     );
     assert_eq!(status_of(&report, "uiautomator2").status, CheckStatus::Fail);
+}
+
+#[tokio::test]
+async fn wallet_liquidity_below_the_run_cap_fails_the_preflight() {
+    let dir = example_config();
+    let mut host = FakeHost::full();
+    with_settings(&mut host, &dir);
+    let path = dir.path().join("mortsom.toml");
+
+    // Example caps: max_order_sats = 5000, max_run_spend_sats = 20000.
+    let mut net = FakeNet::healthy();
+    net.balance_sats = 7_000;
+    let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
+    assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Fail);
+    assert!(
+        status_of(&report, "wallet alice")
+            .detail
+            .contains("below the run cap (20000 sats)")
+    );
+
+    net.balance_sats = 100;
+    let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
+    assert_eq!(status_of(&report, "wallet bob").status, CheckStatus::Fail);
+    assert!(!report.is_healthy());
 }
