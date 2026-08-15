@@ -1,0 +1,78 @@
+# Isolated integration smoke (spec Phase 6.3): the PR smoke suite against a
+# real daemon and dedicated wallets, only on a secured self-hosted runner
+# with the `integration` environment's secrets and an explicit budget policy
+# (the caps in config/ci.example.toml). Never on forks or pull requests.
+name: Integration smoke
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      scenarios:
+        description: Scenario names (space separated); empty runs --tag smoke
+        required: false
+        default: ""
+
+concurrency:
+  group: mortsom-integration
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: PR smoke suite, CI lane
+    if: github.repository == 'MostroP2P/mortsom'
+    runs-on: [self-hosted, mortsom-integration]
+    environment: integration
+    timeout-minutes: 120
+    env:
+      MORTSOM_MOSTRO_PUBKEY: ${{ secrets.MORTSOM_MOSTRO_PUBKEY }}
+      MORTSOM_MOSTRO_SETTINGS_FILE: ${{ secrets.MORTSOM_MOSTRO_SETTINGS_FILE }}
+      MORTSOM_ALICE_NWC: ${{ secrets.MORTSOM_ALICE_NWC }}
+      MORTSOM_BOB_NWC: ${{ secrets.MORTSOM_BOB_NWC }}
+      # The CI lane pays real hold invoices through the dedicated wallets:
+      # both switches are required and the config caps bound the spend.
+      MORTSOM_MAINNET_CONFIRM: ${{ secrets.MORTSOM_MAINNET_CONFIRM }}
+      MORTSOM_ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Configure (CI lane, dedicated infrastructure)
+        # The smoke suite pays hold invoices; this environment's wallets are
+        # dedicated and the caps in the config bound every run.
+        run: |
+          cp config/ci.example.toml mortsom.toml
+          sed -i 's/^allow_mainnet = false/allow_mainnet = true/' mortsom.toml
+      - name: Preflight
+        run: cargo run --release -p mortsom-coordinator --bin mortsom -- doctor
+      - name: Run
+        env:
+          # Through the environment, never interpolated into the script.
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          if [ -n "$SCENARIOS" ]; then
+            cargo run --release -p mortsom-coordinator --bin mortsom -- run $SCENARIOS
+          else
+            cargo run --release -p mortsom-coordinator --bin mortsom -- run --tag smoke
+          fi
+      - name: Cleanup what the run may have left
+        if: always()
+        run: |
+          for run in $(ls -1 artifacts | grep -v '^\.' | grep -v '^accounting'); do
+            cargo run --release -p mortsom-coordinator --bin mortsom -- cleanup "$run" || true
+          done
+      - name: Publish sanitized evidence
+        if: always()
+        run: |
+          mkdir -p bundle
+          for run in $(ls -1 artifacts | grep -v '^\.' | grep -v '^accounting'); do
+            cargo run --release -p mortsom-coordinator --bin mortsom -- publish "$run" --out "bundle/$run" --screenshots all
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-evidence
+          path: bundle
+          if-no-files-found: ignore
+          retention-days: 30

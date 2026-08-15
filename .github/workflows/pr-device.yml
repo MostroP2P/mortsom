@@ -1,0 +1,126 @@
+# Non-value-moving device and UI-contract checks on every pull request
+# (spec Phase 6.2). Nothing here needs a daemon, a wallet or a secret: the
+# app's automation-contract widget tests, both emulators booting with the
+# app installed, and Appium sessions opening. Evidence goes through
+# `mortsom publish` before upload.
+name: PR device checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: pr-device-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Application under test: pinned so the check is deterministic.
+  MOBILE_REPO: MostroP2P/mobile
+  MOBILE_REF: mortsom-automation-contract
+  FLUTTER_VERSION: "3.41.9"
+  API_LEVEL: "35"
+  SYSTEM_IMAGE: "system-images;android-35;google_apis;x86_64"
+  APPIUM_VERSION: "3.6.0"
+  UIAUTOMATOR2_VERSION: "8.4.0"
+  # Public test key from the Mostro documentation; no daemon is contacted.
+  MORTSOM_MOSTRO_PUBKEY: 8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51
+  MORTSOM_ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+  # Placeholders so the config loads; the device smoke never uses wallets.
+  MORTSOM_MOSTRO_SETTINGS_FILE: /dev/null
+  MORTSOM_ALICE_NWC: nostr+walletconnect://0000000000000000000000000000000000000000000000000000000000000001?relay=wss%3A%2F%2Fexample.invalid&secret=0000000000000000000000000000000000000000000000000000000000000001
+  MORTSOM_BOB_NWC: nostr+walletconnect://0000000000000000000000000000000000000000000000000000000000000001?relay=wss%3A%2F%2Fexample.invalid&secret=0000000000000000000000000000000000000000000000000000000000000002
+
+jobs:
+  ui-contract:
+    name: App automation contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MOBILE_REPO }}
+          ref: ${{ env.MOBILE_REF }}
+          path: mobile
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - name: Contract widget tests (ids, test environment, readouts)
+        working-directory: mobile
+        run: |
+          flutter pub get
+          flutter test test/core/automation
+
+  device-smoke:
+    name: Two emulators, app installed, Appium sessions
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.MOBILE_REPO }}
+          ref: ${{ env.MOBILE_REF }}
+          path: mobile
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          cache: true
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools emulator "platforms;android-${{ env.API_LEVEL }}" "${{ env.SYSTEM_IMAGE }}"
+      - name: Cache Gradle and pub
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+            ~/.pub-cache
+          key: mobile-${{ runner.os }}-${{ hashFiles('mobile/pubspec.lock', 'mobile/android/**/*.gradle*') }}
+      - name: Enable KVM for the emulators
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Appium with UiAutomator2, pinned
+        run: |
+          npm install -g appium@${APPIUM_VERSION}
+          appium driver install uiautomator2@${UIAUTOMATOR2_VERSION}
+      - name: Build the Mortsom flavor of the app
+        working-directory: mobile
+        run: |
+          flutter pub get
+          flutter build apk --debug --flavor mortsom -t lib/main_mortsom.dart \
+            --dart-define=MORTSOM_TEST_ENV=true \
+            --dart-define=MOSTRO_PUB_KEY=${MORTSOM_MOSTRO_PUBKEY}
+      - name: Configure Mortsom (CI lane, prebuilt APK)
+        run: |
+          cp config/ci.example.toml mortsom.toml
+          APK=$(ls mobile/build/app/outputs/flutter-apk/*.apk | head -1)
+          sed -i "s|apk_path = \"\"|apk_path = \"$APK\"|" mortsom.toml
+          sed -i "s|source_dir = \"../mobile\"|source_dir = \"mobile\"|" mortsom.toml
+      - name: Device smoke (boots both emulators, installs, opens sessions)
+        run: cargo run --release -p mortsom-coordinator --bin mortsom -- device smoke
+      - name: Publish sanitized evidence
+        if: always()
+        run: |
+          mkdir -p bundle
+          for run in $(ls -1 artifacts 2>/dev/null | grep -v '^\.' | grep -v '^accounting'); do
+            cargo run --release -p mortsom-coordinator --bin mortsom -- publish "$run" --out "bundle/$run" --screenshots all
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: device-smoke-evidence
+          path: bundle
+          if-no-files-found: ignore
+          retention-days: 14

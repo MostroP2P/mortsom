@@ -56,11 +56,32 @@ never runs without per-order and per-run spend caps.
 | `mortsom app setup` | Onboards Alice and Bob through the UI, connects wallets, relay and node. | no |
 | `mortsom run [--tag <tag>] [scenario…]` | Runs scenarios end to end with observers, caps and cleanup. | per scenario |
 | `mortsom cleanup <run-id>` | Removes the run's relay container and Mortsom's emulators; reports orders the run left open. | no |
+| `mortsom publish <run-id> --out <dir> [--screenshots all\|none]` | Sanitized bundle for CI: redacted text evidence, screenshots by policy, manifest with retry classification. | no |
+| `mortsom accounting [--lane <lane>]` | Spend and outcome trend across runs (`accounting.md/json` in the artifacts dir). | no |
 
 `mortsom cleanup` reads `<artifacts_dir>/<run-id>/cleanup.json` and prints any
 order the run's own sweep could not close. It cannot cancel orders itself
 (that needs a device session), so it says so instead of reporting success.
 An emulator on a Mortsom slot is only shut down when it is Mortsom's AVD.
+`mortsom run` takes a host-wide lock (`<artifacts_dir>/.mortsom-run.lock`)
+and refuses to start while another run holds it.
+
+## CI and canary
+
+- `ci.yml`: format, clippy, unit tests, coverage floor on every PR.
+- `pr-device.yml`: the app's automation-contract widget tests and a real
+  two-emulator device smoke on every PR; no daemon, wallet or secret.
+- `integration.yml`: the smoke suite on a secured self-hosted runner
+  (`integration` environment) with dedicated wallets and the caps of
+  `config/ci.example.toml`; on pushes to `main` and manual dispatch.
+- `canary.yml`: one scheduled, hard-capped run per day on the canary runner;
+  single-run locking, no retries, an issue on failure, accounting trend and
+  screenshot-free evidence bundle every time.
+- `ci/Dockerfile`: the pinned runner image (Rust, Android SDK, emulator
+  image, Appium/UiAutomator2, Flutter, Docker CLI).
+
+See [`docs/runbook.md`](./docs/runbook.md) for failure handling, cleanup
+recovery, secret rotation and incident response.
 
 ## Scenario catalogue
 

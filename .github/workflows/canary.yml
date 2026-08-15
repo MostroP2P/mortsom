@@ -1,0 +1,76 @@
+# Scheduled mainnet canary (spec §5, Phase 6.5): one hard-capped run of the
+# smoke suite against production-like infrastructure. Single-run locking is
+# enforced twice (this concurrency group and `mortsom run`'s host lock);
+# nothing retries; a failure opens an issue for manual review and the
+# accounting trend is published every time.
+name: Mainnet canary
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: mortsom-canary
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  canary:
+    name: Smoke suite, canary lane
+    if: github.repository == 'MostroP2P/mortsom'
+    runs-on: [self-hosted, mortsom-canary]
+    environment: canary
+    timeout-minutes: 90
+    env:
+      MORTSOM_MOSTRO_PUBKEY: ${{ secrets.MORTSOM_MOSTRO_PUBKEY }}
+      MORTSOM_MOSTRO_SETTINGS_FILE: ${{ secrets.MORTSOM_MOSTRO_SETTINGS_FILE }}
+      MORTSOM_ALICE_NWC: ${{ secrets.MORTSOM_ALICE_NWC }}
+      MORTSOM_BOB_NWC: ${{ secrets.MORTSOM_BOB_NWC }}
+      MORTSOM_MAINNET_CONFIRM: ${{ secrets.MORTSOM_MAINNET_CONFIRM }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Configure (canary lane; caps live in the config, not here)
+        run: cp config/canary.example.toml mortsom.toml
+      - name: Preflight (liquidity, daemon, relay, tools)
+        run: cargo run --release -p mortsom-coordinator --bin mortsom -- doctor
+      - name: Run once, never retried
+        run: cargo run --release -p mortsom-coordinator --bin mortsom -- run --tag smoke
+      - name: Cleanup what the run may have left
+        if: always()
+        run: |
+          for run in $(ls -1 artifacts | grep -v '^\.' | grep -v '^accounting'); do
+            cargo run --release -p mortsom-coordinator --bin mortsom -- cleanup "$run" || true
+          done
+      - name: Accounting trend
+        if: always()
+        run: cargo run --release -p mortsom-coordinator --bin mortsom -- accounting --lane canary
+      - name: Publish sanitized evidence (no screenshots off the canary host)
+        if: always()
+        run: |
+          mkdir -p bundle
+          for run in $(ls -1 artifacts | grep -v '^\.' | grep -v '^accounting'); do
+            cargo run --release -p mortsom-coordinator --bin mortsom -- publish "$run" --out "bundle/$run" --screenshots none
+          done
+          cp artifacts/accounting.md artifacts/accounting.json bundle/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canary-evidence
+          path: bundle
+          if-no-files-found: ignore
+          retention-days: 90
+      - name: Alert for manual review
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title "Canary failed: $(date -u +%Y-%m-%dT%H:%MZ)" \
+            --label canary-failure \
+            --body "The mainnet canary failed. Do not rerun before reviewing the evidence: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. Follow docs/runbook.md and confirm no order or reservation is left open before the next scheduled run."
