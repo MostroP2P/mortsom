@@ -7,7 +7,7 @@ use mortsom_android_driver::AndroidConfig;
 use mortsom_app_contract::MobileConfig;
 
 use super::host::HostProbe;
-use super::report::{CheckStatus, DoctorReport};
+use mortsom_common::check::{CheckStatus, DoctorReport};
 
 /// Environment variables that may point at the Android SDK, in priority order.
 pub const SDK_ENV_VARS: &[&str] = &["ANDROID_HOME", "ANDROID_SDK_ROOT"];

@@ -4,3 +4,4 @@ mortsom.toml
 *.local.toml
 .env
 .env.*
+*.profraw

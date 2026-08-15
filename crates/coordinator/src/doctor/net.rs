@@ -9,7 +9,7 @@ use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, INFO_STALE_AFTER, pro
 use mortsom_environment::wallet::{WalletProbe, WalletProbeError, probe_nwc};
 use nostr_sdk::prelude::PublicKey;
 
-use super::report::{CheckStatus, DoctorReport};
+use mortsom_common::check::{CheckStatus, DoctorReport};
 
 /// Deadline for the daemon info fetch.
 pub const DAEMON_TIMEOUT: Duration = Duration::from_secs(10);

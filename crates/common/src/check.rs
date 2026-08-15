@@ -1,4 +1,5 @@
-//! Doctor report model and rendering. Everything here is pure.
+//! Check results shared by `mortsom doctor` and pre-flight: status, named
+//! result and a renderable report. Everything here is pure.
 
 use std::fmt;
 
@@ -40,7 +41,7 @@ pub struct CheckResult {
     pub detail: String,
 }
 
-/// The complete doctor report.
+/// A list of checks with a health verdict.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DoctorReport {
     /// Checks in execution order.

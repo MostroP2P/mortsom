@@ -3,14 +3,13 @@
 
 mod host;
 mod net;
-mod report;
 mod tools;
 
 use std::path::Path;
 
 pub use host::{CommandOutput, HostProbe, RealHost};
+pub use mortsom_common::check::{CheckResult, CheckStatus, DoctorReport};
 pub use net::{NetProbes, PortState, RealNet};
-pub use report::{CheckResult, CheckStatus, DoctorReport};
 
 use crate::config::{Config, ConfigDiagnosis};
 
