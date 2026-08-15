@@ -65,6 +65,7 @@ uuid = { version = "1.24.1", features = ["v4", "serde"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 inventory = "0.3.24"
 regex = "1.13.1"
+zeroize = { version = "1.9.0", features = ["derive"] }
 
 # Dev-dependencies
 mockall = "0.15.0"

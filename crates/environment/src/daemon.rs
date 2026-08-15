@@ -82,6 +82,44 @@ impl DaemonInfo {
     }
 }
 
+/// The daemon's NIP-65 relay list (kind 10002), decoded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RelayList {
+    /// Event creation time (unix seconds).
+    pub created_at: u64,
+    /// Relay URLs advertised (`r` tags), normalized without trailing slash.
+    pub relays: Vec<String>,
+}
+
+impl RelayList {
+    /// Decodes a kind-10002 event. Returns `None` for any other kind.
+    pub fn from_event(event: &Event) -> Option<Self> {
+        if event.kind != Kind::RelayList {
+            return None;
+        }
+        let relays = event
+            .tags
+            .iter()
+            .filter_map(|tag| {
+                let slice = tag.as_slice();
+                (slice.first()? == "r")
+                    .then(|| slice.get(1).cloned())
+                    .flatten()
+            })
+            .map(|url| url.trim_end_matches('/').to_owned())
+            .collect();
+        Some(Self {
+            created_at: event.created_at.as_secs(),
+            relays,
+        })
+    }
+
+    /// True when any of `urls` is advertised, treating host aliases as equal.
+    pub fn advertises_any(&self, urls: &[String]) -> bool {
+        crate::relay_url::any_same_relay(&self.relays, urls)
+    }
+}
+
 /// Outcome of probing the daemon through its relays.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DaemonProbe {
@@ -89,6 +127,8 @@ pub struct DaemonProbe {
     pub relays: Vec<RelayProbe>,
     /// The freshest info event found, if any.
     pub info: Option<DaemonInfo>,
+    /// The freshest relay list found, if any.
+    pub relay_list: Option<RelayList>,
 }
 
 /// One relay's connection outcome, as seen from the host.
@@ -124,6 +164,7 @@ pub async fn probe_daemon(relays: &[String], pubkey: PublicKey, timeout: Duratio
                 })
                 .collect(),
             info: None,
+            relay_list: None,
         },
     }
 }
@@ -176,16 +217,39 @@ async fn probe_daemon_unbounded(
             None => {}
         }
     }
-    let info = if probes.iter().any(|p| p.error.is_none()) {
-        fetch_info(&client, pubkey, timeout).await
+    let (info, relay_list) = if probes.iter().any(|p| p.error.is_none()) {
+        (
+            fetch_info(&client, pubkey, timeout).await,
+            fetch_relay_list(&client, pubkey, timeout).await,
+        )
     } else {
-        None
+        (None, None)
     };
     client.disconnect().await;
     DaemonProbe {
         relays: probes,
         info,
+        relay_list,
     }
+}
+
+async fn fetch_relay_list(
+    client: &Client,
+    pubkey: PublicKey,
+    timeout: Duration,
+) -> Option<RelayList> {
+    let filter = Filter::new().author(pubkey).kind(Kind::RelayList).limit(1);
+    let events = match client.fetch_events(filter).timeout(timeout).await {
+        Ok(events) => events,
+        Err(e) => {
+            debug!(error = %e, "relay list fetch failed");
+            return None;
+        }
+    };
+    events
+        .into_iter()
+        .max_by_key(|event| event.created_at)
+        .and_then(|event| RelayList::from_event(&event))
 }
 
 async fn fetch_info(client: &Client, pubkey: PublicKey, timeout: Duration) -> Option<DaemonInfo> {
@@ -258,6 +322,33 @@ mod tests {
 
         assert!(!info.has_lightning_node());
         assert_eq!(info.protocol_version(), None);
+    }
+
+    #[test]
+    fn decodes_relay_list_and_matches_normalized_urls() {
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::RelayList, "")
+            .tags([
+                Tag::parse(["r", "ws://host.docker.internal:7000/"]).unwrap(),
+                Tag::parse(["r", "wss://relay.example", "read"]).unwrap(),
+                Tag::parse(["x", "ignored"]).unwrap(),
+            ])
+            .finalize(&keys)
+            .unwrap();
+
+        let list = RelayList::from_event(&event).unwrap();
+
+        assert_eq!(
+            list.relays,
+            vec!["ws://host.docker.internal:7000", "wss://relay.example"]
+        );
+        assert!(list.advertises_any(&["ws://host.docker.internal:7000".into()]));
+        assert!(
+            list.advertises_any(&["ws://127.0.0.1:7000".into()]),
+            "host alias"
+        );
+        assert!(!list.advertises_any(&["ws://127.0.0.1:7001".into()]));
+        assert!(RelayList::from_event(&info_event(&[])).is_none());
     }
 
     #[test]

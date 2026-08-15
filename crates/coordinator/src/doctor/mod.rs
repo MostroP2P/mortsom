@@ -3,6 +3,7 @@
 
 mod host;
 mod net;
+mod settings;
 mod tools;
 
 use std::path::Path;
@@ -39,6 +40,15 @@ pub async fn run_doctor(
         &mut report,
     )
     .await;
+    if let Some(config) = config {
+        settings::check_daemon_settings(
+            host,
+            &config.mostro.settings_file,
+            config.mobile.mostro_pubkey(),
+            &config.mostro.relays,
+            &mut report,
+        );
+    }
 
     if options.no_network {
         report.push("network", CheckStatus::Skip, "--no-network");

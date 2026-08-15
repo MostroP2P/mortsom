@@ -73,7 +73,8 @@ pub async fn check_relay_port(net: &dyn NetProbes, port: u16, report: &mut Docto
     }
 }
 
-/// Runs the daemon checks: relay reachability, info event, protocol, LND.
+/// Runs the daemon checks: relay reachability, info event, protocol, LND
+/// and the live relay list.
 pub async fn check_daemon(
     net: &dyn NetProbes,
     relays: &[String],
@@ -81,17 +82,23 @@ pub async fn check_daemon(
     report: &mut DoctorReport,
 ) {
     let probe = net.daemon(relays, pubkey).await;
-    evaluate_daemon(&probe, report);
+    evaluate_daemon(&probe, relays, report);
 }
 
 /// Pure evaluation of a daemon probe.
-pub fn evaluate_daemon(probe: &DaemonProbe, report: &mut DoctorReport) {
-    evaluate_daemon_at(probe, now_unix(), report);
+pub fn evaluate_daemon(probe: &DaemonProbe, expected_relays: &[String], report: &mut DoctorReport) {
+    evaluate_daemon_at(probe, expected_relays, now_unix(), report);
 }
 
 /// [`evaluate_daemon`] with an injectable clock.
-pub fn evaluate_daemon_at(probe: &DaemonProbe, now_unix: u64, report: &mut DoctorReport) {
+pub fn evaluate_daemon_at(
+    probe: &DaemonProbe,
+    expected_relays: &[String],
+    now_unix: u64,
+    report: &mut DoctorReport,
+) {
     evaluate_relays(probe, report);
+    evaluate_relay_list(probe, expected_relays, report);
     let Some(info) = &probe.info else {
         report.push(
             "mostro-daemon",
@@ -119,6 +126,33 @@ fn evaluate_relays(probe: &DaemonProbe, report: &mut DoctorReport) {
                 format!("unreachable via {}: {error}", relay.dialled),
             ),
         }
+    }
+}
+
+fn evaluate_relay_list(probe: &DaemonProbe, expected_relays: &[String], report: &mut DoctorReport) {
+    match &probe.relay_list {
+        Some(list) if list.advertises_any(expected_relays) => report.push(
+            "mostro-relay-list",
+            CheckStatus::Pass,
+            format!(
+                "kind-10002 advertises the Mortsom relay ({} relays)",
+                list.relays.len()
+            ),
+        ),
+        Some(list) => report.push(
+            "mostro-relay-list",
+            CheckStatus::Fail,
+            format!(
+                "kind-10002 lists {:?} but none of {:?}",
+                list.relays, expected_relays
+            ),
+        ),
+        None if probe.relays.iter().any(|r| r.error.is_none()) => report.push(
+            "mostro-relay-list",
+            CheckStatus::Fail,
+            "no kind-10002 relay list from the daemon on the reachable relays",
+        ),
+        None => report.push("mostro-relay-list", CheckStatus::Skip, "no reachable relay"),
     }
 }
 

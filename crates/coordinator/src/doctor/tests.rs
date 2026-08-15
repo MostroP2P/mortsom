@@ -6,13 +6,15 @@ use std::sync::Mutex;
 
 use async_trait::async_trait;
 use mortsom_common::Secret;
-use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, RelayProbe};
+use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, RelayList, RelayProbe};
 use mortsom_environment::wallet::{WalletProbe, WalletProbeError};
 use nostr_sdk::prelude::PublicKey;
 
 use super::*;
 
-const HEX: &str = "dbe0b1be7aafd3cfba92d7463edbd4e33b2969f61bd554d37ac56f032e13355a";
+/// Daemon test identity: nsec and its hex pubkey.
+const NSEC: &str = "nsec13as48eum93hkg7plv526r9gjpa0uc52zysqm93pmnkca9e69x6tsdjmdxd";
+const HEX: &str = "8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51";
 const ALICE: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=71a8c14c1407c113601079c4302dab36460f0ccd0ad506f1f2dc73b5100e4f3c";
 const BOB: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=0000000000000000000000000000000000000000000000000000000000000001";
 
@@ -148,6 +150,10 @@ impl FakeNet {
                     .map(|(k, v)| (k.to_owned(), v.to_owned()))
                     .collect(),
                 }),
+                relay_list: Some(RelayList {
+                    created_at: 1,
+                    relays: vec!["ws://host.docker.internal:7000".into()],
+                }),
             },
             wallets_ok: true,
         }
@@ -192,6 +198,22 @@ fn example_config() -> tempfile::TempDir {
     dir
 }
 
+/// Writes a healthy daemon settings file into `dir` and points the fake
+/// host's env and filesystem at it.
+fn with_settings(host: &mut FakeHost, dir: &tempfile::TempDir) {
+    let path = dir.path().join("settings.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "[nostr]\nnsec_privkey = '{NSEC}'\nrelays = ['ws://host.docker.internal:7000']\n[mostro]\nexpiration_seconds = 900\nexpiration_hours = 24\n[lightning]\nhold_invoice_expiration_window = 300\ninvoice_expiration_window = 3600\n"
+        ),
+    )
+    .unwrap();
+    let text = path.to_string_lossy().into_owned();
+    host.env.insert("MORTSOM_MOSTRO_SETTINGS_FILE".into(), text);
+    host.existing.insert(path);
+}
+
 fn status_of<'a>(report: &'a DoctorReport, name: &str) -> &'a CheckResult {
     report
         .checks
@@ -203,7 +225,8 @@ fn status_of<'a>(report: &'a DoctorReport, name: &str) -> &'a CheckResult {
 #[tokio::test]
 async fn healthy_host_and_network_produce_a_healthy_report() {
     let dir = example_config();
-    let host = FakeHost::full();
+    let mut host = FakeHost::full();
+    with_settings(&mut host, &dir);
 
     let report = run_doctor(
         &dir.path().join("mortsom.toml"),
@@ -227,8 +250,13 @@ async fn healthy_host_and_network_produce_a_healthy_report() {
         "java",
         "flutter",
         "mobile-app",
+        "daemon-settings",
+        "daemon-pubkey",
+        "daemon-relays",
+        "daemon-transport",
         "relay-port",
         "mostro-daemon",
+        "mostro-relay-list",
         "mostro-protocol",
         "mostro-lightning",
         "wallet alice",
@@ -283,6 +311,42 @@ async fn every_missing_secret_and_tool_is_reported() {
     assert_eq!(
         status_of(&report, "mostro-daemon").status,
         CheckStatus::Skip
+    );
+}
+
+#[tokio::test]
+async fn missing_settings_file_and_wrong_identity_are_reported() {
+    let dir = example_config();
+    let host = FakeHost::full();
+    // /tmp/settings.toml "exists" for the fake host but cannot be read.
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions { no_network: true },
+        &host,
+        &FakeNet::healthy(),
+    )
+    .await;
+    assert_eq!(
+        status_of(&report, "daemon-settings").status,
+        CheckStatus::Fail
+    );
+
+    let mut host = FakeHost::full();
+    with_settings(&mut host, &dir);
+    host.env.insert(
+        "MORTSOM_MOSTRO_PUBKEY".into(),
+        "b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4".into(),
+    );
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions { no_network: true },
+        &host,
+        &FakeNet::healthy(),
+    )
+    .await;
+    assert_eq!(
+        status_of(&report, "daemon-pubkey").status,
+        CheckStatus::Fail
     );
 }
 
@@ -368,6 +432,30 @@ async fn protocol_v1_and_missing_lightning_fail() {
     );
     assert_eq!(
         status_of(&report, "mostro-lightning").status,
+        CheckStatus::Fail
+    );
+}
+
+#[tokio::test]
+async fn relay_list_without_the_mortsom_relay_fails() {
+    let dir = example_config();
+    let host = FakeHost::full();
+    let mut net = FakeNet::healthy();
+    net.daemon.relay_list = Some(RelayList {
+        created_at: 1,
+        relays: vec!["wss://relay.mostro.network".into()],
+    });
+
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions::default(),
+        &host,
+        &net,
+    )
+    .await;
+
+    assert_eq!(
+        status_of(&report, "mostro-relay-list").status,
         CheckStatus::Fail
     );
 }

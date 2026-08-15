@@ -94,7 +94,9 @@ pub struct MostroConfig {
     /// Maximum time to wait for the daemon's readiness evidence.
     #[serde(default = "default_health_timeout")]
     pub health_timeout_secs: u64,
-    /// Relay URLs the daemon is expected to use, as seen from the host.
+    /// Relay URLs the daemon is configured with, in the daemon's own view
+    /// (e.g. `ws://host.docker.internal:7000` for a containerized daemon).
+    /// Mortsom translates host aliases when it dials or compares them.
     pub relays: Vec<String>,
 }
 

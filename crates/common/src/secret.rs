@@ -3,6 +3,7 @@
 use std::fmt;
 
 use serde::{Deserialize, Serialize, Serializer};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Placeholder written wherever a secret would otherwise appear.
 pub const REDACTED: &str = "<redacted>";
@@ -12,7 +13,8 @@ pub const REDACTED: &str = "<redacted>";
 /// Deserializes transparently from a plain string, but `Debug`, `Display`
 /// and `Serialize` always emit [`REDACTED`]. The only way to read the value
 /// is [`Secret::expose`], which keeps every intentional exposure greppable.
-#[derive(Clone, PartialEq, Eq, Deserialize)]
+/// The buffer is zeroized on drop.
+#[derive(Clone, PartialEq, Eq, Deserialize, Zeroize, ZeroizeOnDrop)]
 #[serde(transparent)]
 pub struct Secret(String);
 
