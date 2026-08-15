@@ -1,0 +1,472 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use async_trait::async_trait;
+use mortsom_common::Secret;
+use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, RelayProbe};
+use mortsom_environment::wallet::{WalletProbe, WalletProbeError};
+use nostr_sdk::prelude::PublicKey;
+
+use super::*;
+
+const HEX: &str = "dbe0b1be7aafd3cfba92d7463edbd4e33b2969f61bd554d37ac56f032e13355a";
+const ALICE: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=71a8c14c1407c113601079c4302dab36460f0ccd0ad506f1f2dc73b5100e4f3c";
+const BOB: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=0000000000000000000000000000000000000000000000000000000000000001";
+
+/// Scripted host: which/env/exists lookups and canned command outputs.
+#[derive(Default)]
+struct FakeHost {
+    env: BTreeMap<String, String>,
+    tools: BTreeMap<String, PathBuf>,
+    existing: BTreeSet<PathBuf>,
+    outputs: BTreeMap<String, CommandOutput>,
+    invocations: Mutex<Vec<String>>,
+}
+
+impl FakeHost {
+    fn full() -> Self {
+        let mut host = Self::default();
+        host.env.insert("ANDROID_HOME".into(), "/sdk".into());
+        host.env.insert("MORTSOM_MOSTRO_PUBKEY".into(), HEX.into());
+        host.env.insert(
+            "MORTSOM_MOSTRO_SETTINGS_FILE".into(),
+            "/tmp/settings.toml".into(),
+        );
+        host.env.insert("MORTSOM_ALICE_NWC".into(), ALICE.into());
+        host.env.insert("MORTSOM_BOB_NWC".into(), BOB.into());
+        for tool in ["docker", "appium", "java", "flutter"] {
+            host.tools
+                .insert(tool.into(), PathBuf::from(format!("/bin/{tool}")));
+        }
+        for path in [
+            "/sdk",
+            "/sdk/emulator/emulator",
+            "/sdk/platform-tools/adb",
+            "/sdk/cmdline-tools/latest/bin/avdmanager",
+            "/sdk/system-images/android-35/google_apis/x86_64",
+            "../mobile/pubspec.yaml",
+        ] {
+            host.existing.insert(PathBuf::from(path));
+        }
+        host.outputs
+            .insert("docker info --format".into(), ok("29.7.2\n"));
+        host.outputs
+            .insert("appium --version".into(), ok("2.11.0\n"));
+        host.outputs.insert(
+            "appium driver list".into(),
+            ok("{\"uiautomator2\":{\"version\":\"3.0.0\"}}"),
+        );
+        host.outputs.insert(
+            "java -version".into(),
+            CommandOutput {
+                success: true,
+                stdout: String::new(),
+                stderr: "openjdk version \"17.0.19\"\n".into(),
+            },
+        );
+        host.outputs.insert(
+            "flutter --version".into(),
+            ok("Flutter 3.41.9 • channel stable\n"),
+        );
+        host
+    }
+}
+
+fn ok(stdout: &str) -> CommandOutput {
+    CommandOutput {
+        success: true,
+        stdout: stdout.into(),
+        stderr: String::new(),
+    }
+}
+
+#[async_trait]
+impl HostProbe for FakeHost {
+    fn env(&self, name: &str) -> Option<String> {
+        self.env.get(name).cloned()
+    }
+    fn which(&self, program: &str) -> Option<PathBuf> {
+        self.tools.get(program).cloned()
+    }
+    fn exists(&self, path: &Path) -> bool {
+        self.existing.contains(path)
+    }
+    async fn run(&self, program: &Path, args: &[&str]) -> Result<CommandOutput, String> {
+        let name = program.file_name().unwrap().to_string_lossy().into_owned();
+        // Key by program plus the first two bare-word arguments, so
+        // `docker info --format ...` keys as `docker info` and
+        // `appium --version` keys as `appium --version`.
+        let words: Vec<&str> = args
+            .iter()
+            .copied()
+            .filter(|a| a.chars().all(|c| c.is_ascii_alphabetic() || c == '-'))
+            .take(2)
+            .collect();
+        let key = format!("{name} {}", words.join(" ")).trim().to_owned();
+        self.invocations.lock().unwrap().push(key.clone());
+        self.outputs
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| format!("no scripted output for `{key}`"))
+    }
+}
+
+/// Scripted network.
+struct FakeNet {
+    port: PortState,
+    daemon: DaemonProbe,
+    wallets_ok: bool,
+}
+
+impl FakeNet {
+    fn healthy() -> Self {
+        Self {
+            port: PortState::Free,
+            daemon: DaemonProbe {
+                relays: vec![RelayProbe {
+                    configured: "ws://host.docker.internal:7000".into(),
+                    dialled: "ws://127.0.0.1:7000".into(),
+                    error: None,
+                }],
+                info: Some(DaemonInfo {
+                    pubkey: HEX.into(),
+                    created_at: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_secs(),
+                    tags: [
+                        ("mostro_version", "0.18.4"),
+                        ("protocol_version", "2"),
+                        ("lnd_node_pubkey", "02abc"),
+                        ("lnd_version", "0.19"),
+                        ("lnd_node_alias", "test"),
+                    ]
+                    .into_iter()
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect(),
+                }),
+            },
+            wallets_ok: true,
+        }
+    }
+}
+
+#[async_trait]
+impl NetProbes for FakeNet {
+    async fn local_port(&self, _port: u16) -> PortState {
+        self.port
+    }
+    async fn daemon(&self, _relays: &[String], _pubkey: PublicKey) -> DaemonProbe {
+        self.daemon.clone()
+    }
+    async fn wallet(&self, label: &str, _uri: &Secret) -> Result<WalletProbe, WalletProbeError> {
+        if self.wallets_ok {
+            Ok(WalletProbe {
+                label: label.into(),
+                alias: Some("testwallet".into()),
+                network: Some("mainnet".into()),
+                methods: vec!["pay_invoice".into(), "get_balance".into()],
+                balance_sats: 12_345,
+            })
+        } else {
+            Err(WalletProbeError::Timeout {
+                label: label.into(),
+                operation: "get_info",
+                timeout: std::time::Duration::from_secs(1),
+            })
+        }
+    }
+}
+
+fn example_config() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../mortsom.toml.example"
+    ))
+    .unwrap();
+    std::fs::write(dir.path().join("mortsom.toml"), text).unwrap();
+    dir
+}
+
+fn status_of<'a>(report: &'a DoctorReport, name: &str) -> &'a CheckResult {
+    report
+        .checks
+        .iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("missing check {name}: {:#?}", report.checks))
+}
+
+#[tokio::test]
+async fn healthy_host_and_network_produce_a_healthy_report() {
+    let dir = example_config();
+    let host = FakeHost::full();
+
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions::default(),
+        &host,
+        &FakeNet::healthy(),
+    )
+    .await;
+
+    assert!(report.is_healthy(), "{}", report.render());
+    for name in [
+        "config",
+        "docker",
+        "android-sdk",
+        "emulator",
+        "adb",
+        "avdmanager",
+        "system-image",
+        "appium",
+        "uiautomator2",
+        "java",
+        "flutter",
+        "mobile-app",
+        "relay-port",
+        "mostro-daemon",
+        "mostro-protocol",
+        "mostro-lightning",
+        "wallet alice",
+        "wallet bob",
+    ] {
+        assert_eq!(status_of(&report, name).status, CheckStatus::Pass, "{name}");
+    }
+    let text = report.render();
+    assert!(!text.contains("secret="), "report leaked an NWC secret");
+    assert!(text.contains("healthy"));
+}
+
+#[tokio::test]
+async fn every_missing_secret_and_tool_is_reported() {
+    let dir = example_config();
+    let host = FakeHost::default();
+
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions::default(),
+        &host,
+        &FakeNet::healthy(),
+    )
+    .await;
+
+    assert!(!report.is_healthy());
+    for var in [
+        "MORTSOM_ALICE_NWC",
+        "MORTSOM_BOB_NWC",
+        "MORTSOM_MOSTRO_PUBKEY",
+        "MORTSOM_MOSTRO_SETTINGS_FILE",
+    ] {
+        assert_eq!(
+            status_of(&report, &format!("env {var}")).status,
+            CheckStatus::Fail
+        );
+    }
+    for tool in [
+        "docker",
+        "android-sdk",
+        "emulator",
+        "adb",
+        "avdmanager",
+        "appium",
+        "java",
+        "flutter",
+    ] {
+        assert_eq!(status_of(&report, tool).status, CheckStatus::Fail, "{tool}");
+    }
+    assert_eq!(status_of(&report, "system-image").status, CheckStatus::Skip);
+    assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Skip);
+    assert_eq!(
+        status_of(&report, "mostro-daemon").status,
+        CheckStatus::Skip
+    );
+}
+
+#[tokio::test]
+async fn no_network_skips_every_network_check() {
+    let dir = example_config();
+    let host = FakeHost::full();
+
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions { no_network: true },
+        &host,
+        &FakeNet::healthy(),
+    )
+    .await;
+
+    assert_eq!(status_of(&report, "network").status, CheckStatus::Skip);
+    assert!(report.checks.iter().all(|c| !c.name.starts_with("wallet")));
+    assert!(
+        host.invocations
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|i| i.starts_with("docker"))
+    );
+}
+
+#[tokio::test]
+async fn daemon_and_wallet_failures_are_explicit() {
+    let dir = example_config();
+    let host = FakeHost::full();
+    let mut net = FakeNet::healthy();
+    net.port = PortState::InUse;
+    net.wallets_ok = false;
+    net.daemon.relays[0].error = Some("connection refused".into());
+    net.daemon.info = None;
+
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions::default(),
+        &host,
+        &net,
+    )
+    .await;
+
+    assert_eq!(status_of(&report, "relay-port").status, CheckStatus::Warn);
+    assert_eq!(
+        status_of(&report, "relay ws://host.docker.internal:7000").status,
+        CheckStatus::Fail
+    );
+    assert_eq!(
+        status_of(&report, "mostro-daemon").status,
+        CheckStatus::Fail
+    );
+    assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Fail);
+    assert!(
+        status_of(&report, "wallet alice")
+            .detail
+            .contains("timed out")
+    );
+}
+
+#[tokio::test]
+async fn protocol_v1_and_missing_lightning_fail() {
+    let dir = example_config();
+    let host = FakeHost::full();
+    let mut net = FakeNet::healthy();
+    let info = net.daemon.info.as_mut().unwrap();
+    info.tags.insert("protocol_version".into(), "1".into());
+    info.tags.remove("lnd_node_pubkey");
+
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions::default(),
+        &host,
+        &net,
+    )
+    .await;
+
+    assert_eq!(
+        status_of(&report, "mostro-protocol").status,
+        CheckStatus::Fail
+    );
+    assert_eq!(
+        status_of(&report, "mostro-lightning").status,
+        CheckStatus::Fail
+    );
+}
+
+#[tokio::test]
+async fn stale_info_event_warns() {
+    let dir = example_config();
+    let host = FakeHost::full();
+    let mut net = FakeNet::healthy();
+    net.daemon.info.as_mut().unwrap().created_at = 1;
+
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions::default(),
+        &host,
+        &net,
+    )
+    .await;
+
+    assert_eq!(
+        status_of(&report, "mostro-daemon").status,
+        CheckStatus::Warn
+    );
+    assert!(
+        status_of(&report, "mostro-daemon")
+            .detail
+            .contains("older than")
+    );
+}
+
+#[tokio::test]
+async fn prebuilt_apk_skips_flutter_and_checks_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let text = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../mortsom.toml.example"
+    ))
+    .unwrap()
+    .replace("apk_path = \"\"", "apk_path = \"/tmp/app.apk\"");
+    std::fs::write(dir.path().join("mortsom.toml"), text).unwrap();
+    let mut host = FakeHost::full();
+    host.tools.remove("flutter");
+
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions { no_network: true },
+        &host,
+        &FakeNet::healthy(),
+    )
+    .await;
+
+    assert_eq!(status_of(&report, "flutter").status, CheckStatus::Skip);
+    assert_eq!(status_of(&report, "mobile-app").status, CheckStatus::Fail);
+}
+
+#[tokio::test]
+async fn missing_config_file_fails_config_and_skips_network() {
+    let host = FakeHost::full();
+
+    let report = run_doctor(
+        Path::new("/nonexistent/mortsom.toml"),
+        &DoctorOptions::default(),
+        &host,
+        &FakeNet::healthy(),
+    )
+    .await;
+
+    assert_eq!(status_of(&report, "config").status, CheckStatus::Fail);
+    assert_eq!(status_of(&report, "network").status, CheckStatus::Skip);
+    assert_eq!(status_of(&report, "system-image").status, CheckStatus::Skip);
+}
+
+#[tokio::test]
+async fn docker_daemon_down_and_missing_driver_are_reported() {
+    let dir = example_config();
+    let mut host = FakeHost::full();
+    host.outputs.insert(
+        "docker info --format".into(),
+        CommandOutput {
+            success: false,
+            stdout: String::new(),
+            stderr: "Cannot connect to the Docker daemon\n".into(),
+        },
+    );
+    host.outputs.insert("appium driver list".into(), ok("{}"));
+
+    let report = run_doctor(
+        &dir.path().join("mortsom.toml"),
+        &DoctorOptions { no_network: true },
+        &host,
+        &FakeNet::healthy(),
+    )
+    .await;
+
+    assert_eq!(status_of(&report, "docker").status, CheckStatus::Fail);
+    assert!(
+        status_of(&report, "docker")
+            .detail
+            .contains("Cannot connect")
+    );
+    assert_eq!(status_of(&report, "uiautomator2").status, CheckStatus::Fail);
+}

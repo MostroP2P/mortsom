@@ -1,5 +1,12 @@
 //! `mortsom` command-line entry point.
 
-fn main() {
-    println!("mortsom {}", env!("CARGO_PKG_VERSION"));
+use std::process::ExitCode;
+
+use clap::Parser;
+use mortsom_coordinator::cli::{Cli, run};
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    let cli = Cli::parse();
+    run(cli).await
 }
