@@ -6,6 +6,7 @@ use mortsom_android_driver::process::tests_support::FakeRunner;
 use mortsom_android_driver::ui::{UiServer, UiSession};
 
 use super::*;
+use crate::artifacts::files;
 
 fn fast() -> DeviceSmokeOptions {
     DeviceSmokeOptions {
@@ -155,6 +156,9 @@ impl UiSession for FakeSession {
     }
     async fn is_enabled(&self, _: &str) -> Result<bool, AppiumError> {
         Ok(true)
+    }
+    async fn label_of(&self, _: &str) -> Result<String, AppiumError> {
+        Ok(String::new())
     }
     async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
         if self.0.fail_capture {

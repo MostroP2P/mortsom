@@ -13,6 +13,10 @@ use mortsom_environment::relay::NostrProbe;
 use mortsom_android_driver::process::TokioRunner;
 use mortsom_android_driver::ui::AppiumDriver;
 
+use mortsom_adapter_mobile_legacy::MobileLegacyAdapter;
+use mortsom_environment::relay::RelayHandle;
+
+use crate::app_setup::{AppSetupOptions, SetupDeps, run_app_setup};
 use crate::config::Config;
 use crate::device_smoke::{DeviceSmokeOptions, run_device_smoke};
 use crate::doctor::{DoctorOptions, HostProbe, RealHost, RealNet, run_doctor};
@@ -36,6 +40,12 @@ pub struct Cli {
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Application-level operations through the UI.
+    App {
+        /// App subcommand.
+        #[command(subcommand)]
+        command: AppCommand,
+    },
     /// Emulator farm operations.
     Device {
         /// Device subcommand.
@@ -58,6 +68,15 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// App subcommands.
+#[derive(Debug, Subcommand)]
+pub enum AppCommand {
+    /// Start the relay and two devices, onboard both apps through the UI,
+    /// configure the daemon, relay and NWC wallets, prove identities differ
+    /// and survive a restart, then tear everything down. Moves no value.
+    Setup,
 }
 
 /// Device subcommands.
@@ -96,6 +115,7 @@ pub async fn run(cli: Cli) -> ExitCode {
     // redacted `run.log` once the run id exists (`attach_run_log`).
     let _sink = init_logging();
     match cli.command {
+        Command::App { command } => run_app(&cli.config, command).await,
         Command::Device { command } => run_device(&cli.config, command).await,
         Command::Relay { command } => run_relay(&cli.config, command).await,
         Command::Doctor { no_network, json } => {
@@ -218,6 +238,62 @@ async fn run_device(config_path: &std::path::Path, command: DeviceCommand) -> Ex
             )
             .await
             {
+                Ok(summary) => {
+                    print!("{}", summary.checks.render());
+                    println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);
+                    if summary.passed {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+    }
+}
+
+async fn run_app(config_path: &std::path::Path, command: AppCommand) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    match command {
+        AppCommand::Setup => {
+            let (Some(appium), Some(flutter)) =
+                (RealHost.which("appium"), RealHost.which("flutter"))
+            else {
+                eprintln!("appium and flutter must be on PATH; run `mortsom doctor`");
+                return ExitCode::from(2);
+            };
+            let ui = AppiumDriver::new(appium);
+            let docker = DockerCli::default();
+            // The build seeds the relay URL for the configured base port; a
+            // run whose relay lands on another port adds it through the UI.
+            let seed = RelayHandle {
+                container_name: String::new(),
+                host_port: config.relay.host_port,
+                data_dir: std::path::PathBuf::new(),
+                image: String::new(),
+            }
+            .emulator_url();
+            let adapter = MobileLegacyAdapter::new(config.mobile.package.clone(), flutter, seed);
+            let env = |name: &str| std::env::var(name).ok();
+            let deps = SetupDeps {
+                runner: &TokioRunner,
+                ui: &ui,
+                docker: &docker,
+                probe: &NostrProbe,
+                adapter: &adapter,
+                env: &env,
+            };
+            match run_app_setup(&config, &AppSetupOptions::default(), &deps).await {
                 Ok(summary) => {
                     print!("{}", summary.checks.render());
                     println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);

@@ -135,9 +135,10 @@ impl Adb {
         Ok(())
     }
 
-    /// Sets the device time zone (persisted property, applied on next read).
+    /// Sets the device time zone through the alarm service (`cmd alarm
+    /// set-timezone`), which works without root on API 30+ emulators.
     pub async fn set_timezone(&self, runner: &dyn CommandRunner, tz: &str) -> Result<(), AdbError> {
-        self.shell(runner, &["setprop", "persist.sys.timezone", tz])
+        self.shell(runner, &["cmd", "alarm", "set-timezone", tz])
             .await?;
         Ok(())
     }

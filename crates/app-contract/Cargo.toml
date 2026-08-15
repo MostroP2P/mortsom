@@ -13,9 +13,12 @@ serde = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 nostr = { workspace = true }
+mortsom-android-driver = { workspace = true }
+tokio = { workspace = true }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
 toml = { workspace = true }
+serde_json = { workspace = true }

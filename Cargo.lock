@@ -1474,6 +1474,7 @@ dependencies = [
  "mortsom-app-contract",
  "mortsom-common",
  "serde",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -1516,10 +1517,13 @@ name = "mortsom-app-contract"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "mortsom-android-driver",
  "mortsom-common",
  "nostr",
  "serde",
+ "serde_json",
  "thiserror 2.0.20",
+ "tokio",
  "toml 1.1.4+spec-1.1.0",
 ]
 

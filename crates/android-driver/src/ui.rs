@@ -27,6 +27,8 @@ pub trait UiSession: Send + Sync {
     async fn text_of(&self, accessibility_id: &str) -> Result<String, AppiumError>;
     /// Whether an element is enabled.
     async fn is_enabled(&self, accessibility_id: &str) -> Result<bool, AppiumError>;
+    /// Accessibility label (state readout) of an element.
+    async fn label_of(&self, accessibility_id: &str) -> Result<String, AppiumError>;
     /// PNG screenshot.
     async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError>;
     /// Accessibility hierarchy XML.
@@ -65,6 +67,9 @@ impl UiSession for AppiumSession {
     }
     async fn is_enabled(&self, id: &str) -> Result<bool, AppiumError> {
         AppiumSession::is_enabled(self, id).await
+    }
+    async fn label_of(&self, id: &str) -> Result<String, AppiumError> {
+        AppiumSession::label_of(self, id).await
     }
     async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
         AppiumSession::screenshot_png(self).await

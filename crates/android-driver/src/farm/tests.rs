@@ -78,6 +78,9 @@ impl UiSession for FakeSession {
     async fn is_enabled(&self, _: &str) -> Result<bool, AppiumError> {
         Ok(true)
     }
+    async fn label_of(&self, _: &str) -> Result<String, AppiumError> {
+        Ok(String::new())
+    }
     async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
         Ok(vec![1])
     }

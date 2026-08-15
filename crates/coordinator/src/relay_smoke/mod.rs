@@ -24,6 +24,7 @@ use tracing::{error, info};
 
 use crate::artifacts::{RunArtifacts, files};
 use crate::config::Config;
+use crate::report::{RunReport, write_report};
 
 /// Relay-side evidence source; the real one wraps [`RelayObserver`].
 #[async_trait]
@@ -219,9 +220,6 @@ async fn teardown_and_record(
     if let Err(e) = artifacts.write_text("relay-container.log", &logs) {
         error!(error = %e, "cannot write relay log");
     }
-    if let Err(e) = artifacts.write_json(files::CLEANUP, &teardown) {
-        error!(error = %e, "cannot write cleanup.json");
-    }
     let status = if teardown.removed {
         CheckStatus::Pass
     } else {
@@ -390,38 +388,15 @@ fn finish(artifacts: &RunArtifacts, summary: &mut SmokeSummary) -> Result<(), St
             "image": r.image,
         })),
     });
-    artifacts
-        .write_json(files::ENVIRONMENT, &environment)
-        .map_err(|e| format!("cannot write environment.json: {e}"))?;
-    artifacts
-        .write_json(files::SUMMARY, summary)
-        .map_err(|e| format!("cannot write summary.json: {e}"))?;
-    artifacts
-        .write_text(files::TIMELINE, &render_timeline(summary))
-        .map_err(|e| format!("cannot write timeline.md: {e}"))?;
-    info!(run = %summary.run_id, passed = summary.passed, "relay smoke finished");
-    Ok(())
-}
-
-fn render_timeline(summary: &SmokeSummary) -> String {
-    let mut out = format!(
-        "# Relay smoke {} (lane {})\n\n| step | status | detail |\n|---|---|---|\n",
-        summary.run_id, summary.lane
-    );
-    for check in &summary.checks.checks {
-        out.push_str(&format!(
-            "| {} | {} | {} |\n",
-            check.name,
-            check.status,
-            check.detail.replace('|', "\\|")
-        ));
-    }
-    out.push_str(&format!(
-        "\nrelay events recorded: {}\nresult: {}\n",
-        summary.relay_events,
-        if summary.passed { "PASS" } else { "FAIL" }
-    ));
-    out
+    let report = RunReport {
+        run_id: &summary.run_id,
+        lane: summary.lane,
+        command: &summary.command,
+        app_profile: None,
+        checks: &summary.checks,
+        passed: summary.passed,
+    };
+    write_report(artifacts, &report, summary, &environment, &summary.teardown)
 }
 
 #[cfg(test)]

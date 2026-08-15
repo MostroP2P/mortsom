@@ -219,11 +219,18 @@ impl Emulator {
 
     /// Disables animations, pins locale and time zone, and unlocks the
     /// screen. Network host mapping needs no configuration: the emulator
-    /// reaches host services on `10.0.2.2`.
+    /// reaches host services on `10.0.2.2`. Locale and time zone are
+    /// best-effort: system images differ in what unprivileged adb may set,
+    /// and neither changes what a scenario asserts, so a refusal is logged
+    /// rather than failing the boot.
     async fn configure(&self, runner: &dyn CommandRunner) -> Result<(), EmulatorError> {
         self.adb.disable_animations(runner).await?;
-        self.adb.set_locale(runner, DEVICE_LOCALE).await?;
-        self.adb.set_timezone(runner, DEVICE_TIMEZONE).await?;
+        if let Err(e) = self.adb.set_locale(runner, DEVICE_LOCALE).await {
+            warn!(serial = %self.slot.serial, error = %e, "cannot set locale; continuing");
+        }
+        if let Err(e) = self.adb.set_timezone(runner, DEVICE_TIMEZONE).await {
+            warn!(serial = %self.slot.serial, error = %e, "cannot set time zone; continuing");
+        }
         self.adb.unlock(runner).await?;
         Ok(())
     }
@@ -455,7 +462,7 @@ mod tests {
         assert!(
             calls
                 .iter()
-                .any(|c| c.contains("setprop persist.sys.timezone UTC"))
+                .any(|c| c.contains("cmd alarm set-timezone UTC"))
         );
         assert!(calls.iter().any(|c| c.contains("wm dismiss-keyguard")));
         assert!(calls.iter().any(|c| c.contains("emu kill")));
@@ -507,6 +514,36 @@ mod tests {
             .collect();
         assert_eq!(kills, vec!["adb -s emulator-5554 emu kill".to_owned()]);
         assert_ne!(alice.log_path(), bob.log_path());
+    }
+
+    #[tokio::test]
+    async fn locale_and_timezone_refusals_do_not_fail_boot() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = FakeRunner::default();
+        script_booted(&runner, "emulator-5554");
+        runner.script_failure(
+            "adb -s emulator-5554 shell cmd alarm set-timezone",
+            "denied",
+        );
+        runner.script_failure(
+            "adb -s emulator-5554 shell settings put system system_locales",
+            "denied",
+        );
+        let slot = DeviceSlot::for_actor(&config(), Actor::Alice);
+
+        let emulator = Emulator::boot(
+            &runner,
+            &AndroidSdk::at("/sdk"),
+            slot,
+            3072,
+            &LaunchOptions::default(),
+            dir.path(),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+
+        assert!(emulator.is_alive().await);
     }
 
     #[tokio::test]

@@ -1,7 +1,11 @@
 //! Appium server lifecycle and UiAutomator2 session primitives (spec Phase
-//! 2.4): find by accessibility id, tap, type, wait, screenshot, hierarchy
+//! 2.4): find by semantic identifier, tap, type, wait, screenshot, hierarchy
 //! dump, background, force-stop, relaunch and clear-data. Every wait is a
 //! bounded predicate; there are no fixed sleeps in the primitives.
+//!
+//! Semantic identifiers (`Semantics.identifier` in Flutter) surface on
+//! Android as the accessibility `resource-id`, so lookups use a UiAutomator
+//! `resourceId(...)` selector, which matches the raw string exactly.
 
 use std::path::Path;
 use std::time::Duration;
@@ -19,6 +23,9 @@ pub const POLL_INTERVAL: Duration = Duration::from_millis(250);
 pub const SERVER_POLL: Duration = Duration::from_millis(500);
 /// Appium's own idle timeout for a session, in seconds.
 pub const NEW_COMMAND_TIMEOUT_SECS: u64 = 300;
+/// Deadline Appium gives adb commands (debug Flutter builds start slowly on
+/// software-rendered emulators), in milliseconds.
+pub const ADB_EXEC_TIMEOUT_MS: u64 = 120_000;
 /// HTTP timeout for one WebDriver call.
 pub const HTTP_TIMEOUT: Duration = Duration::from_secs(60);
 /// Longest background interval a primitive accepts.
@@ -54,6 +61,12 @@ pub enum AppiumError {
         /// Deadline used.
         timeout: Duration,
     },
+}
+
+/// UiAutomator selector matching a Flutter semantic identifier exactly.
+pub fn resource_id_selector(identifier: &str) -> String {
+    let escaped = identifier.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("new UiSelector().resourceId(\"{escaped}\")")
 }
 
 /// A running Appium server owned by this run.
@@ -159,6 +172,12 @@ impl SessionSpec {
             "appium:disableWindowAnimation": true,
             "appium:newCommandTimeout": NEW_COMMAND_TIMEOUT_SECS,
             "appium:ignoreHiddenApiPolicyError": true,
+            // Sessions never launch the app implicitly: the coordinator
+            // clears data and activates it as explicit, evidenced steps.
+            "appium:autoLaunch": false,
+            "appium:adbExecTimeout": ADB_EXEC_TIMEOUT_MS,
+            "appium:uiautomator2ServerLaunchTimeout": ADB_EXEC_TIMEOUT_MS,
+            "appium:uiautomator2ServerInstallTimeout": ADB_EXEC_TIMEOUT_MS,
         });
         if let Some(activity) = &self.app_activity {
             caps["appium:appActivity"] = Value::String(activity.clone());
@@ -201,7 +220,10 @@ impl AppiumSession {
     pub async fn find(&self, accessibility_id: &str) -> Result<Element, AppiumError> {
         Ok(self
             .session
-            .find_element(Locator::AccessibilityId, accessibility_id)
+            .find_element(
+                Locator::UiAutomator,
+                &resource_id_selector(accessibility_id),
+            )
             .await?)
     }
 
@@ -209,7 +231,10 @@ impl AppiumSession {
     pub async fn exists(&self, accessibility_id: &str) -> Result<bool, AppiumError> {
         match self
             .session
-            .find_element(Locator::AccessibilityId, accessibility_id)
+            .find_element(
+                Locator::UiAutomator,
+                &resource_id_selector(accessibility_id),
+            )
             .await
         {
             Ok(_) => Ok(true),
@@ -228,7 +253,10 @@ impl AppiumSession {
         loop {
             match self
                 .session
-                .find_element(Locator::AccessibilityId, accessibility_id)
+                .find_element(
+                    Locator::UiAutomator,
+                    &resource_id_selector(accessibility_id),
+                )
                 .await
             {
                 Ok(element) => return Ok(element),
@@ -293,6 +321,13 @@ impl AppiumSession {
     pub async fn is_enabled(&self, accessibility_id: &str) -> Result<bool, AppiumError> {
         let element = self.find(accessibility_id).await?;
         Ok(self.session.is_enabled(&element).await?)
+    }
+
+    /// Accessibility label (`content-desc`) of an element: the state readout
+    /// of container identifiers such as `order.status`.
+    pub async fn label_of(&self, accessibility_id: &str) -> Result<String, AppiumError> {
+        let element = self.find(accessibility_id).await?;
+        Ok(self.session.attribute(&element, "content-desc").await?)
     }
 
     /// PNG screenshot.
@@ -363,7 +398,7 @@ impl AppiumSession {
 mod tests {
     use super::*;
     use crate::process::tests_support::FakeRunner;
-    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::matchers::{body_partial_json, body_string_contains, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const ELEMENT_KEY: &str = "element-6066-11e4-a52e-4f735466cecf";
@@ -378,6 +413,18 @@ mod tests {
     }
 
     #[test]
+    fn resource_id_selector_escapes_quotes() {
+        assert_eq!(
+            resource_id_selector("order.status"),
+            "new UiSelector().resourceId(\"order.status\")"
+        );
+        assert_eq!(
+            resource_id_selector("a\"b"),
+            "new UiSelector().resourceId(\"a\\\"b\")"
+        );
+    }
+
+    #[test]
     fn capabilities_pin_uiautomator2_and_device() {
         let caps = spec().capabilities();
         assert_eq!(caps["platformName"], "Android");
@@ -385,6 +432,8 @@ mod tests {
         assert_eq!(caps["appium:udid"], "emulator-5554");
         assert_eq!(caps["appium:systemPort"], 8200);
         assert_eq!(caps["appium:noReset"], true);
+        assert_eq!(caps["appium:autoLaunch"], false);
+        assert_eq!(caps["appium:adbExecTimeout"], ADB_EXEC_TIMEOUT_MS);
         assert!(caps.get("appium:appActivity").is_none());
         let mut with_activity = spec();
         with_activity.app_activity = Some(".MainActivity".into());
@@ -411,9 +460,8 @@ mod tests {
         let s = session(&server).await;
         Mock::given(method("POST"))
             .and(path("/session/s1/element"))
-            .and(body_partial_json(
-                json!({"using": "accessibility id", "value": "order.status"}),
-            ))
+            .and(body_string_contains("-android uiautomator"))
+            .and(body_string_contains("resourceId(\\\"order.status\\\")"))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
             )
@@ -421,7 +469,7 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/session/s1/element"))
-            .and(body_partial_json(json!({"value": "missing"})))
+            .and(body_string_contains("resourceId(\\\"missing\\\")"))
             .respond_with(
                 ResponseTemplate::new(404)
                     .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
@@ -438,6 +486,11 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/session/s1/element/e1/text"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": "Pending"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/session/s1/element/e1/attribute/content-desc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": "pending"})))
             .mount(&server)
             .await;
         for (script, args) in [
@@ -469,6 +522,7 @@ mod tests {
         s.tap("order.status").await.unwrap();
         s.type_text("order.status", "1000").await.unwrap();
         assert_eq!(s.text_of("order.status").await.unwrap(), "Pending");
+        assert_eq!(s.label_of("order.status").await.unwrap(), "pending");
         assert!(s.exists("order.status").await.unwrap());
         assert!(!s.exists("missing").await.unwrap());
         s.wait_for("order.status", Duration::from_secs(1))

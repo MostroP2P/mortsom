@@ -18,13 +18,14 @@ use mortsom_common::{Lane, Redactor, RunId};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 
-use crate::artifacts::{RunArtifacts, files};
+use crate::artifacts::RunArtifacts;
 use crate::config::Config;
+use crate::report::{RunReport, write_report};
 
 /// Step name under which the launch screen is recorded.
 pub const LAUNCH_STEP: &str = "01-launch";
 /// How long the app may take to show any UI after activation.
-pub const LAUNCH_TIMEOUT: Duration = Duration::from_secs(60);
+pub const LAUNCH_TIMEOUT: Duration = Duration::from_secs(120);
 /// Grace period for emulator shutdown.
 pub const SHUTDOWN_GRACE: Duration = Duration::from_secs(20);
 
@@ -139,26 +140,26 @@ pub async fn run_device_smoke(
         )
         .await;
     }
-    summary.teardown = farm.tear_down(runner).await;
-    let released = summary.teardown.iter().all(|i| i.ok);
+    let teardown = farm.tear_down(runner).await;
+    record_teardown(teardown, &mut summary);
+    summary.passed = summary.checks.is_healthy();
+    finish(&artifacts, &mut summary)?;
+    Ok(summary)
+}
+
+fn record_teardown(teardown: Vec<TeardownItem>, summary: &mut DeviceSmokeSummary) {
+    let released = teardown.iter().filter(|i| i.ok).count();
+    let all = teardown.iter().all(|i| i.ok);
     summary.checks.push(
         "device-teardown",
-        if released {
+        if all {
             CheckStatus::Pass
         } else {
             CheckStatus::Fail
         },
-        format!(
-            "{} resources released",
-            summary.teardown.iter().filter(|i| i.ok).count()
-        ),
+        format!("{released}/{} resources released", teardown.len()),
     );
-    if let Err(e) = artifacts.write_json(files::CLEANUP, &summary.teardown) {
-        error!(error = %e, "cannot write cleanup.json");
-    }
-    summary.passed = summary.checks.is_healthy();
-    finish(&artifacts, &mut summary)?;
-    Ok(summary)
+    summary.teardown = teardown;
 }
 
 /// Validates prerequisites that need no device and builds the farm spec.
@@ -334,33 +335,15 @@ fn finish(artifacts: &RunArtifacts, summary: &mut DeviceSmokeSummary) -> Result<
         "app_profile": summary.app_profile,
         "app_version": summary.app_version,
     });
-    artifacts
-        .write_json(files::ENVIRONMENT, &environment)
-        .map_err(|e| format!("cannot write environment.json: {e}"))?;
-    artifacts
-        .write_json(files::SUMMARY, summary)
-        .map_err(|e| format!("cannot write summary.json: {e}"))?;
-    let mut timeline = format!(
-        "# Device smoke {} (lane {}, profile {})\n\n| step | status | detail |\n|---|---|---|\n",
-        summary.run_id, summary.lane, summary.app_profile
-    );
-    for check in &summary.checks.checks {
-        timeline.push_str(&format!(
-            "| {} | {} | {} |\n",
-            check.name,
-            check.status,
-            check.detail.replace('|', "\\|")
-        ));
-    }
-    timeline.push_str(&format!(
-        "\nresult: {}\n",
-        if summary.passed { "PASS" } else { "FAIL" }
-    ));
-    artifacts
-        .write_text(files::TIMELINE, &timeline)
-        .map_err(|e| format!("cannot write timeline.md: {e}"))?;
-    info!(run = %summary.run_id, passed = summary.passed, "device smoke finished");
-    Ok(())
+    let report = RunReport {
+        run_id: &summary.run_id,
+        lane: summary.lane,
+        command: &summary.command,
+        app_profile: Some(&summary.app_profile),
+        checks: &summary.checks,
+        passed: summary.passed,
+    };
+    write_report(artifacts, &report, summary, &environment, &summary.teardown)
 }
 
 #[cfg(test)]

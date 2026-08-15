@@ -1,0 +1,116 @@
+//! The `AppAdapter` trait (spec §12.1): business capabilities rather than
+//! widget details. One implementation per application generation.
+
+use std::time::Duration;
+
+use async_trait::async_trait;
+use mortsom_android_driver::avd::Actor;
+use mortsom_android_driver::process::CommandRunner;
+use mortsom_android_driver::ui::UiSession;
+use mortsom_common::Secret;
+
+use crate::capabilities::CapabilitySet;
+use crate::error::AdapterError;
+use crate::types::{
+    Apk, AppOrderState, AppProfile, BuildContext, CancelOutcome, Identity, OrderDraft,
+    OrderReference, PaymentHandoff, TestEnvironment, VisibleOrder, WalletConnection,
+};
+
+/// A device as seen by an adapter: one actor, one UI session, one deadline
+/// for any single UI wait.
+pub struct DeviceContext<'a> {
+    /// Actor operating this device.
+    pub actor: Actor,
+    /// UI automation session.
+    pub ui: &'a dyn UiSession,
+    /// Default deadline for one UI wait.
+    pub ui_timeout: Duration,
+}
+
+/// Business capabilities of one application generation.
+#[async_trait]
+pub trait AppAdapter: Send + Sync {
+    /// The profile this adapter drives.
+    fn profile(&self) -> AppProfile;
+    /// What this profile supports.
+    fn capabilities(&self) -> CapabilitySet;
+    /// Builds the APK from source.
+    async fn build(
+        &self,
+        ctx: &BuildContext,
+        runner: &dyn CommandRunner,
+    ) -> Result<Apk, AdapterError>;
+    /// Drives first-launch onboarding with a fresh generated identity and
+    /// returns the identity as displayed.
+    async fn onboard(
+        &self,
+        device: &DeviceContext<'_>,
+        env: &TestEnvironment,
+    ) -> Result<Identity, AdapterError>;
+    /// Reads the identity currently displayed (after a restart, for example).
+    async fn displayed_identity(
+        &self,
+        device: &DeviceContext<'_>,
+    ) -> Result<Identity, AdapterError>;
+    /// Configures the custom Mostro node and the test relay through settings.
+    async fn configure_node_and_relay(
+        &self,
+        device: &DeviceContext<'_>,
+        env: &TestEnvironment,
+    ) -> Result<(), AdapterError>;
+    /// Configures NWC through the settings UI and returns the connected state.
+    async fn configure_nwc(
+        &self,
+        device: &DeviceContext<'_>,
+        label: &str,
+        uri: &Secret,
+    ) -> Result<WalletConnection, AdapterError>;
+    /// Creates a fixed-price order.
+    async fn create_order(
+        &self,
+        device: &DeviceContext<'_>,
+        draft: &OrderDraft,
+    ) -> Result<VisibleOrder, AdapterError>;
+    /// Finds an order in the book and takes it.
+    async fn find_and_take_order(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<(), AdapterError>;
+    /// Pays the hold invoice through the app's wallet path.
+    async fn pay_hold_invoice(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<PaymentHandoff, AdapterError>;
+    /// Submits the buyer invoice through the app's wallet path.
+    async fn provide_buyer_invoice(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<(), AdapterError>;
+    /// Reports fiat sent.
+    async fn confirm_fiat_sent(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<(), AdapterError>;
+    /// Releases the sats.
+    async fn release(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<(), AdapterError>;
+    /// Cancels the order if it is still open. Idempotent.
+    async fn cancel_if_open(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<CancelOutcome, AdapterError>;
+    /// Reads the order's displayed state.
+    async fn observe_order(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<AppOrderState, AdapterError>;
+}

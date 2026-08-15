@@ -128,7 +128,7 @@ async fn healthy_smoke_passes_writes_artifacts_and_tears_down() {
     let runtime = FakeRuntime::default();
     let evidence = ScriptedEvidence {
         events: vec![
-            relay_list_event("ws://host.docker.internal:47200"),
+            relay_list_event("ws://host.docker.internal:7000"),
             event(
                 NOSTR_INFO_EVENT_KIND,
                 &[&["protocol_version", "2"], &["secret", ALICE]],
