@@ -134,7 +134,9 @@ pub async fn pay_hold_invoice(
 }
 
 /// Generates and submits the buyer invoice through the connected wallet.
-/// Returns the invoice (protected) for hash correlation.
+/// Returns the invoice (protected) for hash correlation. After confirming,
+/// the app returns to the order book; the trade detail is reached again
+/// only once the daemon answers, so callers observe the order afterwards.
 pub async fn provide_buyer_invoice(
     device: &DeviceContext<'_>,
     order: &OrderReference,
@@ -144,7 +146,7 @@ pub async fn provide_buyer_invoice(
     tap(device, Ids::INVOICE_NWC_GENERATE).await?;
     let invoice = label(device, Ids::INVOICE_NWC_TEXT).await?;
     tap(device, Ids::INVOICE_NWC_CONFIRM).await?;
-    expect(device, Ids::ORDER_STATUS).await?;
+    expect(device, Ids::ORDER_ADD_FAB).await?;
     Ok((!invoice.is_empty()).then(|| Secret::new(invoice)))
 }
 
