@@ -296,6 +296,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn killing_one_spawned_process_group_leaves_the_sibling_alive() {
+        let runner = TokioRunner;
+        let alice = runner
+            .spawn(&Command::new("sh", &["-c", "sleep 30"]), None)
+            .await
+            .unwrap();
+        let bob = runner
+            .spawn(&Command::new("sh", &["-c", "sleep 30"]), None)
+            .await
+            .unwrap();
+
+        alice.kill().await.unwrap();
+
+        assert!(!alice.is_alive().await);
+        assert!(
+            bob.is_alive().await,
+            "sibling in another process group survives"
+        );
+        bob.kill().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn spawn_writes_log_and_kill_is_idempotent() {
         let dir = tempfile::tempdir().unwrap();
         let log = dir.path().join("child.log");
