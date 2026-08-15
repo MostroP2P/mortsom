@@ -2,5 +2,7 @@
 //! evidence sources.
 
 pub mod relay;
+pub mod wallet;
 
 pub use relay::{ObservedEvent, ObserverError, ObserverScope, RelayObserver};
+pub use wallet::{PaymentObservation, PaymentState, WalletObserver, WalletReader, payment_hash_of};

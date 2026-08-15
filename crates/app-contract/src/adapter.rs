@@ -83,12 +83,13 @@ pub trait AppAdapter: Send + Sync {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<PaymentHandoff, AdapterError>;
-    /// Submits the buyer invoice through the app's wallet path.
+    /// Submits the buyer invoice through the app's wallet path and returns
+    /// the invoice (protected) when the app exposed it, for hash correlation.
     async fn provide_buyer_invoice(
         &self,
         device: &DeviceContext<'_>,
         order: &OrderReference,
-    ) -> Result<(), AdapterError>;
+    ) -> Result<Option<Secret>, AdapterError>;
     /// Reports fiat sent.
     async fn confirm_fiat_sent(
         &self,

@@ -81,6 +81,35 @@ impl OrderState {
     }
 }
 
+impl OrderState {
+    /// Maps a status label to the normalized state. Wire statuses come from
+    /// mostro-core (`s` tag of kind 38383 or the app's readout of the same
+    /// value); `payment-failed` is an app-local readout (the buyer payout
+    /// failed after release), accepted so the adapter never mistakes it for
+    /// an unknown state. Intermediate statuses map to the last durable
+    /// business state they belong to: `settled-hold-invoice` (the app's
+    /// "paying sats") stays FiatSent because settlement is asserted only on
+    /// `success` (spec §8), even though the app treats it as terminal for
+    /// its own session bookkeeping.
+    pub fn from_protocol_status(status: &str) -> Option<OrderState> {
+        Some(match status.trim() {
+            "pending" => OrderState::Pending,
+            "waiting-buyer-invoice"
+            | "waiting-payment"
+            | "waiting-taker-bond"
+            | "waiting-maker-bond"
+            | "in-progress" => OrderState::Taken,
+            "active" => OrderState::Active,
+            "fiat-sent" | "settled-hold-invoice" | "payment-failed" => OrderState::FiatSent,
+            "success" | "completed-by-admin" | "settled-by-admin" => OrderState::Completed,
+            "canceled" | "cooperatively-canceled" | "canceled-by-admin" => OrderState::Cancelled,
+            "expired" => OrderState::Expired,
+            "dispute" => OrderState::Disputed,
+            _ => return None,
+        })
+    }
+}
+
 impl fmt::Display for OrderState {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
@@ -113,6 +142,39 @@ mod tests {
             );
         }
         assert!("done".parse::<OrderState>().is_err());
+    }
+
+    #[test]
+    fn protocol_statuses_map_to_durable_states() {
+        assert_eq!(
+            OrderState::from_protocol_status("pending"),
+            Some(OrderState::Pending)
+        );
+        assert_eq!(
+            OrderState::from_protocol_status("waiting-payment"),
+            Some(OrderState::Taken)
+        );
+        assert_eq!(
+            OrderState::from_protocol_status(" active "),
+            Some(OrderState::Active)
+        );
+        assert_eq!(
+            OrderState::from_protocol_status("settled-hold-invoice"),
+            Some(OrderState::FiatSent)
+        );
+        assert_eq!(
+            OrderState::from_protocol_status("success"),
+            Some(OrderState::Completed)
+        );
+        assert_eq!(
+            OrderState::from_protocol_status("cooperatively-canceled"),
+            Some(OrderState::Cancelled)
+        );
+        assert_eq!(
+            OrderState::from_protocol_status("dispute"),
+            Some(OrderState::Disputed)
+        );
+        assert_eq!(OrderState::from_protocol_status("bogus"), None);
     }
 
     #[test]

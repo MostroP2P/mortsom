@@ -4,8 +4,9 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
-use mortsom_common::{Redactor, RunId};
+use mortsom_common::{Redactor, RunId, Secret};
 use serde::Serialize;
 
 /// File names inside `artifacts/<run>/`.
@@ -33,12 +34,14 @@ pub mod files {
 /// Actor names with their own step directories.
 pub const ACTORS: &[&str] = &["alice", "bob"];
 
-/// Handle to one run's artifact directory.
+/// Handle to one run's artifact directory. Clones share the redactor, so a
+/// secret learned mid-run (an invoice the app displayed) is scrubbed from
+/// every later artifact.
 #[derive(Debug, Clone)]
 pub struct RunArtifacts {
     run_id: RunId,
     dir: PathBuf,
-    redactor: Redactor,
+    redactor: Arc<RwLock<Redactor>>,
 }
 
 impl RunArtifacts {
@@ -52,8 +55,24 @@ impl RunArtifacts {
         Ok(Self {
             run_id,
             dir,
-            redactor,
+            redactor: Arc::new(RwLock::new(redactor)),
         })
+    }
+
+    /// Registers a secret learned during the run.
+    pub fn add_secret(&self, secret: &Secret) {
+        self.redactor
+            .write()
+            .unwrap_or_else(|p| p.into_inner())
+            .add_secret(secret);
+    }
+
+    /// Redacts free text with the current secret set.
+    pub fn redact(&self, text: &str) -> String {
+        self.redactor
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .redact(text)
     }
 
     /// The run identifier.
@@ -87,7 +106,7 @@ impl RunArtifacts {
 
     /// Writes free text produced by external tools after redaction.
     pub fn write_text(&self, name: &str, text: &str) -> io::Result<()> {
-        std::fs::write(self.file(name)?, self.redactor.redact(text))
+        std::fs::write(self.file(name)?, self.redact(text))
     }
 
     /// Appends one JSON line, redacted on the value tree before escaping.
@@ -122,15 +141,13 @@ impl RunArtifacts {
         suffix: &str,
         text: &str,
     ) -> io::Result<()> {
-        std::fs::write(
-            self.step_file(actor, step, suffix)?,
-            self.redactor.redact(text),
-        )
+        std::fs::write(self.step_file(actor, step, suffix)?, self.redact(text))
     }
 
     fn redacted_value<T: Serialize>(&self, value: &T) -> io::Result<serde_json::Value> {
         let tree = serde_json::to_value(value)?;
-        Ok(redact_tree(tree, &self.redactor))
+        let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
+        Ok(redact_tree(tree, &redactor))
     }
 }
 
@@ -177,7 +194,6 @@ pub fn safe_segment(name: &str) -> io::Result<&str> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use mortsom_common::Secret;
 
     fn artifacts(dir: &Path) -> RunArtifacts {
         let redactor = Redactor::new().with_secret(&Secret::new("hunter2"));
@@ -263,6 +279,26 @@ mod tests {
             artifacts
                 .write_step_bytes("eve", "../x", "png", b"")
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn secrets_learned_mid_run_are_redacted_by_every_clone() {
+        let root = tempfile::tempdir().unwrap();
+        let artifacts = artifacts(root.path());
+        let clone = artifacts.clone();
+
+        artifacts.write_text("before.txt", "lnbc1invoice").unwrap();
+        clone.add_secret(&Secret::new("lnbc1invoice"));
+        artifacts.write_text("after.txt", "lnbc1invoice").unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(artifacts.file("before.txt").unwrap()).unwrap(),
+            "lnbc1invoice"
+        );
+        assert_eq!(
+            std::fs::read_to_string(artifacts.file("after.txt").unwrap()).unwrap(),
+            "<redacted>"
         );
     }
 

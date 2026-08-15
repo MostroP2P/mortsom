@@ -3,6 +3,7 @@
 
 pub mod nav;
 pub mod onboarding;
+pub mod orders;
 pub mod settings;
 pub mod wallet;
 

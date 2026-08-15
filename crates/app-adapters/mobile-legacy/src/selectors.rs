@@ -51,6 +51,8 @@ impl Ids {
     pub const WALLET_CONNECTION: &'static str = "wallet.connection";
     pub const WALLET_SETTINGS_CONNECT: &'static str = "wallet.settings.connect";
     pub const WALLET_SETTINGS_DISCONNECT: &'static str = "wallet.settings.disconnect";
+    pub const ORDER_BOOK_TAB_BUY: &'static str = "order.book.tab.buy";
+    pub const ORDER_BOOK_TAB_SELL: &'static str = "order.book.tab.sell";
     pub const ORDER_ADD_FAB: &'static str = "order.add.fab";
     pub const ORDER_ADD_BUY: &'static str = "order.add.buy";
     pub const ORDER_ADD_SELL: &'static str = "order.add.sell";
@@ -84,6 +86,10 @@ impl Ids {
     pub const INVOICE_TEXT: &'static str = "invoice.text";
     pub const INVOICE_SUBMIT: &'static str = "invoice.submit";
     pub const INVOICE_CANCEL: &'static str = "invoice.cancel";
+    pub const INVOICE_NWC_GENERATE: &'static str = "invoice.nwc.generate";
+    pub const INVOICE_NWC_CONFIRM: &'static str = "invoice.nwc.confirm";
+    pub const INVOICE_NWC_TEXT: &'static str = "invoice.nwc.text";
+    pub const PAY_INVOICE_TEXT: &'static str = "pay.invoice.text";
     pub const PAY_NWC: &'static str = "pay.nwc";
     pub const PAY_CANCEL: &'static str = "pay.cancel";
 

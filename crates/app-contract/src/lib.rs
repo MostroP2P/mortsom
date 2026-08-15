@@ -17,5 +17,5 @@ pub use error::AdapterError;
 pub use states::OrderState;
 pub use types::{
     Apk, AppOrderState, AppProfile, BuildContext, CancelOutcome, Identity, OrderDraft, OrderKind,
-    OrderReference, PaymentHandoff, TestEnvironment, VisibleOrder, WalletConnection,
+    OrderReference, PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };

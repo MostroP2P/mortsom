@@ -17,6 +17,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 mostro-core = { workspace = true }
 nostr-sdk = { workspace = true }
+nwc = { workspace = true }
+lightning-invoice = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
 

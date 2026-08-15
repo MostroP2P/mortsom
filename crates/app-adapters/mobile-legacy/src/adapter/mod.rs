@@ -6,13 +6,13 @@ use async_trait::async_trait;
 use mortsom_android_driver::process::CommandRunner;
 use mortsom_app_contract::{
     AdapterError, Apk, AppAdapter, AppOrderState, AppProfile, BuildContext, CancelOutcome,
-    Capability, CapabilitySet, DeviceContext, Identity, OrderDraft, OrderReference, PaymentHandoff,
-    TestEnvironment, VisibleOrder, WalletConnection,
+    Capability, CapabilitySet, DeviceContext, Identity, OrderDraft, OrderKind, OrderReference,
+    PaymentHandoff, TestEnvironment, VisibleOrder, WalletConnection,
 };
 use mortsom_common::Secret;
 
 use crate::build::build_apk;
-use crate::screens::{self, label, nav, onboarding, settings, wallet};
+use crate::screens::{self, label, nav, onboarding, orders, settings, wallet};
 use crate::selectors::Ids;
 
 /// Profile name.
@@ -148,74 +148,74 @@ impl AppAdapter for MobileLegacyAdapter {
 
     async fn create_order(
         &self,
-        _device: &DeviceContext<'_>,
-        _draft: &OrderDraft,
+        device: &DeviceContext<'_>,
+        draft: &OrderDraft,
     ) -> Result<VisibleOrder, AdapterError> {
-        Err(not_yet("create_order"))
+        orders::create(device, draft).await
     }
 
     async fn find_and_take_order(
         &self,
-        _device: &DeviceContext<'_>,
-        _order: &OrderReference,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
     ) -> Result<(), AdapterError> {
-        Err(not_yet("find_and_take_order"))
+        // The book lists offers by the maker's side; a taker looks for the
+        // opposite of what they want, so the reference carries the maker's kind.
+        orders::find_and_take(device, order, order_kind_of(order)).await
     }
 
     async fn pay_hold_invoice(
         &self,
-        _device: &DeviceContext<'_>,
-        _order: &OrderReference,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
     ) -> Result<PaymentHandoff, AdapterError> {
-        Err(not_yet("pay_hold_invoice"))
+        orders::pay_hold_invoice(device, order).await
     }
 
     async fn provide_buyer_invoice(
         &self,
-        _device: &DeviceContext<'_>,
-        _order: &OrderReference,
-    ) -> Result<(), AdapterError> {
-        Err(not_yet("provide_buyer_invoice"))
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<Option<Secret>, AdapterError> {
+        orders::provide_buyer_invoice(device, order).await
     }
 
     async fn confirm_fiat_sent(
         &self,
-        _device: &DeviceContext<'_>,
-        _order: &OrderReference,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
     ) -> Result<(), AdapterError> {
-        Err(not_yet("confirm_fiat_sent"))
+        orders::confirm_fiat_sent(device, order).await
     }
 
     async fn release(
         &self,
-        _device: &DeviceContext<'_>,
-        _order: &OrderReference,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
     ) -> Result<(), AdapterError> {
-        Err(not_yet("release"))
+        orders::release(device, order).await
     }
 
     async fn cancel_if_open(
         &self,
-        _device: &DeviceContext<'_>,
-        _order: &OrderReference,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
     ) -> Result<CancelOutcome, AdapterError> {
-        Err(not_yet("cancel_if_open"))
+        orders::cancel_if_open(device, order).await
     }
 
     async fn observe_order(
         &self,
-        _device: &DeviceContext<'_>,
-        _order: &OrderReference,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
     ) -> Result<AppOrderState, AdapterError> {
-        Err(not_yet("observe_order"))
+        orders::observe(device, order).await
     }
 }
 
-/// Order journeys arrive with the first end-to-end trade (spec Phase 4).
-fn not_yet(action: &str) -> AdapterError {
-    AdapterError::contract(format!(
-        "{action} is not implemented for {PROFILE} yet (spec Phase 4)"
-    ))
+/// The maker's side recorded on the reference (`sell` unless stated).
+fn order_kind_of(order: &OrderReference) -> OrderKind {
+    order.kind.unwrap_or(OrderKind::Sell)
 }
 
 #[cfg(test)]

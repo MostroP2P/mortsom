@@ -10,6 +10,7 @@ use mortsom_android_driver::ui::UiSession;
 use mortsom_common::Lane;
 
 use super::*;
+use mortsom_app_contract::OrderState;
 
 /// Scripted UI: elements exist when listed (dynamic changes via `on_tap`),
 /// labels answer from a map, and every action is recorded.
@@ -19,6 +20,8 @@ struct FakeUi {
     labels: Mutex<BTreeMap<String, String>>,
     calls: Mutex<Vec<String>>,
     on_tap: Mutex<BTreeMap<String, Vec<String>>>,
+    /// Elements that disappear after `id` is tapped (navigation away).
+    on_tap_hide: Mutex<BTreeMap<String, Vec<String>>>,
 }
 
 impl FakeUi {
@@ -36,6 +39,12 @@ impl FakeUi {
             .lock()
             .unwrap()
             .insert(id.into(), appear.iter().map(|s| (*s).to_owned()).collect());
+    }
+    fn on_tap_hide(&self, id: &str, hide: &[&str]) {
+        self.on_tap_hide
+            .lock()
+            .unwrap()
+            .insert(id.into(), hide.iter().map(|s| (*s).to_owned()).collect());
     }
     fn calls(&self) -> Vec<String> {
         self.calls.lock().unwrap().clone()
@@ -69,6 +78,9 @@ impl UiSession for FakeUi {
         if let Some(appear) = self.on_tap.lock().unwrap().get(id).cloned() {
             self.present.lock().unwrap().extend(appear);
         }
+        if let Some(hide) = self.on_tap_hide.lock().unwrap().get(id).cloned() {
+            self.present.lock().unwrap().retain(|p| !hide.contains(p));
+        }
         Ok(())
     }
     async fn type_text(&self, id: &str, text: &str) -> Result<(), AppiumError> {
@@ -98,7 +110,14 @@ impl UiSession for FakeUi {
         Ok(vec![])
     }
     async fn page_source(&self) -> Result<String, AppiumError> {
-        Ok(String::new())
+        // Hierarchy dump listing every present id as a resource-id.
+        Ok(self
+            .present
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|id| format!("<node resource-id=\"{id}\"/>"))
+            .collect())
     }
     async fn background(&self, _: u64) -> Result<(), AppiumError> {
         Ok(())
@@ -313,33 +332,212 @@ fn profile_and_capabilities_cover_the_happy_sell_requirements() {
 }
 
 #[tokio::test]
-async fn order_journeys_are_reported_as_pending_phase_four() {
-    let ui = FakeUi::default();
-    let order = OrderReference { id: "o".into() };
+async fn observing_an_unknown_order_is_a_contract_failure() {
+    let ui = fresh_app();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.present(&[Ids::NAV_TRADES]);
+    let err = adapter()
+        .observe_order(&device(&ui), &OrderReference::new("o"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.category,
+        mortsom_common::FailureCategory::AutomationContract
+    );
+}
+
+/// Extends the onboarded fake with a trade lifecycle: creating an order
+/// makes `trades.item.o1` appear; the detail shows a status label that the
+/// test advances by hand.
+fn app_with_orders() -> FakeUi {
+    let ui = fresh_app();
+    ui.on_tap(
+        Ids::ORDER_ADD_FAB,
+        &[Ids::ORDER_ADD_SELL, Ids::ORDER_ADD_BUY],
+    );
+    ui.on_tap(
+        Ids::ORDER_ADD_SELL,
+        &[
+            Ids::ORDER_CREATE_CURRENCY,
+            Ids::ORDER_CREATE_FIAT_AMOUNT,
+            Ids::ORDER_CREATE_PAYMENT_METHOD,
+            Ids::ORDER_CREATE_PRICE_TYPE,
+            Ids::ORDER_CREATE_SUBMIT,
+        ],
+    );
+    ui.on_tap(Ids::ORDER_CREATE_CURRENCY, &["order.create.currency.USD"]);
+    ui.on_tap(
+        Ids::ORDER_CREATE_PRICE_TYPE,
+        &[Ids::ORDER_CREATE_SATS_AMOUNT],
+    );
+    ui.on_tap(Ids::ORDER_CREATE_SUBMIT, &[Ids::ORDER_CONFIRM_HOME]);
+    ui.on_tap(
+        Ids::ORDER_CONFIRM_HOME,
+        &["trades.item.o1", Ids::NAV_TRADES, Ids::NAV_ORDER_BOOK],
+    );
+    ui.on_tap(
+        "trades.item.o1",
+        &[
+            Ids::ORDER_STATUS,
+            Ids::ORDER_ID,
+            Ids::APPBAR_BACK,
+            Ids::TRADE_CANCEL,
+            Ids::TRADE_PAY_INVOICE,
+            Ids::TRADE_ADD_INVOICE,
+            Ids::TRADE_FIAT_SENT,
+            Ids::TRADE_RELEASE,
+        ],
+    );
+    ui.on_tap(
+        Ids::TRADE_PAY_INVOICE,
+        &[Ids::PAY_INVOICE_TEXT, Ids::PAY_NWC],
+    );
+    ui.on_tap(Ids::TRADE_ADD_INVOICE, &[Ids::INVOICE_NWC_GENERATE]);
+    ui.on_tap(
+        Ids::INVOICE_NWC_GENERATE,
+        &[Ids::INVOICE_NWC_TEXT, Ids::INVOICE_NWC_CONFIRM],
+    );
+    ui.on_tap(Ids::TRADE_RELEASE, &[Ids::TRADE_RELEASE_CONFIRM]);
+    ui.on_tap(Ids::TRADE_CANCEL, &[Ids::TRADE_CANCEL_CONFIRM]);
+    ui.on_tap(Ids::ORDER_BOOK_TAB_SELL, &["order.book.item.o1"]);
+    ui.on_tap("order.book.item.o1", &[Ids::ORDER_TAKE_CONFIRM]);
+    ui.on_tap(Ids::ORDER_TAKE_CONFIRM, &[Ids::ORDER_STATUS]);
+    ui.present(&[
+        Ids::NAV_TRADES,
+        Ids::NAV_ORDER_BOOK,
+        Ids::ORDER_BOOK_TAB_SELL,
+    ]);
+    ui.label(Ids::ORDER_STATUS, "pending");
+    ui.label(Ids::ORDER_ID, "o1");
+    ui.label(Ids::PAY_INVOICE_TEXT, "lnbc1000n1secretinvoice");
+    ui.label(Ids::INVOICE_NWC_TEXT, "lnbc1000n1buyerinvoice");
+    ui
+}
+
+fn draft() -> OrderDraft {
+    OrderDraft {
+        kind: mortsom_app_contract::OrderKind::Sell,
+        amount_sats: 1000,
+        fiat_code: "USD".into(),
+        fiat_amount: 1,
+        payment_method: "cash".into(),
+    }
+}
+
+#[tokio::test]
+async fn create_order_returns_the_new_trade_id_and_state() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+
+    let order = adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+
+    assert_eq!(order.id.as_deref(), Some("o1"));
+    assert_eq!(order.state, OrderState::Pending);
+    let calls = ui.calls();
+    assert!(calls.contains(&"tap order.create.currency.USD".to_owned()));
+    assert!(calls.contains(&"type order.create.sats_amount (4 chars)".to_owned()));
+    assert!(
+        calls.contains(&"tap order.create.price_type".to_owned()),
+        "market -> fixed"
+    );
+}
+
+#[tokio::test]
+async fn trade_actions_drive_the_expected_controls_and_never_record_invoices() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    let order = OrderReference::with_kind("o1", mortsom_app_contract::OrderKind::Sell);
+    adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+
+    adapter()
+        .find_and_take_order(&device(&ui), &order)
+        .await
+        .unwrap();
+    let handoff = adapter()
+        .pay_hold_invoice(&device(&ui), &order)
+        .await
+        .unwrap();
+    let buyer = adapter()
+        .provide_buyer_invoice(&device(&ui), &order)
+        .await
+        .unwrap();
+    adapter()
+        .confirm_fiat_sent(&device(&ui), &order)
+        .await
+        .unwrap();
+    adapter().release(&device(&ui), &order).await.unwrap();
+
+    assert_eq!(handoff.kind, mortsom_app_contract::PaymentPath::Nwc);
+    assert_eq!(
+        handoff.invoice.as_ref().unwrap().expose(),
+        "lnbc1000n1secretinvoice"
+    );
+    assert_eq!(buyer.unwrap().expose(), "lnbc1000n1buyerinvoice");
+    assert!(!format!("{handoff:?}").contains("secretinvoice"));
+    let calls = ui.calls();
+    for expected in [
+        "tap order.book.tab.sell",
+        "tap order.book.item.o1",
+        "tap order.take.confirm",
+        "tap trade.payInvoice",
+        "tap pay.nwc",
+        "tap invoice.nwc.generate",
+        "tap invoice.nwc.confirm",
+        "tap trade.fiatSent",
+        "tap trade.release",
+        "tap trade.release.confirm",
+    ] {
+        assert!(calls.contains(&expected.to_owned()), "missing {expected}");
+    }
+}
+
+#[tokio::test]
+async fn cancel_if_open_is_idempotent_and_observe_maps_statuses() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    let order = OrderReference::new("o1");
+    assert_eq!(
+        adapter()
+            .cancel_if_open(&device(&ui), &order)
+            .await
+            .unwrap(),
+        CancelOutcome::NotFound
+    );
+
+    adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+    assert_eq!(
+        adapter()
+            .cancel_if_open(&device(&ui), &order)
+            .await
+            .unwrap(),
+        CancelOutcome::Cancelled
+    );
+
+    ui.label(Ids::ORDER_STATUS, "canceled");
+    assert_eq!(
+        adapter()
+            .cancel_if_open(&device(&ui), &order)
+            .await
+            .unwrap(),
+        CancelOutcome::AlreadyClosed
+    );
+    let observed = adapter().observe_order(&device(&ui), &order).await.unwrap();
+    assert_eq!(observed.state, OrderState::Cancelled);
+    assert_eq!(observed.raw_label, "canceled");
+
+    ui.label(Ids::ORDER_STATUS, "weird");
     let err = adapter()
         .observe_order(&device(&ui), &order)
         .await
         .unwrap_err();
-    assert!(err.message.contains("Phase 4"));
-}
-
-#[tokio::test]
-async fn an_app_without_an_identity_gets_one_generated_through_the_ui() {
-    let ui = fresh_app();
-    ui.label(Ids::KEYS_PUBLIC_KEY, "");
-    ui.on_tap(
-        Ids::DRAWER_ACCOUNT,
-        &[Ids::KEYS_PUBLIC_KEY, Ids::KEYS_GENERATE, Ids::APPBAR_BACK],
-    );
-    ui.on_tap(Ids::KEYS_GENERATE, &[Ids::KEYS_GENERATE_CONFIRM]);
-
-    let result = adapter().onboard(&device(&ui), &env()).await;
-
-    let calls = ui.calls();
-    assert!(calls.contains(&"tap keys.generate".to_owned()));
-    assert!(calls.contains(&"tap keys.generate.confirm".to_owned()));
-    // The fake never populates the key, which the adapter reports as a
-    // product failure rather than inventing an identity.
-    let err = result.unwrap_err();
     assert_eq!(err.category, mortsom_common::FailureCategory::Product);
 }

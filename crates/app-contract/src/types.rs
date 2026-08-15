@@ -73,7 +73,8 @@ pub enum OrderKind {
     Buy,
 }
 
-/// What to create.
+/// What to create. Only fixed-price orders are supported: `amount_sats`
+/// is always entered explicitly and market-rate orders are out of scope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderDraft {
     /// Side.
@@ -102,6 +103,27 @@ pub struct VisibleOrder {
 pub struct OrderReference {
     /// Order id.
     pub id: String,
+    /// The maker's side, when known; helps a taker find the right book tab.
+    #[serde(default)]
+    pub kind: Option<OrderKind>,
+}
+
+impl OrderReference {
+    /// Reference by id only.
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            kind: None,
+        }
+    }
+
+    /// Reference with the maker's side.
+    pub fn with_kind(id: impl Into<String>, kind: OrderKind) -> Self {
+        Self {
+            id: id.into(),
+            kind: Some(kind),
+        }
+    }
 }
 
 /// Normalized state plus the raw label the app rendered.
@@ -113,17 +135,27 @@ pub struct AppOrderState {
     pub raw_label: String,
 }
 
-/// Outcome of a payment step handed to the wallet path.
+/// Outcome of a payment step handed to the wallet path. The invoice is
+/// protected: only its payment hash is ever recorded. Callers must register
+/// the invoice with the run redactor as soon as they receive it, because
+/// the app renders it in the accessibility tree that evidence dumps
+/// capture.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PaymentHandoff {
-    /// The app paid through the connected NWC wallet automatically.
-    NwcAutomatic,
-    /// The app displayed an invoice for an external wallet; the runner
-    /// records only its payment hash, never the invoice text.
-    ExternalInvoice {
-        /// Invoice, protected because it may identify the counterpart.
-        invoice: Secret,
-    },
+pub struct PaymentHandoff {
+    /// How the payment was made.
+    pub kind: PaymentPath,
+    /// The invoice the app displayed, if it exposed one.
+    pub invoice: Option<Secret>,
+}
+
+/// Which path the app used to pay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PaymentPath {
+    /// The app paid through the connected NWC wallet.
+    Nwc,
+    /// The app handed the invoice to an external wallet.
+    ExternalWallet,
 }
 
 /// Outcome of `cancel_if_open`.
