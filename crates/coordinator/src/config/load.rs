@@ -404,4 +404,12 @@ mod lane_examples {
         assert_eq!(config.run.infra_retries, 0);
         assert!(config.run.max_run_spend_sats <= 3000);
     }
+
+    #[test]
+    fn mobile_v2_example_selects_the_v2_profile_and_package() {
+        let config = load("mobile-v2.example.toml");
+        assert_eq!(config.mobile.profile, "mobile-v2");
+        assert_eq!(config.mobile.package, "foundation.mostro.app");
+        assert_eq!(config.mobile.source_dir, "../mobilev2");
+    }
 }

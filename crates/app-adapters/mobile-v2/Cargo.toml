@@ -17,5 +17,9 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 
+[dev-dependencies]
+mortsom-android-driver = { workspace = true, features = ["testing"] }
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

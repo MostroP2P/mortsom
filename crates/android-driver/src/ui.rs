@@ -188,6 +188,8 @@ pub mod tests_support {
         on_tap: Mutex<BTreeMap<String, Vec<String>>>,
         /// Elements that disappear after `id` is tapped (navigation away).
         on_tap_hide: Mutex<BTreeMap<String, Vec<String>>>,
+        /// Label changes triggered by a tap.
+        on_tap_relabel: Mutex<BTreeMap<String, (String, String)>>,
     }
 
     impl ScriptedUi {
@@ -209,6 +211,14 @@ pub mod tests_support {
                 .unwrap()
                 .insert(id.into(), appear.iter().map(|s| (*s).to_owned()).collect());
         }
+        /// After `id` is tapped, `target`'s label becomes `value`.
+        pub fn on_tap_relabel(&self, id: &str, target: &str, value: &str) {
+            self.on_tap_relabel
+                .lock()
+                .unwrap()
+                .insert(id.into(), (target.into(), value.into()));
+        }
+
         /// Elements that disappear after `id` is tapped.
         pub fn on_tap_hide(&self, id: &str, hide: &[&str]) {
             self.on_tap_hide
@@ -252,6 +262,9 @@ pub mod tests_support {
             }
             if let Some(hide) = self.on_tap_hide.lock().unwrap().get(id).cloned() {
                 self.present.lock().unwrap().retain(|p| !hide.contains(p));
+            }
+            if let Some((target, value)) = self.on_tap_relabel.lock().unwrap().get(id).cloned() {
+                self.labels.lock().unwrap().insert(target, value);
             }
             Ok(())
         }

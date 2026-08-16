@@ -62,6 +62,14 @@ impl MobileConfig {
                 KNOWN_PROFILES.join(", ")
             ));
         }
+        // The two applications ship under different ids; the default
+        // package belongs to the classic app.
+        if self.profile == "mobile-v2" && self.package == default_package() {
+            errors.push(
+                "mobile.profile = mobile-v2 needs mobile.package set to the v2 application id (foundation.mostro.app)"
+                    .to_owned(),
+            );
+        }
         if self.source_dir.is_empty() && self.apk_path.is_empty() {
             errors.push("mobile: either source_dir or apk_path must be set".to_owned());
         }
@@ -145,6 +153,15 @@ mod tests {
                 .iter()
                 .any(|e| e.contains("mobile.profile"))
         );
+    }
+
+    #[test]
+    fn v2_profile_needs_the_v2_package() {
+        let mut config = valid();
+        config.profile = "mobile-v2".into();
+        assert!(errors_of(&config)[0].contains("foundation.mostro.app"));
+        config.package = "foundation.mostro.app".into();
+        assert!(errors_of(&config).is_empty());
     }
 
     #[test]
