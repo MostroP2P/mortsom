@@ -158,9 +158,12 @@ impl ReadinessProbe for AlwaysReady {
 
 /// UI stack that always answers; the fake adapter ignores it.
 #[derive(Clone, Default)]
-struct FakeUi;
-struct FakeServer;
-struct FakeSession;
+/// The fakes share one connectivity flag with the adapter: an app whose
+/// device has no network cannot reach its wallet, and a double that ignores
+/// that cannot exercise the scenarios which cut it.
+struct FakeUi(Arc<std::sync::atomic::AtomicBool>);
+struct FakeServer(Arc<std::sync::atomic::AtomicBool>);
+struct FakeSession(Arc<std::sync::atomic::AtomicBool>);
 #[async_trait]
 impl UiDriver for FakeUi {
     async fn start_server(
@@ -170,13 +173,13 @@ impl UiDriver for FakeUi {
         _: &Path,
         _: Duration,
     ) -> Result<Box<dyn UiServer>, AppiumError> {
-        Ok(Box::new(FakeServer))
+        Ok(Box::new(FakeServer(Arc::clone(&self.0))))
     }
 }
 #[async_trait]
 impl UiServer for FakeServer {
     async fn create_session(&self, _: &SessionSpec) -> Result<Box<dyn UiSession>, AppiumError> {
-        Ok(Box::new(FakeSession))
+        Ok(Box::new(FakeSession(Arc::clone(&self.0))))
     }
     async fn stop(&self) -> Result<(), AppiumError> {
         Ok(())
@@ -226,7 +229,8 @@ impl UiSession for FakeSession {
     async fn clear_app(&self) -> Result<(), AppiumError> {
         Ok(())
     }
-    async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
+    async fn set_connectivity(&self, enabled: bool) -> Result<(), AppiumError> {
+        self.0.store(enabled, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
     async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
@@ -239,6 +243,8 @@ impl UiSession for FakeSession {
 
 /// A fake app: order state advances with each business action.
 struct FakeAdapter {
+    /// Shared with the fake UI: false once a scenario cut connectivity.
+    online: Arc<std::sync::atomic::AtomicBool>,
     orders: Mutex<BTreeMap<String, OrderState>>,
     capabilities: CapabilitySet,
     fail_release: bool,
@@ -254,6 +260,7 @@ struct FakeAdapter {
 impl FakeAdapter {
     fn full() -> Self {
         Self {
+            online: Arc::new(std::sync::atomic::AtomicBool::new(true)),
             orders: Mutex::new(BTreeMap::new()),
             capabilities: CapabilitySet::new(Capability::ALL),
             fail_release: false,
@@ -345,6 +352,11 @@ impl AppAdapter for FakeAdapter {
         _: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<PaymentHandoff, AdapterError> {
+        if !self.online.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(AdapterError::wallet(
+                "the wallet cannot be reached while the device is offline",
+            ));
+        }
         self.set(&order.id, OrderState::Active);
         Ok(PaymentHandoff {
             kind: PaymentPath::Nwc,
@@ -506,10 +518,11 @@ impl ObserverFactory for FakeObserver {
 
 async fn run(
     world: &World,
-    adapter: Arc<dyn AppAdapter>,
+    adapter: Arc<FakeAdapter>,
     options: RunOptions,
     confirm: bool,
 ) -> Result<RunSummary, String> {
+    let ui = FakeUi(Arc::clone(&adapter.online));
     let docker = Arc::new(FakeDocker::default());
     let runner = runner();
     let env = env_for(world, confirm);
@@ -518,10 +531,10 @@ async fn run(
     };
     let deps = RunDeps {
         runner: &runner,
-        ui: &FakeUi,
+        ui: &ui,
         docker: Arc::clone(&docker) as Arc<dyn ContainerRuntime>,
         probe: Arc::new(AlwaysReady),
-        adapter,
+        adapter: adapter as Arc<dyn AppAdapter>,
         env: &env,
         wallets: &wallets,
         observer: &FakeObserver,

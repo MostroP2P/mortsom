@@ -8,7 +8,7 @@ use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{Capability, OrderState};
 use mortsom_scenario_kit::cancel::cancel_payment;
 use mortsom_scenario_kit::context::{Context, ScenarioError};
-use mortsom_scenario_kit::recovery::network_outage;
+use mortsom_scenario_kit::recovery::payment_fails_while_offline;
 
 use super::{NO_VALUE_TIMEOUT_SECS, TRADE_TIMEOUT_SECS};
 use crate::flow;
@@ -39,14 +39,9 @@ pub async fn nwc_cancel_payment(ctx: &Context) -> Result<(), ScenarioError> {
 /// the trade completes.
 pub async fn wallet_unavailable_then_pay(ctx: &Context) -> Result<(), ScenarioError> {
     let taken = flow::create_and_take(ctx).await?;
-    network_outage(
-        ctx,
-        Actor::Alice,
-        ctx.recovery.outage,
-        &taken.order,
-        OrderState::Taken,
-    )
-    .await?;
+    // The point of the scenario: funding is attempted while the wallet is
+    // out of reach, not merely after an outage that already ended.
+    payment_fails_while_offline(ctx, Actor::Alice, &taken.order, OrderState::Taken).await?;
     flow::fund(ctx, &taken.order).await?;
     flow::fiat_sent(ctx, &taken.order).await?;
     flow::release_and_settle(ctx, &taken).await

@@ -249,6 +249,80 @@ pub async fn rotate_device(
         .map(|_| ())
 }
 
+/// The seller tries to fund the order while the device has no network: the
+/// wallet cannot be reached, so the attempt must fail and leave the order
+/// where it was. Connectivity is restored whatever the attempt did.
+///
+/// Two assumptions are deliberate, and both are assertions rather than
+/// guesses about the app: the payment path is refused *somehow* while
+/// offline (the category is not pinned, because a build may surface it as a
+/// product error, a wallet error or a timeout), and a payment that instead
+/// succeeds with no network is reported as a product failure — sats moved
+/// through a path the operator had cut.
+pub async fn payment_fails_while_offline(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+    expected: OrderState,
+) -> Result<(), ScenarioError> {
+    let session = ctx.actor(actor)?;
+    session
+        .ui
+        .set_connectivity(false)
+        .await
+        .map_err(infra("disable connectivity"))?;
+    ctx.timeline.push(
+        TimelineKind::Step,
+        Some(actor.as_str()),
+        "connectivity off; funding must not go through",
+        None,
+    );
+
+    let attempt = crate::actions::pay_hold_invoice(ctx, actor, order).await;
+
+    let step = ctx
+        .evidence
+        .checkpoint(actor.as_str(), "offline-payment", session.ui.as_ref())
+        .await;
+    // Restored before the attempt is judged: a scenario that stops here must
+    // not leave the device offline for whatever runs next.
+    let restored = session.ui.set_connectivity(true).await;
+    match &restored {
+        Ok(()) => ctx.timeline.push(
+            TimelineKind::Step,
+            Some(actor.as_str()),
+            "connectivity restored",
+            Some(step),
+        ),
+        Err(e) => ctx.timeline.push(
+            TimelineKind::Step,
+            Some(actor.as_str()),
+            format!("could not restore connectivity: {e}"),
+            Some(step),
+        ),
+    }
+
+    match attempt {
+        Err(e) => ctx.timeline.push(
+            TimelineKind::Step,
+            Some(actor.as_str()),
+            format!("funding refused while offline, as expected: {e}"),
+            None,
+        ),
+        Ok(observation) => {
+            return Err(ScenarioError::product(format!(
+                "order {} was funded with {} sats while {actor} had no network",
+                order.id, observation.amount_sats
+            )));
+        }
+    }
+    restored.map_err(infra("restore connectivity"))?;
+    // The refused attempt must not have moved the order.
+    wait_app_state(ctx, actor, order, expected)
+        .await
+        .map(|_| ())
+}
+
 /// Restarts the run relay and verifies both apps still show `order` in
 /// `expected` once it is back.
 pub async fn restart_relay(
@@ -703,5 +777,42 @@ mod tests {
             !summaries.iter().any(|s| s == "rotated back to portrait"),
             "a failed restore must not be reported as done: {summaries:?}"
         );
+    }
+    /// The refused attempt is the expected one, and the device must come
+    /// back online whatever happened to it.
+    #[tokio::test]
+    async fn a_refused_offline_payment_restores_connectivity_and_keeps_the_state() {
+        let adapter = Arc::new(StateAdapter(Mutex::new(OrderState::Taken)));
+        let mut ctx = context(adapter);
+        ctx.mainnet = Some(crate::context::MainnetClearance {
+            lane: mortsom_common::Lane::Local,
+        });
+        let order = OrderReference::new("o1");
+
+        // The fake adapter refuses to pay, which is what an unreachable
+        // wallet looks like from here.
+        payment_fails_while_offline(&ctx, Actor::Alice, &order, OrderState::Taken)
+            .await
+            .unwrap();
+
+        let summaries: Vec<String> = ctx
+            .timeline
+            .entries()
+            .into_iter()
+            .map(|e| e.summary)
+            .collect();
+        assert!(
+            summaries
+                .iter()
+                .any(|s| s.contains("funding refused while offline")),
+            "{summaries:?}"
+        );
+        assert!(
+            summaries.iter().any(|s| s == "connectivity restored"),
+            "{summaries:?}"
+        );
+        // The reservation is released, so the refused attempt costs nothing.
+        let budget = ctx.budget.lock().unwrap();
+        assert_eq!(budget.totals().reserved_sats, 0, "{:?}", budget.totals());
     }
 }
