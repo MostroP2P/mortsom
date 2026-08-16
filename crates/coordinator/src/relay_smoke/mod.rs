@@ -16,6 +16,7 @@ use mortsom_environment::docker::ContainerRuntime;
 use mortsom_environment::relay::{
     ReadinessProbe, RelayHandle, RelayTeardown, start_relay, teardown_relay,
 };
+use mortsom_environment::relay_url::same_relay;
 use mortsom_observers::relay::{ObservedEvent, ObserverScope, RelayObserver};
 use mostro_core::prelude::NOSTR_INFO_EVENT_KIND;
 use nostr_sdk::prelude::{Kind, PublicKey};
@@ -343,10 +344,23 @@ async fn check_daemon_info(
 
 /// URLs under which the run relay may legitimately appear in the daemon's
 /// relay list: the configured daemon-view URLs plus this run's own views.
+/// The configured list usually already names the run relay under one of
+/// those views, so entries denoting the same endpoint are collapsed: this
+/// list is printed when the check fails and a repeated relay reads as a
+/// different one.
 fn expected_relay_urls(config: &Config, handle: &RelayHandle) -> Vec<String> {
-    let mut urls = config.mostro.relays.clone();
-    urls.push(handle.host_url());
-    urls.push(handle.docker_url());
+    let mut urls: Vec<String> = Vec::new();
+    for url in config
+        .mostro
+        .relays
+        .iter()
+        .cloned()
+        .chain([handle.host_url(), handle.docker_url()])
+    {
+        if !urls.iter().any(|kept| same_relay(kept, &url)) {
+            urls.push(url);
+        }
+    }
     urls
 }
 

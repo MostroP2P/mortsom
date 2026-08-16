@@ -358,3 +358,42 @@ async fn a_panicking_observer_still_tears_down_the_relay() {
     );
     assert!(summary.teardown.as_ref().unwrap().removed);
 }
+
+/// The message a failed check prints is the operator's whole diagnosis, so
+/// the same relay must not appear twice under different spellings: the
+/// configured daemon view and this run's own view are usually one URL.
+#[test]
+fn the_expected_relay_list_names_each_relay_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = config(dir.path());
+    config.mostro.relays = vec![
+        "ws://host.docker.internal:47200".to_owned(),
+        // Same endpoint under the runner's own name.
+        "ws://localhost:47200".to_owned(),
+        "wss://relay.mostro.network".to_owned(),
+    ];
+    let handle = RelayHandle {
+        container_name: "mortsom-relay-test".to_owned(),
+        host_port: 47200,
+        data_dir: dir.path().to_path_buf(),
+        image: "img".to_owned(),
+    };
+
+    let expected = expected_relay_urls(&config, &handle);
+
+    assert_eq!(
+        expected.len(),
+        2,
+        "the run relay and the public one, no repeats: {expected:?}"
+    );
+    assert!(
+        expected.iter().any(|u| u.contains("relay.mostro.network")),
+        "{expected:?}"
+    );
+    assert!(
+        expected
+            .iter()
+            .any(|u| mortsom_environment::relay_url::same_relay(u, &handle.host_url())),
+        "the run relay must still be there: {expected:?}"
+    );
+}

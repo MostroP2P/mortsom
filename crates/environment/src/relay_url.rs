@@ -6,7 +6,13 @@
 use nostr_sdk::prelude::RelayUrl;
 
 /// Host names that all mean "the machine running Mortsom".
-pub const HOST_ALIASES: &[&str] = &["127.0.0.1", "localhost", "host.docker.internal", "10.0.2.2"];
+pub const HOST_ALIASES: &[&str] = &[
+    "127.0.0.1",
+    "::1",
+    "localhost",
+    "host.docker.internal",
+    "10.0.2.2",
+];
 
 /// Canonical comparison key of a relay URL: `(scheme, host-class, port, path)`.
 pub fn relay_key(url: &str) -> Option<(String, String, u16, String)> {
@@ -64,6 +70,8 @@ mod tests {
     #[test]
     fn host_aliases_and_trailing_slash_are_equivalent() {
         assert!(same_relay("ws://localhost:7000", "ws://127.0.0.1:7000/"));
+        // A daemon on this host may advertise the IPv6 loopback.
+        assert!(same_relay("ws://[::1]:7000", "ws://127.0.0.1:7000"));
         assert!(same_relay(
             "ws://host.docker.internal:7000",
             "ws://10.0.2.2:7000"
