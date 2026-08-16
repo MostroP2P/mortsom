@@ -15,10 +15,13 @@ pub async fn complete(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
         tap(device, Ids::WALKTHROUGH_DONE).await?;
     }
     expect(device, Ids::ORDER_ADD_FAB).await?;
-    if !present(device, Ids::ENV_MARKER).await? {
-        return Err(AdapterError::contract(
+    // The marker may render just after the order book, so wait for it
+    // instead of probing once. Its absence means the wrong artifact is
+    // installed, not that the app broke the automation contract.
+    expect(device, Ids::ENV_MARKER).await.map_err(|_| {
+        AdapterError::environment(
             "test-environment marker missing after the walkthrough: this is not a Mortsom build",
-        ));
-    }
+        )
+    })?;
     Ok(())
 }

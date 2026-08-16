@@ -116,6 +116,10 @@ async fn onboarding_refuses_a_build_without_the_environment_marker() {
     let err = adapter().onboard(&device(&ui), &env()).await.unwrap_err();
 
     assert!(err.message.contains("marker"));
+    assert_eq!(
+        err.category,
+        mortsom_common::FailureCategory::EnvironmentMisconfiguration
+    );
 }
 
 #[tokio::test]
@@ -419,4 +423,58 @@ async fn cancel_if_open_is_idempotent_and_observe_maps_statuses() {
         .await
         .unwrap_err();
     assert_eq!(err.category, mortsom_common::FailureCategory::Product);
+}
+
+/// The app renders labels for humans: padding and capitalisation vary
+/// between builds, and neither may change what the adapter reports.
+#[tokio::test]
+async fn padded_labels_do_not_change_the_invoice_or_the_wallet_state() {
+    let ui = app_with_orders();
+    ui.label(Ids::PAY_INVOICE_TEXT, "  lnbc1000n1secretinvoice\n");
+    ui.label(Ids::INVOICE_NWC_TEXT, "   ");
+    ui.label(Ids::WALLET_CONNECTION, " Connected ");
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    let order = OrderReference::with_kind("o1", mortsom_app_contract::OrderKind::Sell);
+    adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+    adapter()
+        .find_and_take_order(&device(&ui), &order)
+        .await
+        .unwrap();
+
+    let handoff = adapter()
+        .pay_hold_invoice(&device(&ui), &order)
+        .await
+        .unwrap();
+    let buyer = adapter()
+        .provide_buyer_invoice(&device(&ui), &order)
+        .await
+        .unwrap();
+    let connection = adapter()
+        .configure_nwc(&device(&ui), "alice", &Secret::new("nwc://x".to_owned()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        handoff.invoice.as_ref().unwrap().expose(),
+        "lnbc1000n1secretinvoice",
+        "surrounding whitespace is not part of the invoice"
+    );
+    assert!(buyer.is_none(), "a whitespace-only label is no invoice");
+    assert!(connection.connected, "` Connected ` still means connected");
+}
+
+/// Some builds put a bottom bar where others put a back arrow. Returning
+/// home must work either way, as `orders::go_home` already does.
+#[tokio::test]
+async fn going_home_works_on_a_screen_without_a_back_arrow() {
+    let ui = FakeUi::default();
+    ui.present(&[Ids::SETTINGS_MOSTRO_NODE, Ids::NAV_ORDER_BOOK]);
+    ui.on_tap(Ids::NAV_ORDER_BOOK, &[Ids::ORDER_ADD_FAB]);
+
+    nav::go_home(&device(&ui)).await.unwrap();
+
+    assert!(ui.has(Ids::ORDER_ADD_FAB));
 }

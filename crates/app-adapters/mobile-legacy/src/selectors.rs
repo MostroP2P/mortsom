@@ -99,6 +99,8 @@ impl Ids {
         Self::APPBAR_DRAWER,
         Self::APPBAR_BACK,
         Self::NAV_ORDER_BOOK,
+        Self::ORDER_BOOK_TAB_BUY,
+        Self::ORDER_BOOK_TAB_SELL,
         Self::NAV_TRADES,
         Self::NAV_CHAT,
         Self::DRAWER_ACCOUNT,
@@ -171,6 +173,10 @@ impl Ids {
         Self::INVOICE_TEXT,
         Self::INVOICE_SUBMIT,
         Self::INVOICE_CANCEL,
+        Self::INVOICE_NWC_GENERATE,
+        Self::INVOICE_NWC_CONFIRM,
+        Self::INVOICE_NWC_TEXT,
+        Self::PAY_INVOICE_TEXT,
         Self::PAY_NWC,
         Self::PAY_CANCEL,
     ];
@@ -212,6 +218,29 @@ pub const APP_IDS_FILE: &str = "lib/core/automation/automation_ids.dart";
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// Guard: `ALL` drives the contract and uniqueness tests, so a constant
+    /// missing from it is silently uncovered. Every declared identifier must
+    /// be listed.
+    #[test]
+    fn every_declared_identifier_is_listed_in_all() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/selectors.rs"))
+            .unwrap();
+        let declared: Vec<String> = src
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("pub const "))
+            .filter_map(|l| l.split_once("&'static str = \""))
+            .filter_map(|(_, rest)| rest.split_once('"'))
+            .map(|(value, _)| value.to_owned())
+            .collect();
+        assert!(declared.len() > 10, "the parser found nothing to check");
+        for id in &declared {
+            assert!(
+                Ids::ALL.contains(&id.as_str()),
+                "{id} is declared but missing from Ids::ALL"
+            );
+        }
+    }
 
     #[test]
     fn identifiers_are_unique_and_namespaced() {

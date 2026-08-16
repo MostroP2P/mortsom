@@ -122,7 +122,12 @@ pub async fn pay_hold_invoice(
 ) -> Result<PaymentHandoff, AdapterError> {
     open_trade(device, order).await?;
     tap(device, Ids::TRADE_PAY_INVOICE).await?;
-    let invoice = label(device, Ids::PAY_INVOICE_TEXT).await?;
+    // The label is rendered for humans; padding is not part of the invoice
+    // and a whitespace-only label carries none at all.
+    let invoice = label(device, Ids::PAY_INVOICE_TEXT)
+        .await?
+        .trim()
+        .to_owned();
     tap(device, Ids::PAY_NWC).await?;
     // On success the app returns home; the wallet observer confirms the
     // settlement, the adapter only reports the handoff.
@@ -144,7 +149,10 @@ pub async fn provide_buyer_invoice(
     open_trade(device, order).await?;
     tap(device, Ids::TRADE_ADD_INVOICE).await?;
     tap(device, Ids::INVOICE_NWC_GENERATE).await?;
-    let invoice = label(device, Ids::INVOICE_NWC_TEXT).await?;
+    let invoice = label(device, Ids::INVOICE_NWC_TEXT)
+        .await?
+        .trim()
+        .to_owned();
     tap(device, Ids::INVOICE_NWC_CONFIRM).await?;
     expect(device, Ids::ORDER_ADD_FAB).await?;
     Ok((!invoice.is_empty()).then(|| Secret::new(invoice)))

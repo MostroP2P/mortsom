@@ -53,6 +53,13 @@ pub async fn build_apk(
             "dart_defines must not carry secrets (NWC URIs, mnemonics, keys)",
         ));
     }
+    if let Err(reason) = check_relay_url(relay_url) {
+        // The value itself is never echoed: it may carry the credentials
+        // this check exists to stop.
+        return Err(AdapterError::contract(format!(
+            "relay url rejected: {reason}"
+        )));
+    }
     let command = build_command(flutter, ctx, relay_url);
     run_in_dir(runner, &command, &ctx.source_dir).await?;
     let path: PathBuf = ctx.source_dir.join(APK_RELATIVE_PATH);
@@ -88,6 +95,28 @@ async fn run_in_dir(
         .await
         .map(|_| ())
         .map_err(|e| AdapterError::infrastructure(format!("flutter build failed: {e}")))
+}
+
+/// The relay url is interpolated into a dart-define, so it is baked into the
+/// APK and into build logs. Only a credential-free websocket url qualifies.
+fn check_relay_url(url: &str) -> Result<(), &'static str> {
+    let Some(rest) = url
+        .strip_prefix("ws://")
+        .or_else(|| url.strip_prefix("wss://"))
+    else {
+        return Err("only ws:// and wss:// urls are accepted");
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or(rest);
+    if authority.is_empty() {
+        return Err("the url has no host");
+    }
+    if authority.contains('@') {
+        return Err("credentials in the url would be baked into the build");
+    }
+    if looks_secret(url) {
+        return Err("the url looks like it carries a secret");
+    }
+    Ok(())
 }
 
 fn looks_secret(define: &str) -> bool {
@@ -185,5 +214,26 @@ mod tests {
             .unwrap_err();
         assert!(err.message.contains("does not exist"));
         assert!(runner.calls().len() == 1, "only the valid build ran");
+    }
+
+    #[tokio::test]
+    async fn build_refuses_a_relay_url_that_carries_credentials() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = FakeRunner::default();
+
+        let err = build_apk(
+            &runner,
+            Path::new("/bin/flutter"),
+            &ctx(dir.path()),
+            "wss://user:hunter2@relay.example",
+            "network.mostro.app",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(err.message.contains("relay"), "{err}");
+        // The rejected value never reaches the message or the process.
+        assert!(!format!("{err}").contains("hunter2"), "{err}");
+        assert!(runner.calls().is_empty(), "nothing may be built");
     }
 }

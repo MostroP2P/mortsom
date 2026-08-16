@@ -19,8 +19,10 @@ pub async fn go_to_settings(device: &DeviceContext<'_>) -> Result<(), AdapterErr
     expect(device, Ids::SETTINGS_MOSTRO_NODE).await
 }
 
-/// Returns to the order book from any drawer destination.
+/// Returns to the order book from any drawer destination. A single back tap
+/// is not enough on every build (some screens nest, others expose a bottom
+/// bar instead of a back arrow), so this is the resilient unwind the order
+/// screens already use.
 pub async fn go_home(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
-    tap(device, Ids::APPBAR_BACK).await?;
-    expect(device, Ids::ORDER_ADD_FAB).await
+    super::orders::go_home(device).await
 }

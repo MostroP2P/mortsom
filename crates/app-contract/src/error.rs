@@ -41,6 +41,12 @@ impl AdapterError {
     pub fn wallet(message: impl Into<String>) -> Self {
         Self::new(FailureCategory::Wallet, message)
     }
+
+    /// Prerequisites are wrong: the artifact under test is not the one the
+    /// run expected, or configuration and secrets do not match it.
+    pub fn environment(message: impl Into<String>) -> Self {
+        Self::new(FailureCategory::EnvironmentMisconfiguration, message)
+    }
 }
 
 #[cfg(test)]
@@ -56,6 +62,10 @@ mod tests {
         assert_eq!(
             AdapterError::contract("x").category,
             FailureCategory::AutomationContract
+        );
+        assert_eq!(
+            AdapterError::environment("x").category,
+            FailureCategory::EnvironmentMisconfiguration
         );
         assert_eq!(
             AdapterError::infrastructure("x").category,

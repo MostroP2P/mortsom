@@ -25,7 +25,9 @@ pub async fn connect(
     let state = wait_connection_state(device).await?;
     Ok(WalletConnection {
         label: label_name.to_owned(),
-        connected: state == CONNECTED,
+        // The card is rendered for humans: padding and capitalisation vary
+        // between builds, the meaning does not.
+        connected: state.trim().eq_ignore_ascii_case(CONNECTED),
     })
 }
 

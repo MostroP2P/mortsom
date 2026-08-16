@@ -112,14 +112,16 @@ async fn onboarding_skips_the_walkthrough_and_reads_the_generated_identity() {
 }
 
 #[tokio::test]
-async fn a_build_without_the_marker_is_refused_as_contract_failure() {
+async fn a_build_without_the_marker_is_refused_as_the_wrong_artifact() {
     let ui = FakeUi::default();
     ui.present(&[Ids::WALKTHROUGH_SKIP]);
     ui.on_tap(Ids::WALKTHROUGH_SKIP, &[Ids::ORDER_ADD_FAB]);
     let err = adapter().onboard(&device(&ui), &env()).await.unwrap_err();
+    // A missing marker means the installed APK is not the build under
+    // test; that is a prerequisite problem, not the app breaking a promise.
     assert_eq!(
         err.category,
-        mortsom_common::FailureCategory::AutomationContract
+        mortsom_common::FailureCategory::EnvironmentMisconfiguration
     );
     assert!(err.message.contains("marker"));
 }
