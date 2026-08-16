@@ -17,12 +17,23 @@ use tracing::{info, warn};
 use crate::process::{ChildProcess, Command, CommandRunner, ProcessError};
 use crate::webdriver::{Element, Locator, Session, WebDriverError, server_ready};
 
+/// How many swipes a scrolling search may take before giving up.
+pub const SCROLL_SEARCH_SWIPES: u32 = 10;
 /// Interval between element polls inside a bounded wait.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// Interval between server readiness probes.
 pub const SERVER_POLL: Duration = Duration::from_millis(500);
 /// Appium's own idle timeout for a session, in seconds.
-pub const NEW_COMMAND_TIMEOUT_SECS: u64 = 300;
+/// Appium's idle-session watchdog, disabled on purpose.
+///
+/// It exists to reap sessions abandoned by a crashed client. Mortsom is not
+/// one: it ends every session explicitly, kills its emulators on teardown,
+/// and `mortsom cleanup` sweeps what an interrupted run left. Meanwhile an
+/// actor legitimately waits minutes for its counterparty -- a trade that
+/// expires unpaid waits far longer -- and a watchdog would kill the waiting
+/// side mid-scenario, reporting it as a dead session rather than as the
+/// wait it was.
+pub const NEW_COMMAND_TIMEOUT_SECS: u64 = 0;
 /// Deadline Appium gives adb commands (debug Flutter builds start slowly on
 /// software-rendered emulators), in milliseconds.
 pub const ADB_EXEC_TIMEOUT_MS: u64 = 120_000;
@@ -65,8 +76,23 @@ pub enum AppiumError {
 
 /// UiAutomator selector matching a Flutter semantic identifier exactly.
 pub fn resource_id_selector(identifier: &str) -> String {
-    let escaped = identifier.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = escape_selector(identifier);
     format!("new UiSelector().resourceId(\"{escaped}\")")
+}
+
+/// The same lookup, scrolling the first scrollable container until the
+/// element comes into view. A phone screen shows a fraction of a settings
+/// page, and Flutter does not build what is not visible: without this, a
+/// control below the fold does not exist as far as the driver can tell.
+pub fn scroll_into_view_selector(identifier: &str) -> String {
+    let escaped = escape_selector(identifier);
+    format!(
+        "new UiScrollable(new UiSelector().scrollable(true)).setMaxSearchSwipes({SCROLL_SEARCH_SWIPES}).scrollIntoView(new UiSelector().resourceId(\"{escaped}\"))"
+    )
+}
+
+fn escape_selector(identifier: &str) -> String {
+    identifier.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// A running Appium server owned by this run.
@@ -218,13 +244,31 @@ impl AppiumSession {
 
     /// Finds an element by accessibility id, failing immediately if absent.
     pub async fn find(&self, accessibility_id: &str) -> Result<Element, AppiumError> {
-        Ok(self
+        match self
             .session
             .find_element(
                 Locator::UiAutomator,
                 &resource_id_selector(accessibility_id),
             )
-            .await?)
+            .await
+        {
+            Ok(element) => Ok(element),
+            // Not on screen is not the same as not there: scroll for it
+            // before believing the app never rendered it.
+            Err(not_visible) => match self
+                .session
+                .find_element(
+                    Locator::UiAutomator,
+                    &scroll_into_view_selector(accessibility_id),
+                )
+                .await
+            {
+                Ok(element) => Ok(element),
+                // Nothing to scroll, or scrolled to the end without it: the
+                // first failure is the one that describes the situation.
+                Err(_) => Err(not_visible.into()),
+            },
+        }
     }
 
     /// Whether an element with this accessibility id is present right now.
@@ -459,6 +503,21 @@ mod tests {
             app_package: "network.mostro.app".into(),
             app_activity: None,
         }
+    }
+
+    #[test]
+    fn a_scrolling_lookup_searches_for_the_same_id() {
+        let selector = scroll_into_view_selector("settings.mostro_node");
+        assert!(selector.contains("UiScrollable"), "{selector}");
+        assert!(selector.contains("scrollable(true)"), "{selector}");
+        assert!(
+            selector.contains("resourceId(\"settings.mostro_node\")"),
+            "{selector}"
+        );
+        assert!(
+            scroll_into_view_selector("a\"b").contains("a\\\"b"),
+            "quotes are escaped in the scrolling selector too"
+        );
     }
 
     #[test]
