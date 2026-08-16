@@ -13,6 +13,7 @@ pub mod logging;
 pub mod redact;
 pub mod run_id;
 pub mod secret;
+pub mod tls;
 
 pub use check::{CheckResult, CheckStatus, DoctorReport};
 pub use env_resolve::{MissingEnv, resolve_env_with};
