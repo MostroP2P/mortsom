@@ -5,6 +5,33 @@ use mortsom_app_contract::{AdapterError, DeviceContext, TestEnvironment};
 use super::{expect, label, present, tap, type_into};
 use crate::selectors::Ids;
 
+/// Ensures settings point at the daemon under test, choosing it from the
+/// node selector when they do not.
+///
+/// Onboarding cannot always select it: the community screen lists
+/// communities, and a node the app already discovered is not one of them.
+/// Settings is where every known node can be picked.
+pub async fn select_node(
+    device: &DeviceContext<'_>,
+    env: &TestEnvironment,
+) -> Result<(), AdapterError> {
+    if verify_node(device, env).await.is_ok() {
+        return Ok(());
+    }
+    tap(device, Ids::SETTINGS_MOSTRO_NODE).await?;
+    let item = Ids::node_item(&env.mostro_pubkey.to_ascii_lowercase());
+    if present(device, &item).await? {
+        tap(device, &item).await?;
+    } else {
+        tap(device, Ids::NODE_ADD_CUSTOM).await?;
+        type_into(device, Ids::NODE_CUSTOM_PUBKEY, &env.mostro_pubkey).await?;
+        type_into(device, Ids::NODE_CUSTOM_NAME, super::onboarding::NODE_NAME).await?;
+        tap(device, Ids::NODE_CUSTOM_CONFIRM).await?;
+    }
+    expect(device, Ids::SETTINGS_MOSTRO_NODE_PUBKEY).await?;
+    verify_node(device, env).await
+}
+
 /// Verifies the selected node pubkey shown in settings equals the daemon.
 pub async fn verify_node(
     device: &DeviceContext<'_>,

@@ -325,9 +325,17 @@ impl AppiumSession {
 
     /// Accessibility label (`content-desc`) of an element: the state readout
     /// of container identifiers such as `order.status`.
+    /// Reads what the element says: its accessibility description, or its
+    /// text when there is none. A widget whose value is selectable text
+    /// (an identity, an invoice) exposes it as text, and reading only the
+    /// description would report such a screen as empty.
     pub async fn label_of(&self, accessibility_id: &str) -> Result<String, AppiumError> {
         let element = self.find(accessibility_id).await?;
-        Ok(self.session.attribute(&element, "content-desc").await?)
+        let described = self.session.attribute(&element, "content-desc").await?;
+        if !described.trim().is_empty() {
+            return Ok(described);
+        }
+        Ok(self.session.attribute(&element, "text").await?)
     }
 
     /// PNG screenshot.
@@ -656,5 +664,31 @@ mod tests {
         let server = AppiumServer::external(4723, child);
         assert_eq!(server.base_url(), "http://127.0.0.1:4723");
         server.stop().await.unwrap();
+    }
+    /// Selectable text (an identity, an invoice) carries no accessibility
+    /// description, and reading only that reports the screen as empty.
+    #[tokio::test]
+    async fn a_label_falls_back_to_the_element_text() {
+        let server = MockServer::start().await;
+        let s = session(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/session/s1/element/e1/attribute/content-desc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": ""})))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/session/s1/element/e1/attribute/text"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": "npub1alice"})))
+            .mount(&server)
+            .await;
+
+        assert_eq!(s.label_of("keys.public_key").await.unwrap(), "npub1alice");
     }
 }

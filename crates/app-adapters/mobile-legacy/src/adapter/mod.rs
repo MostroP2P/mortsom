@@ -129,7 +129,7 @@ impl AppAdapter for MobileLegacyAdapter {
         env: &TestEnvironment,
     ) -> Result<(), AdapterError> {
         nav::go_to_settings(device).await?;
-        settings::verify_node(device, env).await?;
+        settings::select_node(device, env).await?;
         settings::ensure_relay(device, env).await?;
         nav::go_home(device).await
     }

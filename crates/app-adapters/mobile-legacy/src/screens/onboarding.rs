@@ -16,14 +16,8 @@ pub async fn complete(
     env: &TestEnvironment,
 ) -> Result<(), AdapterError> {
     tap(device, Ids::ONBOARDING_SKIP).await?;
-    // The community screen opens a legal notice over itself on first launch
-    // and nothing behind it can be tapped. A build that already accepted it
-    // (or one that does not show it) simply has nothing to dismiss.
-    if present(device, Ids::COMMUNITY_NOTICE_ACCEPT).await? {
-        tap(device, Ids::COMMUNITY_NOTICE_ACCEPT).await?;
-    }
+    dismiss_notice(device).await?;
     select_daemon(device, env).await?;
-    tap(device, Ids::COMMUNITY_DONE).await?;
     expect(device, Ids::ORDER_ADD_FAB).await?;
     // The marker may render just after the order book, so wait for it
     // instead of probing once. Its absence means the wrong artifact is
@@ -36,7 +30,33 @@ pub async fn complete(
     Ok(())
 }
 
-/// Selects the daemon under test on the community screen.
+/// Dismisses the legal notice the community screen opens over itself.
+///
+/// The app raises it one frame after the screen builds, so a single probe
+/// can look before it is there and then be blocked by it. This waits for
+/// either the notice or the screen behind it — whichever the app shows —
+/// instead of racing the frame.
+async fn dismiss_notice(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
+    let deadline = std::time::Instant::now() + device.ui_timeout;
+    loop {
+        if present(device, Ids::COMMUNITY_NOTICE_ACCEPT).await? {
+            return tap(device, Ids::COMMUNITY_NOTICE_ACCEPT).await;
+        }
+        // The controls behind the notice are only reachable once it is
+        // gone, so seeing one means there is nothing to dismiss.
+        if present(device, Ids::COMMUNITY_SKIP).await?
+            || present(device, Ids::COMMUNITY_CUSTOM_NODE).await?
+        {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}
+
+/// Chooses the daemon under test and leaves the community screen.
 ///
 /// The app discovers Mostro nodes from the relays it already knows, so the
 /// daemon may be listed before Mortsom ever mentions it — and adding it as
@@ -49,7 +69,8 @@ async fn select_daemon(
     // Nodes are keyed by lowercase hex.
     let card = Ids::community_card(&env.mostro_pubkey.to_ascii_lowercase());
     if present(device, &card).await? {
-        return tap(device, &card).await;
+        tap(device, &card).await?;
+        return tap(device, Ids::COMMUNITY_DONE).await;
     }
     tap(device, Ids::COMMUNITY_CUSTOM_NODE).await?;
     type_into(device, Ids::NODE_CUSTOM_PUBKEY, &env.mostro_pubkey).await?;
@@ -58,13 +79,12 @@ async fn select_daemon(
     // Adding a known node is refused and the dialog stays open: the daemon
     // is listed after all, just not where the first look could see it.
     if !present(device, Ids::NODE_CUSTOM_CONFIRM).await? {
-        return Ok(());
+        // Adding a custom node selects it; the confirm button then appears.
+        return tap(device, Ids::COMMUNITY_DONE).await;
     }
+    // The app knows this node already, it just does not offer it here: the
+    // community screen lists communities, and a plain node is not one. Leave
+    // the step; settings is where a known node is chosen.
     tap(device, Ids::NODE_CUSTOM_CANCEL).await?;
-    if present(device, &card).await? {
-        return tap(device, &card).await;
-    }
-    Err(AdapterError::contract(format!(
-        "the daemon under test is neither addable as a custom node nor listed as `{card}`"
-    )))
+    tap(device, Ids::COMMUNITY_SKIP).await
 }

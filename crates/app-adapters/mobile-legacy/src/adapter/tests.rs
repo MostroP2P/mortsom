@@ -151,8 +151,30 @@ async fn node_and_relay_configuration_adds_the_relay_when_missing() {
 
 #[tokio::test]
 async fn node_mismatch_is_a_product_failure_and_seeded_relay_skips_the_dialog() {
+    // Settings pointing elsewhere is corrected by choosing the daemon in
+    // the node selector, which is the only way to reach a node the app
+    // discovered on its own.
+    let ui = fresh_app();
+    let item = Ids::node_item(&PUBKEY.to_ascii_lowercase());
+    ui.label(Ids::SETTINGS_MOSTRO_NODE_PUBKEY, "someone-else");
+    ui.on_tap(Ids::SETTINGS_MOSTRO_NODE, &[item.as_str()]);
+    ui.on_tap_relabel(item.as_str(), Ids::SETTINGS_MOSTRO_NODE_PUBKEY, PUBKEY);
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    adapter()
+        .configure_node_and_relay(&device(&ui), &env())
+        .await
+        .unwrap();
+    assert!(
+        ui.calls().contains(&format!("tap {item}")),
+        "{:?}",
+        ui.calls()
+    );
+
+    // Choosing the daemon and still being shown another node is the app
+    // contradicting itself, and that is a product failure.
     let ui = fresh_app();
     ui.label(Ids::SETTINGS_MOSTRO_NODE_PUBKEY, "someone-else");
+    ui.on_tap(Ids::SETTINGS_MOSTRO_NODE, &[item.as_str()]);
     adapter().onboard(&device(&ui), &env()).await.unwrap();
     let err = adapter()
         .configure_node_and_relay(&device(&ui), &env())
