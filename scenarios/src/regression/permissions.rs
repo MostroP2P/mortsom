@@ -43,7 +43,7 @@ pub async fn unauthorized_actions_at_taken(ctx: &Context) -> Result<(), Scenario
 crate::register_scenario! {
     name: "unauthorized_actions_at_taken",
     body: unauthorized_actions_at_taken,
-    tags: &["regression", "permissions"],
+    tags: &["regression", "permissions", "parity"],
     requires: flow::TAKE_REQUIRES,
     timeout_secs: NO_VALUE_TIMEOUT_SECS,
     moves_value: false,

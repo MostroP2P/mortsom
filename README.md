@@ -58,6 +58,7 @@ never runs without per-order and per-run spend caps.
 | `mortsom cleanup <run-id>` | Removes the run's relay container and Mortsom's emulators; reports orders the run left open. | no |
 | `mortsom publish <run-id> --out <dir> [--screenshots all\|none]` | Sanitized bundle for CI: redacted text evidence, screenshots by policy, manifest with retry classification. | no |
 | `mortsom accounting [--lane <lane>]` | Spend and outcome trend across runs (`accounting.md/json` in the artifacts dir). | no |
+| `mortsom parity <run-a> <run-b> [--intentional <toml>]` | Cross-app parity of two runs against different profiles (outcome, state path, relay, wallet, cleanup, contract). | no |
 
 `mortsom cleanup` reads `<artifacts_dir>/<run-id>/cleanup.json` and prints any
 order the run's own sweep could not close. It cannot cancel orders itself
@@ -73,7 +74,8 @@ and refuses to start while another run holds it.
   two-emulator device smoke on every PR; no daemon, wallet or secret.
 - `integration.yml`: the smoke suite on a secured self-hosted runner
   (`integration` environment) with dedicated wallets and the caps of
-  `config/ci.example.toml`; on pushes to `main` and manual dispatch.
+  `config/ci.example.toml`, one job per application profile plus the
+  cross-app parity comparison; on pushes to `main` and manual dispatch.
 - `canary.yml`: one scheduled, hard-capped run per day on the canary runner;
   single-run locking, no retries, an issue on failure, accounting trend and
   screenshot-free evidence bundle every time.
@@ -82,6 +84,18 @@ and refuses to start while another run holds it.
 
 See [`docs/runbook.md`](./docs/runbook.md) for failure handling, cleanup
 recovery, secret rotation and incident response.
+
+## Application profiles
+
+`mobile.profile` selects the adapter: `mobile-legacy` (`../mobile`, package
+`network.mostro.app`, `mortsom.toml.example`) or `mobile-v2` (`../mobilev2`,
+package `foundation.mostro.app`, `config/mobile-v2.example.toml`). Both
+adapters expose the same `AppAdapter` contract; scenarios never see either
+app's identifiers or copy. The v2 inventory and the automation contract the
+v2 app must adopt are in [`docs/mobile-v2-inventory.md`](./docs/mobile-v2-inventory.md);
+until it does, a v2 run fails at onboarding with an `automation-contract`
+failure rather than a false pass. Scenarios tagged `parity` run against
+both profiles in separate jobs and `mortsom parity` compares them.
 
 ## Scenario catalogue
 

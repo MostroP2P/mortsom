@@ -635,6 +635,12 @@ impl<'a> World<'a> {
         ) {
             error!(error = %e, "cannot write timeline");
         }
+        if let Err(e) = self
+            .artifacts
+            .write_json(files::TIMELINE_JSON, &self.timeline.entries())
+        {
+            error!(error = %e, "cannot write timeline.json");
+        }
     }
 }
 

@@ -1,0 +1,9 @@
+# Intentional cross-app differences (spec §12.3). Every entry is a product
+# decision, not a workaround: name the scenario, the compared aspect
+# (outcome | state-path | relay-path | wallet | cleanup | contract) and why.
+# `mortsom parity` reports any other difference as a finding.
+
+# [[intentional]]
+# scenario = "happy_sell"
+# aspect = "state-path"
+# reason = "v2 shows pending-rating before completed; both map to Completed"

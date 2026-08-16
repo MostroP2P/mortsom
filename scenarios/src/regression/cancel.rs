@@ -95,7 +95,7 @@ pub async fn expiration_unpaid(ctx: &Context) -> Result<(), ScenarioError> {
 crate::register_scenario! {
     name: "cancel_pending",
     body: cancel_pending,
-    tags: &["regression", "cancel"],
+    tags: &["regression", "cancel", "parity"],
     requires: flow::CANCEL_REQUIRES,
     timeout_secs: NO_VALUE_TIMEOUT_SECS,
     moves_value: false,
@@ -111,7 +111,7 @@ crate::register_scenario! {
 crate::register_scenario! {
     name: "cooperative_cancel",
     body: cooperative_cancel,
-    tags: &["regression", "cancel"],
+    tags: &["regression", "cancel", "parity"],
     requires: flow::TRADE_REQUIRES,
     timeout_secs: TRADE_TIMEOUT_SECS,
     moves_value: true,

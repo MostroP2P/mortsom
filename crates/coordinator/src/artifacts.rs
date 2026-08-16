@@ -15,6 +15,8 @@ pub mod files {
     pub const SUMMARY: &str = "summary.json";
     /// Ordered human-readable timeline.
     pub const TIMELINE: &str = "timeline.md";
+    /// Structured timeline (same entries as `timeline.md`), for tooling.
+    pub const TIMELINE_JSON: &str = "timeline.json";
     /// Environment description (lane, app profile, versions).
     pub const ENVIRONMENT: &str = "environment.json";
     /// Notification observations.

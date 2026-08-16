@@ -574,6 +574,7 @@ async fn happy_sell_passes_end_to_end_with_evidence_and_no_open_orders() {
     for name in [
         files::SUMMARY,
         files::TIMELINE,
+        files::TIMELINE_JSON,
         files::RELAY_EVENTS,
         files::WALLET_PAYMENTS,
         files::CLEANUP,

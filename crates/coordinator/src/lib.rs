@@ -12,6 +12,7 @@ pub mod device_smoke;
 pub mod doctor;
 pub mod evidence;
 pub mod lock;
+pub mod parity;
 pub mod publish;
 pub mod relay_smoke;
 pub mod report;

@@ -20,12 +20,24 @@ concurrency:
 
 jobs:
   smoke:
-    name: PR smoke suite, CI lane
+    # One job per application profile (spec Phase 7.6): separate builds,
+    # separate artifacts, one profile's failure cannot contaminate the other.
+    name: Smoke suite, CI lane (${{ matrix.profile }})
     if: github.repository == 'MostroP2P/mortsom'
     runs-on: [self-hosted, mortsom-integration]
     environment: integration
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: mobile-legacy
+            config: config/ci.example.toml
+          - profile: mobile-v2
+            config: config/mobile-v2.example.toml
     env:
+      PROFILE: ${{ matrix.profile }}
+      MORTSOM_PROFILE_CONFIG: ${{ matrix.config }}
       MORTSOM_MOSTRO_PUBKEY: ${{ secrets.MORTSOM_MOSTRO_PUBKEY }}
       MORTSOM_MOSTRO_SETTINGS_FILE: ${{ secrets.MORTSOM_MOSTRO_SETTINGS_FILE }}
       MORTSOM_ALICE_NWC: ${{ secrets.MORTSOM_ALICE_NWC }}
@@ -40,10 +52,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Configure (CI lane, dedicated infrastructure)
         # The smoke suite pays hold invoices; this environment's wallets are
-        # dedicated and the caps in the config bound every run.
+        # dedicated and the caps in the config bound every run. The v2
+        # example carries the same caps and lane settings for its profile.
         run: |
-          cp config/ci.example.toml mortsom.toml
+          cp "$MORTSOM_PROFILE_CONFIG" mortsom.toml
           sed -i 's/^allow_mainnet = false/allow_mainnet = true/' mortsom.toml
+          sed -i 's/^lane = "local"/lane = "ci"/' mortsom.toml
+          sed -i 's|^artifacts_dir = "./artifacts"|artifacts_dir = "env:MORTSOM_ARTIFACTS_DIR"|' mortsom.toml
       - name: Preflight
         run: cargo run --release -p mortsom-coordinator --bin mortsom -- doctor
       - name: Run
@@ -72,7 +87,49 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: integration-evidence
+          name: integration-evidence-${{ matrix.profile }}
           path: bundle
           if-no-files-found: ignore
           retention-days: 30
+
+  parity:
+    # Cross-app parity (spec §12.3): the shared scenarios from both profile
+    # jobs are compared; unexplained differences fail this job only.
+    name: Cross-app parity
+    needs: smoke
+    if: always() && github.repository == 'MostroP2P/mortsom'
+    runs-on: [self-hosted, mortsom-integration]
+    environment: integration
+    timeout-minutes: 15
+    env:
+      MORTSOM_MOSTRO_PUBKEY: ${{ secrets.MORTSOM_MOSTRO_PUBKEY }}
+      MORTSOM_MOSTRO_SETTINGS_FILE: ${{ secrets.MORTSOM_MOSTRO_SETTINGS_FILE }}
+      MORTSOM_ALICE_NWC: ${{ secrets.MORTSOM_ALICE_NWC }}
+      MORTSOM_BOB_NWC: ${{ secrets.MORTSOM_BOB_NWC }}
+      MORTSOM_ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: integration-evidence-*
+          path: artifacts
+          merge-multiple: true
+      - name: Compare the two profiles' runs
+        run: |
+          cp config/ci.example.toml mortsom.toml
+          LEGACY=$(ls -d artifacts/*/ | xargs -n1 basename | while read r; do grep -l '"app_profile": "mobile-legacy"' "artifacts/$r/summary.json" >/dev/null 2>&1 && echo "$r"; done | tail -1)
+          V2=$(ls -d artifacts/*/ | xargs -n1 basename | while read r; do grep -l '"app_profile": "mobile-v2"' "artifacts/$r/summary.json" >/dev/null 2>&1 && echo "$r"; done | tail -1)
+          if [ -z "$LEGACY" ] || [ -z "$V2" ]; then
+            echo "parity needs one run per profile (legacy='$LEGACY', v2='$V2')"; exit 1
+          fi
+          cargo run --release -p mortsom-coordinator --bin mortsom -- parity "$LEGACY" "$V2" --intentional config/parity-intentional.toml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-report
+          path: |
+            artifacts/parity.md
+            artifacts/parity.json
+          if-no-files-found: ignore

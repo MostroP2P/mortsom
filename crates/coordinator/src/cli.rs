@@ -15,6 +15,7 @@ use mortsom_android_driver::process::TokioRunner;
 use mortsom_android_driver::ui::AppiumDriver;
 
 use mortsom_adapter_mobile_legacy::MobileLegacyAdapter;
+use mortsom_adapter_mobile_v2::MobileV2Adapter;
 use mortsom_environment::relay::RelayHandle;
 
 use crate::app_setup::{AppSetupOptions, SetupDeps, run_app_setup};
@@ -61,6 +62,19 @@ pub enum Command {
         /// Screenshot policy: `all` or `none` (pixels cannot be redacted).
         #[arg(long, default_value = "all")]
         screenshots: String,
+    },
+    /// Cross-app parity: compare two runs of the shared scenarios against
+    /// different profiles, per scenario (outcome, state path, relay path,
+    /// wallet, cleanup of that scenario's orders, contract); differences
+    /// are findings unless listed as intentional.
+    Parity {
+        /// Run id of the first profile.
+        run_a: String,
+        /// Run id of the second profile.
+        run_b: String,
+        /// TOML file of intentional differences (`[[intentional]]` entries).
+        #[arg(long)]
+        intentional: Option<PathBuf>,
     },
     /// Spend and outcome trend across runs, from their summaries.
     Accounting {
@@ -159,6 +173,11 @@ pub async fn run(cli: Cli) -> ExitCode {
             screenshots,
         } => publish_command(&cli.config, &run, &out, &screenshots),
         Command::Accounting { lane } => accounting_command(&cli.config, lane.as_deref()),
+        Command::Parity {
+            run_a,
+            run_b,
+            intentional,
+        } => parity_command(&cli.config, &run_a, &run_b, intentional.as_deref()),
         Command::Run { scenarios, tag } => run_command(&cli.config, scenarios, tag).await,
         Command::App { command } => run_app(&cli.config, command).await,
         Command::Device { command } => run_device(&cli.config, command).await,
@@ -226,6 +245,56 @@ fn publish_command(
     }
 }
 
+fn parity_command(
+    config_path: &std::path::Path,
+    run_a: &str,
+    run_b: &str,
+    intentional: Option<&std::path::Path>,
+) -> ExitCode {
+    let config = match Config::load(config_path) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let ids: Result<(mortsom_common::RunId, mortsom_common::RunId), String> =
+        run_a.parse().and_then(|a| run_b.parse().map(|b| (a, b)));
+    let (run_a, run_b) = match ids {
+        Ok(ids) => ids,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    let intentional = match intentional.map(crate::parity::load_intentional).transpose() {
+        Ok(list) => list.unwrap_or_default(),
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
+    match crate::parity::compare_runs(
+        std::path::Path::new(&config.run.artifacts_dir),
+        run_a.as_str(),
+        run_b.as_str(),
+        &intentional,
+    ) {
+        Ok(report) => {
+            print!("{}", report.render());
+            if report.parity {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            }
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
 fn accounting_command(config_path: &std::path::Path, lane: Option<&str>) -> ExitCode {
     let config = match Config::load(config_path) {
         Ok(config) => config,
@@ -251,6 +320,20 @@ fn accounting_command(config_path: &std::path::Path, lane: Option<&str>) -> Exit
             eprintln!("{e}");
             ExitCode::from(1)
         }
+    }
+}
+
+/// The adapter for `mobile.profile` (validated by the config loader).
+pub fn select_adapter(
+    config: &Config,
+    flutter: PathBuf,
+    relay_seed: String,
+) -> Arc<dyn mortsom_app_contract::AppAdapter> {
+    let package = config.mobile.package.clone();
+    if config.mobile.profile == mortsom_adapter_mobile_v2::PROFILE {
+        Arc::new(MobileV2Adapter::new(package, flutter, relay_seed))
+    } else {
+        Arc::new(MobileLegacyAdapter::new(package, flutter, relay_seed))
     }
 }
 
@@ -426,14 +509,14 @@ async fn run_app(config_path: &std::path::Path, command: AppCommand) -> ExitCode
                 image: String::new(),
             }
             .emulator_url();
-            let adapter = MobileLegacyAdapter::new(config.mobile.package.clone(), flutter, seed);
+            let adapter = select_adapter(&config, flutter, seed);
             let env = |name: &str| std::env::var(name).ok();
             let deps = SetupDeps {
                 runner: &TokioRunner,
                 ui: &ui,
                 docker: &docker,
                 probe: &NostrProbe,
-                adapter: &adapter,
+                adapter: adapter.as_ref(),
                 env: &env,
             };
             match run_app_setup(&config, &AppSetupOptions::default(), &deps).await {
@@ -514,9 +597,7 @@ async fn run_command(
         image: String::new(),
     }
     .emulator_url();
-    let adapter: std::sync::Arc<dyn mortsom_app_contract::AppAdapter> = std::sync::Arc::new(
-        MobileLegacyAdapter::new(config.mobile.package.clone(), flutter, seed),
-    );
+    let adapter = select_adapter(&config, flutter, seed);
     let env = |name: &str| std::env::var(name).ok();
     let wallets =
         |label: &str,

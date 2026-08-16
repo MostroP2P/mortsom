@@ -20,7 +20,7 @@ pub async fn happy_sell(ctx: &Context) -> Result<(), ScenarioError> {
 crate::register_scenario! {
     name: "happy_sell",
     body: happy_sell,
-    tags: &["smoke", "happy-path"],
+    tags: &["smoke", "happy-path", "parity"],
     requires: REQUIRES,
     timeout_secs: 30 * 60,
     moves_value: true,

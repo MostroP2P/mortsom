@@ -96,7 +96,7 @@ crate::register_scenario! {
 crate::register_scenario! {
     name: "restart_at_taken",
     body: restart_at_taken,
-    tags: &["recovery", "restart"],
+    tags: &["recovery", "restart", "parity"],
     requires: flow::TAKE_REQUIRES,
     timeout_secs: NO_VALUE_TIMEOUT_SECS,
     moves_value: false,
