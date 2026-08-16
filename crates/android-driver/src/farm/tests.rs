@@ -323,3 +323,51 @@ async fn missing_system_image_fails_before_any_boot() {
     ));
     assert!(runner.spawned().is_empty());
 }
+
+/// When a device never becomes drivable, Appium's own advice is to read the
+/// logcat — so the harness must have written one. The emulators are shut
+/// down on this path, which is the last moment their logs can be read.
+#[tokio::test]
+async fn a_farm_that_fails_to_open_sessions_leaves_the_logcat_behind() {
+    let dir = tempfile::tempdir().unwrap();
+    let runner = healthy_runner("1.3.2");
+    for serial in ["emulator-5554", "emulator-5556"] {
+        runner.script(
+            &format!("adb -s {serial} logcat -d -v threadtime"),
+            &format!("crash trace for {serial}\n"),
+        );
+    }
+    let ui = FailingUi;
+
+    let err = DeviceFarm::bring_up(&runner, &ui, &sdk(dir.path()), &spec(dir.path()))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, FarmError::Ui(_)), "{err:?}");
+    for actor in ["alice", "bob"] {
+        let path = dir.path().join(format!("device-logcat-{actor}.txt"));
+        let logcat =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        assert!(logcat.contains("crash trace"), "{logcat}");
+    }
+}
+
+/// A UI driver whose server starts but never yields a session, the shape of
+/// a UiAutomator2 instrumentation that dies on startup.
+struct FailingUi;
+
+#[async_trait::async_trait]
+impl UiDriver for FailingUi {
+    async fn start_server(
+        &self,
+        _: &dyn CommandRunner,
+        _: u16,
+        _: &Path,
+        _: Duration,
+    ) -> Result<Box<dyn UiServer>, AppiumError> {
+        Err(AppiumError::NotReady {
+            url: "the instrumentation process cannot be initialized".into(),
+            timeout: Duration::ZERO,
+        })
+    }
+}

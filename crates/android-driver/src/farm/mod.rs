@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::adb::PackageVersion;
 use crate::appium::{AppiumError, SessionSpec};
@@ -145,6 +145,11 @@ impl DeviceFarm {
         match Self::finish_bring_up(runner, ui, spec, emulators).await {
             Ok(farm) => Ok(farm),
             Err((emulators, err)) => {
+                // A device that never became drivable takes the reason with
+                // it when it stops, and the reason lives in the logcat --
+                // which is exactly what Appium tells the operator to read.
+                // This is the last moment it can be collected.
+                dump_logcats(runner, spec, &emulators).await;
                 for emulator in &emulators {
                     let _ = emulator.shutdown_with(runner, spec.shutdown_grace).await;
                 }
@@ -287,6 +292,26 @@ async fn install_all(
         });
     }
     Ok(versions)
+}
+
+/// Writes `device-logcat-<actor>.txt` for every emulator still running, next
+/// to the emulator logs. Best effort: a failure to collect evidence must not
+/// replace the failure being explained.
+async fn dump_logcats(runner: &dyn CommandRunner, spec: &FarmSpec, emulators: &[Emulator]) {
+    for emulator in emulators {
+        let actor = emulator.slot().actor;
+        let path = spec.log_dir.join(format!("device-logcat-{actor}.txt"));
+        match emulator.adb().logcat_dump(runner).await {
+            Ok(logcat) => {
+                if let Err(e) = std::fs::write(&path, logcat) {
+                    warn!(actor = %actor, error = %e, "cannot write the logcat of a device that failed");
+                }
+            }
+            Err(e) => {
+                warn!(actor = %actor, error = %e, "cannot dump the logcat of a device that failed")
+            }
+        }
+    }
 }
 
 /// Shuts down whichever emulators booted and returns the first boot error.
