@@ -592,3 +592,44 @@ async fn wallet_liquidity_below_the_run_cap_fails_the_preflight() {
     assert_eq!(status_of(&report, "wallet bob").status, CheckStatus::Fail);
     assert!(!report.is_healthy());
 }
+
+/// The info event is republished on the daemon's own long interval (an hour
+/// by default), so its absence during a short probe says nothing about the
+/// daemon's health when the daemon is demonstrably publishing: a fresh
+/// kind-10002 on the same relay proves it is alive and connected. Only
+/// silence on every front is a failure.
+#[test]
+fn a_missing_info_event_warns_while_the_daemon_is_demonstrably_alive() {
+    let mut probe = FakeNet::healthy().daemon;
+    let expected = vec!["ws://host.docker.internal:7000".to_owned()];
+    probe.info = None;
+
+    let mut report = DoctorReport::default();
+    net::evaluate_daemon(&probe, &expected, &mut report);
+    assert_eq!(
+        status_of(&report, "mostro-daemon").status,
+        CheckStatus::Warn,
+        "the kind-10002 proves the daemon is there"
+    );
+
+    // Nothing at all from the pubkey: that is a real failure.
+    probe.relay_list = None;
+    let mut report = DoctorReport::default();
+    net::evaluate_daemon(&probe, &expected, &mut report);
+    assert_eq!(
+        status_of(&report, "mostro-daemon").status,
+        CheckStatus::Fail
+    );
+}
+
+/// The probe deadline follows the configured daemon health timeout: a fixed
+/// ten seconds asks for events the daemon republishes on a longer cycle.
+#[test]
+fn the_daemon_probe_deadline_follows_the_configured_timeout() {
+    assert_eq!(
+        RealNet::with_daemon_timeout(std::time::Duration::from_secs(120)).daemon_timeout(),
+        std::time::Duration::from_secs(120)
+    );
+    // Unconfigured callers keep the documented default.
+    assert_eq!(RealNet::default().daemon_timeout(), net::DAEMON_TIMEOUT);
+}

@@ -184,7 +184,15 @@ pub async fn run(cli: Cli) -> ExitCode {
         Command::Relay { command } => run_relay(&cli.config, command).await,
         Command::Doctor { no_network, json } => {
             let options = DoctorOptions { no_network };
-            let report = run_doctor(&cli.config, &options, &RealHost, &RealNet).await;
+            // The daemon probe waits for events republished on the daemon's
+            // own cycle, so it uses the configured health timeout.
+            let net = match Config::load(&cli.config) {
+                Ok(config) => RealNet::with_daemon_timeout(std::time::Duration::from_secs(
+                    config.mostro.health_timeout_secs,
+                )),
+                Err(_) => RealNet::default(),
+            };
+            let report = run_doctor(&cli.config, &options, &RealHost, &net).await;
             if json {
                 match serde_json::to_string_pretty(&report) {
                     Ok(text) => println!("{text}"),

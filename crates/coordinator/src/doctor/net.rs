@@ -39,8 +39,32 @@ pub trait NetProbes: Send + Sync {
 }
 
 /// The real network.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct RealNet;
+#[derive(Debug, Clone, Copy)]
+pub struct RealNet {
+    daemon_timeout: Duration,
+}
+
+impl Default for RealNet {
+    fn default() -> Self {
+        Self {
+            daemon_timeout: DAEMON_TIMEOUT,
+        }
+    }
+}
+
+impl RealNet {
+    /// Probes the daemon with `timeout` instead of the default. The events
+    /// this waits for are republished on the daemon's own cycle, so the
+    /// deadline belongs to configuration (`mostro.health_timeout_secs`).
+    pub fn with_daemon_timeout(daemon_timeout: Duration) -> Self {
+        Self { daemon_timeout }
+    }
+
+    /// Deadline used for the daemon probe.
+    pub fn daemon_timeout(&self) -> Duration {
+        self.daemon_timeout
+    }
+}
 
 #[async_trait]
 impl NetProbes for RealNet {
@@ -53,7 +77,7 @@ impl NetProbes for RealNet {
     }
 
     async fn daemon(&self, relays: &[String], pubkey: PublicKey) -> DaemonProbe {
-        probe_daemon(relays, pubkey, DAEMON_TIMEOUT).await
+        probe_daemon(relays, pubkey, self.daemon_timeout).await
     }
 
     async fn wallet(&self, label: &str, uri: &Secret) -> Result<WalletProbe, WalletProbeError> {
@@ -100,11 +124,25 @@ pub fn evaluate_daemon_at(
     evaluate_relays(probe, report);
     evaluate_relay_list(probe, expected_relays, report);
     let Some(info) = &probe.info else {
-        report.push(
-            "mostro-daemon",
-            CheckStatus::Fail,
-            "no kind-38385 info event from the configured pubkey on the reachable relays",
-        );
+        // The info event is republished on the daemon's own interval, which
+        // is long by default. A fresh relay list from the same pubkey proves
+        // the daemon is alive and connected, so the missing info event is
+        // evidence not yet collected rather than a broken daemon.
+        let daemon_is_publishing =
+            probe.relay_list.is_some() && probe.relays.iter().any(|r| r.error.is_none());
+        let (status, detail) = if daemon_is_publishing {
+            (
+                CheckStatus::Warn,
+                "no kind-38385 info event yet; the daemon is publishing (its kind-10002 arrived), \
+                 so it republishes the info event on its own interval",
+            )
+        } else {
+            (
+                CheckStatus::Fail,
+                "no kind-38385 info event from the configured pubkey on the reachable relays",
+            )
+        };
+        report.push("mostro-daemon", status, detail);
         return;
     };
     evaluate_info_freshness(info, now_unix, report);
