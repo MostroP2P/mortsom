@@ -53,6 +53,17 @@ fn fresh_app() -> FakeUi {
         ],
     );
     ui.on_tap(Ids::NODE_CUSTOM_CONFIRM, &[Ids::COMMUNITY_DONE]);
+    // Confirming closes the dialog; a dialog that stays open means the app
+    // refused the node, which is how the adapter tells the two apart.
+    ui.on_tap_hide(
+        Ids::NODE_CUSTOM_CONFIRM,
+        &[
+            Ids::NODE_CUSTOM_PUBKEY,
+            Ids::NODE_CUSTOM_NAME,
+            Ids::NODE_CUSTOM_CONFIRM,
+            Ids::NODE_CUSTOM_CANCEL,
+        ],
+    );
     ui.on_tap(
         Ids::COMMUNITY_DONE,
         &[Ids::ORDER_ADD_FAB, Ids::ENV_MARKER, Ids::APPBAR_DRAWER],
@@ -477,4 +488,27 @@ async fn going_home_works_on_a_screen_without_a_back_arrow() {
     nav::go_home(&device(&ui)).await.unwrap();
 
     assert!(ui.has(Ids::ORDER_ADD_FAB));
+}
+
+/// The app discovers Mostro nodes on its own, so the daemon under test can
+/// already be listed. Adding it again is refused as a duplicate; its card
+/// is what must be tapped.
+#[tokio::test]
+async fn a_daemon_the_app_already_lists_is_selected_not_added() {
+    let ui = fresh_app();
+    let card = Ids::community_card(&PUBKEY.to_ascii_lowercase());
+    ui.on_tap(
+        Ids::ONBOARDING_SKIP,
+        &[card.as_str(), Ids::COMMUNITY_SKIP, Ids::COMMUNITY_DONE],
+    );
+    ui.on_tap(card.as_str(), &[Ids::COMMUNITY_DONE]);
+
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+
+    let calls = ui.calls();
+    assert!(calls.contains(&format!("tap {card}")), "{calls:?}");
+    assert!(
+        !calls.iter().any(|c| c.contains(Ids::COMMUNITY_CUSTOM_NODE)),
+        "a listed node must not be added again: {calls:?}"
+    );
 }

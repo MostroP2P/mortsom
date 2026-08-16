@@ -286,6 +286,20 @@ impl UiSession for FakeSession {
         if let Some(appear) = app.on_tap.get(id).cloned() {
             app.present.extend(appear);
         }
+        // Confirming the custom-node dialog closes it. A dialog that stays
+        // open is how the app refuses a node it already knows, and the
+        // adapter tells the two apart by exactly that.
+        if id == Ids::NODE_CUSTOM_CONFIRM {
+            app.present.retain(|p| {
+                ![
+                    Ids::NODE_CUSTOM_PUBKEY,
+                    Ids::NODE_CUSTOM_NAME,
+                    Ids::NODE_CUSTOM_CONFIRM,
+                    Ids::NODE_CUSTOM_CANCEL,
+                ]
+                .contains(&p.as_str())
+            });
+        }
         // Confirming the relay dialog adds a row for whatever URL was typed.
         if id == Ids::SETTINGS_RELAYS_ADD_CONFIRM
             && let Some(url) = app.pending_relay.take()

@@ -21,6 +21,9 @@ impl Ids {
     pub const ONBOARDING_SKIP: &'static str = "onboarding.walkthrough.skip";
     pub const ONBOARDING_NEXT: &'static str = "onboarding.walkthrough.next";
     pub const ONBOARDING_DONE: &'static str = "onboarding.walkthrough.done";
+    /// Accept button of the legal notice the community screen opens over
+    /// itself on first launch.
+    pub const COMMUNITY_NOTICE_ACCEPT: &'static str = "onboarding.community.notice.accept";
     pub const COMMUNITY_CUSTOM_NODE: &'static str = "onboarding.community.custom_node";
     pub const COMMUNITY_DONE: &'static str = "onboarding.community.done";
     pub const COMMUNITY_SKIP: &'static str = "onboarding.community.skip";
@@ -110,6 +113,7 @@ impl Ids {
         Self::ONBOARDING_SKIP,
         Self::ONBOARDING_NEXT,
         Self::ONBOARDING_DONE,
+        Self::COMMUNITY_NOTICE_ACCEPT,
         Self::COMMUNITY_CUSTOM_NODE,
         Self::COMMUNITY_DONE,
         Self::COMMUNITY_SKIP,
