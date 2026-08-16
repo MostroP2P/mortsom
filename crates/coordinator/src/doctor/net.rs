@@ -143,9 +143,13 @@ pub fn evaluate_daemon_with_run_relay(
         // is long by default. A fresh relay list from the same pubkey proves
         // the daemon is alive and connected, so the missing info event is
         // evidence not yet collected rather than a broken daemon.
-        let daemon_is_publishing =
-            probe.relay_list.is_some() && probe.relays.iter().any(|r| r.error.is_none());
-        let (status, detail) = if daemon_is_publishing {
+        let any_relay_reachable = probe.relays.iter().any(|r| r.error.is_none());
+        let daemon_is_publishing = probe.relay_list.is_some() && any_relay_reachable;
+        let (status, detail) = if !any_relay_reachable {
+            // Nothing was reachable, so nothing was observed: the same
+            // verdict the relay list check reaches from the same facts.
+            (CheckStatus::Skip, "no reachable relay")
+        } else if daemon_is_publishing {
             (
                 CheckStatus::Warn,
                 "no kind-38385 info event yet; the daemon is publishing (its kind-10002 arrived), \

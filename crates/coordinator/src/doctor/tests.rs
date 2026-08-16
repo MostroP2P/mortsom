@@ -407,9 +407,12 @@ async fn daemon_and_wallet_failures_are_explicit() {
         status_of(&report, "relay ws://host.docker.internal:7000").status,
         CheckStatus::Fail
     );
+    // The relay is unreachable and something else holds the port, so it is
+    // a real relay failure; the daemon itself was never observed, which is
+    // a missing verdict rather than a bad one.
     assert_eq!(
         status_of(&report, "mostro-daemon").status,
-        CheckStatus::Fail
+        CheckStatus::Skip
     );
     assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Fail);
     assert!(
@@ -685,4 +688,28 @@ fn now() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
+}
+
+/// With no relay reachable there is nothing to conclude about the daemon,
+/// which is what the relay-list check already says. Both must agree.
+#[test]
+fn the_daemon_check_skips_when_no_relay_is_reachable() {
+    let mut probe = FakeNet::healthy().daemon;
+    probe.relays[0].error = Some("connection refused".into());
+    probe.info = None;
+    probe.relay_list = None;
+
+    let mut report = DoctorReport::default();
+    net::evaluate_daemon_with_run_relay(&probe, &[], None, now(), &mut report);
+
+    assert_eq!(
+        status_of(&report, "mostro-daemon").status,
+        CheckStatus::Skip,
+        "no relay, no verdict"
+    );
+    assert_eq!(
+        status_of(&report, "mostro-relay-list").status,
+        CheckStatus::Skip,
+        "the two checks must agree"
+    );
 }
