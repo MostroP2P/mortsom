@@ -6,6 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use mortsom_common::Secret;
 use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, INFO_STALE_AFTER, probe_daemon};
+use mortsom_environment::relay_url::same_relay;
 use mortsom_environment::wallet::{WalletProbe, WalletProbeError, probe_nwc};
 use nostr_sdk::prelude::PublicKey;
 
@@ -86,8 +87,13 @@ impl NetProbes for RealNet {
 }
 
 /// Reports whether the configured relay base port is available.
-pub async fn check_relay_port(net: &dyn NetProbes, port: u16, report: &mut DoctorReport) {
-    match net.local_port(port).await {
+pub async fn check_relay_port(
+    net: &dyn NetProbes,
+    port: u16,
+    report: &mut DoctorReport,
+) -> PortState {
+    let state = net.local_port(port).await;
+    match state {
         PortState::Free => report.push("relay-port", CheckStatus::Pass, format!("{port} is free")),
         PortState::InUse => report.push(
             "relay-port",
@@ -95,6 +101,17 @@ pub async fn check_relay_port(net: &dyn NetProbes, port: u16, report: &mut Docto
             format!("{port} is in use; the run will allocate the next free port"),
         ),
     }
+    state
+}
+
+/// Mortsom's own relay, as the doctor needs to reason about it: a relay
+/// that only exists while a run is live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunRelay {
+    /// URL the run relay is published under on this host.
+    pub url: String,
+    /// Whether something currently listens on its port.
+    pub port_in_use: bool,
 }
 
 /// Runs the daemon checks: relay reachability, info event, protocol, LND
@@ -103,25 +120,23 @@ pub async fn check_daemon(
     net: &dyn NetProbes,
     relays: &[String],
     pubkey: PublicKey,
+    run_relay: Option<&RunRelay>,
     report: &mut DoctorReport,
 ) {
     let probe = net.daemon(relays, pubkey).await;
-    evaluate_daemon(&probe, relays, report);
+    evaluate_daemon_with_run_relay(&probe, relays, run_relay, now_unix(), report);
 }
 
-/// Pure evaluation of a daemon probe.
-pub fn evaluate_daemon(probe: &DaemonProbe, expected_relays: &[String], report: &mut DoctorReport) {
-    evaluate_daemon_at(probe, expected_relays, now_unix(), report);
-}
-
-/// [`evaluate_daemon`] with an injectable clock.
-pub fn evaluate_daemon_at(
+/// Pure evaluation of a daemon probe, with an injectable clock and the
+/// identity of Mortsom's own relay.
+pub fn evaluate_daemon_with_run_relay(
     probe: &DaemonProbe,
     expected_relays: &[String],
+    run_relay: Option<&RunRelay>,
     now_unix: u64,
     report: &mut DoctorReport,
 ) {
-    evaluate_relays(probe, report);
+    evaluate_relays(probe, run_relay, report);
     evaluate_relay_list(probe, expected_relays, report);
     let Some(info) = &probe.info else {
         // The info event is republished on the daemon's own interval, which
@@ -150,21 +165,46 @@ pub fn evaluate_daemon_at(
     evaluate_lightning(info, report);
 }
 
-fn evaluate_relays(probe: &DaemonProbe, report: &mut DoctorReport) {
+fn evaluate_relays(probe: &DaemonProbe, run_relay: Option<&RunRelay>, report: &mut DoctorReport) {
     for relay in &probe.relays {
+        let name = format!("relay {}", relay.configured);
         match &relay.error {
             None => report.push(
-                format!("relay {}", relay.configured),
+                name,
                 CheckStatus::Pass,
                 format!("connected via {}", relay.dialled),
             ),
+            // Mortsom creates and destroys its relay per run, so between
+            // runs its absence is the normal state and says nothing about
+            // the setup. It is still a failure when something holds the
+            // port, because then the daemon is talking to a stranger.
+            Some(error) if is_idle_run_relay(relay, run_relay) => report.push(
+                name,
+                CheckStatus::Skip,
+                format!(
+                    "the run relay only exists while a run is live; \
+                     `mortsom relay smoke` proves it ({error})"
+                ),
+            ),
             Some(error) => report.push(
-                format!("relay {}", relay.configured),
+                name,
                 CheckStatus::Fail,
                 format!("unreachable via {}: {error}", relay.dialled),
             ),
         }
     }
+}
+
+/// True when this unreachable relay is Mortsom's own and nothing is
+/// listening on its port.
+fn is_idle_run_relay(
+    relay: &mortsom_environment::daemon::RelayProbe,
+    run_relay: Option<&RunRelay>,
+) -> bool {
+    run_relay.is_some_and(|run| {
+        !run.port_in_use
+            && (same_relay(&relay.configured, &run.url) || same_relay(&relay.dialled, &run.url))
+    })
 }
 
 fn evaluate_relay_list(probe: &DaemonProbe, expected_relays: &[String], report: &mut DoctorReport) {

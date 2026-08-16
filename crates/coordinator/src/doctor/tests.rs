@@ -605,7 +605,7 @@ fn a_missing_info_event_warns_while_the_daemon_is_demonstrably_alive() {
     probe.info = None;
 
     let mut report = DoctorReport::default();
-    net::evaluate_daemon(&probe, &expected, &mut report);
+    net::evaluate_daemon_with_run_relay(&probe, &expected, None, now(), &mut report);
     assert_eq!(
         status_of(&report, "mostro-daemon").status,
         CheckStatus::Warn,
@@ -615,7 +615,7 @@ fn a_missing_info_event_warns_while_the_daemon_is_demonstrably_alive() {
     // Nothing at all from the pubkey: that is a real failure.
     probe.relay_list = None;
     let mut report = DoctorReport::default();
-    net::evaluate_daemon(&probe, &expected, &mut report);
+    net::evaluate_daemon_with_run_relay(&probe, &expected, None, now(), &mut report);
     assert_eq!(
         status_of(&report, "mostro-daemon").status,
         CheckStatus::Fail
@@ -632,4 +632,57 @@ fn the_daemon_probe_deadline_follows_the_configured_timeout() {
     );
     // Unconfigured callers keep the documented default.
     assert_eq!(RealNet::default().daemon_timeout(), net::DAEMON_TIMEOUT);
+}
+
+/// The run relay exists only while a run is live, so a doctor run between
+/// runs must not report its absence as a broken relay: nothing is wrong,
+/// there is simply no run. A relay that is *not* the run relay stays a
+/// failure, and so does the run relay when something else holds its port.
+#[test]
+fn the_run_relay_is_not_a_failure_while_no_run_is_live() {
+    let mut probe = FakeNet::healthy().daemon;
+    probe.relays[0].error = Some("connection refused".into());
+    let run_relay = net::RunRelay {
+        url: "ws://127.0.0.1:7000".to_owned(),
+        port_in_use: false,
+    };
+
+    let mut report = DoctorReport::default();
+    net::evaluate_daemon_with_run_relay(&probe, &[], Some(&run_relay), now(), &mut report);
+    assert_eq!(
+        status_of(&report, "relay ws://host.docker.internal:7000").status,
+        CheckStatus::Skip,
+        "the run relay is Mortsom's own and only lives during a run"
+    );
+
+    // Something else is on the port: that unreachable relay is real.
+    let busy = net::RunRelay {
+        port_in_use: true,
+        ..run_relay.clone()
+    };
+    let mut report = DoctorReport::default();
+    net::evaluate_daemon_with_run_relay(&probe, &[], Some(&busy), now(), &mut report);
+    assert_eq!(
+        status_of(&report, "relay ws://host.docker.internal:7000").status,
+        CheckStatus::Fail
+    );
+
+    // A relay that is not the run relay is always a failure when it is down.
+    let mut elsewhere = FakeNet::healthy().daemon;
+    elsewhere.relays[0].configured = "wss://relay.mostro.network".to_owned();
+    elsewhere.relays[0].dialled = "wss://relay.mostro.network".to_owned();
+    elsewhere.relays[0].error = Some("connection refused".into());
+    let mut report = DoctorReport::default();
+    net::evaluate_daemon_with_run_relay(&elsewhere, &[], Some(&run_relay), now(), &mut report);
+    assert_eq!(
+        status_of(&report, "relay wss://relay.mostro.network").status,
+        CheckStatus::Fail
+    );
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }

@@ -58,9 +58,24 @@ pub async fn run_doctor(
         report.push("network", CheckStatus::Skip, "configuration did not load");
         return report;
     };
-    net::check_relay_port(net, config.relay.host_port, &mut report).await;
+    let port_state = net::check_relay_port(net, config.relay.host_port, &mut report).await;
+    // Mortsom's own relay, so the daemon checks can tell "no run is live"
+    // from "the relay the daemon needs is broken".
+    let run_relay = net::RunRelay {
+        url: format!("ws://127.0.0.1:{}", config.relay.host_port),
+        port_in_use: port_state == net::PortState::InUse,
+    };
     match config.mobile.mostro_pubkey() {
-        Some(pubkey) => net::check_daemon(net, &config.mostro.relays, pubkey, &mut report).await,
+        Some(pubkey) => {
+            net::check_daemon(
+                net,
+                &config.mostro.relays,
+                pubkey,
+                Some(&run_relay),
+                &mut report,
+            )
+            .await;
+        }
         None => report.push(
             "mostro-daemon",
             CheckStatus::Skip,
