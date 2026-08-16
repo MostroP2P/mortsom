@@ -8,9 +8,9 @@ use mortsom_android_driver::appium::{AppiumError, SessionSpec};
 use mortsom_android_driver::process::tests_support::FakeRunner;
 use mortsom_android_driver::ui::{UiServer, UiSession};
 use mortsom_app_contract::{
-    AdapterError, Apk, AppOrderState, AppProfile, CancelOutcome, Capability, CapabilitySet,
-    DeviceContext, Identity, OrderDraft, OrderReference, OrderState, PaymentHandoff, PaymentPath,
-    VisibleOrder, WalletConnection,
+    AdapterError, Apk, AppOrderState, AppProfile, BuildContext, CancelOutcome, Capability,
+    CapabilitySet, DeviceContext, Identity, OrderDraft, OrderReference, OrderState, PaymentHandoff,
+    PaymentPath, VisibleOrder, WalletConnection,
 };
 use mortsom_environment::docker::{ContainerRuntime, ContainerSpec, DockerError};
 use mortsom_observers::wallet::PaymentState;

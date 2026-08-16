@@ -74,6 +74,7 @@ pub async fn run_device_smoke(
     options: &DeviceSmokeOptions,
     runner: &dyn CommandRunner,
     ui: &dyn UiDriver,
+    adapter: &dyn mortsom_app_contract::AppAdapter,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<DeviceSmokeSummary, String> {
     let run_id = RunId::new();
@@ -99,7 +100,10 @@ pub async fn run_device_smoke(
         passed: false,
     };
 
-    let Some(spec) = prepare(config, options, env, &artifacts, &mut summary) else {
+    // The same resolution every other command uses: a prebuilt APK when the
+    // operator names one, otherwise a build of the configured checkout.
+    let apk = crate::apk::resolve_apk(config, adapter, runner).await;
+    let Some(spec) = prepare(config, options, apk, env, &artifacts, &mut summary) else {
         finish(&artifacts, &mut summary)?;
         return Ok(summary);
     };
@@ -166,27 +170,18 @@ fn record_teardown(teardown: Vec<TeardownItem>, summary: &mut DeviceSmokeSummary
 fn prepare(
     config: &Config,
     options: &DeviceSmokeOptions,
+    apk: Result<PathBuf, String>,
     env: &dyn Fn(&str) -> Option<String>,
     artifacts: &RunArtifacts,
     summary: &mut DeviceSmokeSummary,
 ) -> Option<FarmSpec> {
-    if config.mobile.apk_path.is_empty() {
-        summary.checks.push(
-            "apk",
-            CheckStatus::Fail,
-            "mobile.apk_path is empty; device smoke needs a prebuilt APK (building from source arrives with the app adapter)",
-        );
-        return None;
-    }
-    let apk = PathBuf::from(&config.mobile.apk_path);
-    if !apk.is_file() {
-        summary.checks.push(
-            "apk",
-            CheckStatus::Fail,
-            format!("{} does not exist", apk.display()),
-        );
-        return None;
-    }
+    let apk = match apk {
+        Ok(apk) => apk,
+        Err(e) => {
+            summary.checks.push("apk", CheckStatus::Fail, e);
+            return None;
+        }
+    };
     summary
         .checks
         .push("apk", CheckStatus::Pass, apk.display().to_string());

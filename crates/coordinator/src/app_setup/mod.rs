@@ -9,7 +9,7 @@ use mortsom_android_driver::farm::{DeviceFarm, FarmSpec, TeardownItem};
 use mortsom_android_driver::process::CommandRunner;
 use mortsom_android_driver::sdk::{AndroidSdk, avd_home};
 use mortsom_android_driver::ui::UiDriver;
-use mortsom_app_contract::{AppAdapter, BuildContext, Identity, TestEnvironment};
+use mortsom_app_contract::{AppAdapter, Identity, TestEnvironment};
 use mortsom_common::check::{CheckStatus, DoctorReport};
 use mortsom_common::logging::attach_run_log;
 use mortsom_common::{Lane, Redactor, RunId};
@@ -244,24 +244,7 @@ async fn bring_up_farm(
 
 /// Uses the configured APK or builds one through the adapter.
 async fn resolve_apk(config: &Config, deps: &SetupDeps<'_>) -> Result<PathBuf, String> {
-    if !config.mobile.apk_path.is_empty() {
-        let path = PathBuf::from(&config.mobile.apk_path);
-        return if path.is_file() {
-            Ok(path)
-        } else {
-            Err(format!("{} does not exist", path.display()))
-        };
-    }
-    let ctx = BuildContext {
-        source_dir: PathBuf::from(&config.mobile.source_dir),
-        flavor: config.mobile.flavor.clone(),
-        dart_defines: config.mobile.dart_defines.clone(),
-    };
-    deps.adapter
-        .build(&ctx, deps.runner)
-        .await
-        .map(|apk| apk.path)
-        .map_err(|e| format!("build failed: {e}"))
+    crate::apk::resolve_apk(config, deps.adapter, deps.runner).await
 }
 
 fn check_identities(summary: &mut AppSetupSummary) {

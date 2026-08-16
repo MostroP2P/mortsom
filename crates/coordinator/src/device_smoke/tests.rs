@@ -26,6 +26,15 @@ struct World {
     config: Config,
 }
 
+/// The real adapter; tests that name a prebuilt APK never reach its build.
+fn stub_adapter() -> mortsom_adapter_mobile_legacy::MobileLegacyAdapter {
+    mortsom_adapter_mobile_legacy::MobileLegacyAdapter::new(
+        "network.mostro.app",
+        std::path::PathBuf::from("/bin/flutter"),
+        "ws://10.0.2.2:7000",
+    )
+}
+
 fn world(apk_present: bool) -> World {
     let dir = tempfile::tempdir().unwrap();
     let apk = dir.path().join("app.apk");
@@ -205,9 +214,16 @@ async fn smoke_records_both_launch_screens_and_tears_down() {
         xml: format!("<hierarchy>{ALICE}</hierarchy>"),
     };
 
-    let summary = run_device_smoke(&world.config, &fast(), &runner, &ui, &env_for(&world))
-        .await
-        .unwrap();
+    let summary = run_device_smoke(
+        &world.config,
+        &fast(),
+        &runner,
+        &ui,
+        &stub_adapter(),
+        &env_for(&world),
+    )
+    .await
+    .unwrap();
 
     assert!(summary.passed, "{}", summary.checks.render());
     assert_eq!(summary.app_version.as_ref().unwrap().version_name, "1.3.2");
@@ -251,6 +267,7 @@ async fn missing_apk_fails_before_touching_devices() {
         &fast(),
         &runner,
         &FakeUi::default(),
+        &stub_adapter(),
         &env_for(&world),
     )
     .await
@@ -276,9 +293,16 @@ async fn capture_failure_is_a_failed_check_and_still_tears_down() {
         xml: "<hierarchy/>".into(),
     };
 
-    let summary = run_device_smoke(&world.config, &fast(), &runner, &ui, &env_for(&world))
-        .await
-        .unwrap();
+    let summary = run_device_smoke(
+        &world.config,
+        &fast(),
+        &runner,
+        &ui,
+        &stub_adapter(),
+        &env_for(&world),
+    )
+    .await
+    .unwrap();
 
     assert!(!summary.passed);
     assert!(
@@ -308,7 +332,14 @@ async fn app_not_in_foreground_fails() {
 
     let summary = tokio::time::timeout(
         Duration::from_secs(150),
-        run_device_smoke(&world.config, &fast(), &runner, &ui, &env_for(&world)),
+        run_device_smoke(
+            &world.config,
+            &fast(),
+            &runner,
+            &ui,
+            &stub_adapter(),
+            &env_for(&world),
+        ),
     )
     .await
     .unwrap()
@@ -345,4 +376,46 @@ fn foreground_detection_accepts_old_and_new_dumpsys_formats() {
         "  mFocusedApp=network.mostro.app",
         "network.mostro.app"
     ));
+}
+
+/// A checkout, not a prebuilt file, is the normal way to name the app under
+/// test: `mortsom run` and `mortsom app setup` build it, and the device
+/// smoke must install the very same artifact rather than demand one.
+#[tokio::test]
+async fn an_empty_apk_path_builds_the_app_from_the_checkout() {
+    let mut world = world(false);
+    let runner = runner();
+    // A checkout whose build output is already in place: the adapter runs
+    // `flutter build apk` (the fake runner accepts it) and returns this file.
+    let checkout = world.dir.path().join("checkout");
+    let built = checkout.join("build/app/outputs/flutter-apk/app-release.apk");
+    std::fs::create_dir_all(built.parent().unwrap()).unwrap();
+    std::fs::write(&built, b"apk").unwrap();
+    world.config.mobile.apk_path = String::new();
+    world.config.mobile.source_dir = checkout.display().to_string();
+    let adapter = mortsom_adapter_mobile_legacy::MobileLegacyAdapter::new(
+        world.config.mobile.package.clone(),
+        std::path::PathBuf::from("/bin/flutter"),
+        "ws://10.0.2.2:7000",
+    );
+
+    let summary = run_device_smoke(
+        &world.config,
+        &fast(),
+        &runner,
+        &FakeUi::default(),
+        &adapter,
+        &env_for(&world),
+    )
+    .await
+    .unwrap();
+
+    let apk = summary
+        .checks
+        .checks
+        .iter()
+        .find(|c| c.name == "apk")
+        .unwrap();
+    assert_eq!(apk.status, CheckStatus::Pass, "{apk:?}");
+    assert!(apk.detail.contains("app-release.apk"), "{apk:?}");
 }

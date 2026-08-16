@@ -487,11 +487,24 @@ async fn run_device(config_path: &std::path::Path, command: DeviceCommand) -> Ex
             };
             let ui = AppiumDriver::new(appium);
             let env = |name: &str| std::env::var(name).ok();
+            // Only the build is used here, but the adapter needs the relay
+            // seed it bakes into the APK; the device smoke opens no order,
+            // so the port it names is the configured one.
+            let seed = RelayHandle {
+                container_name: String::new(),
+                host_port: config.relay.host_port,
+                data_dir: std::path::PathBuf::new(),
+                image: String::new(),
+            }
+            .emulator_url();
+            let flutter = RealHost.which("flutter").unwrap_or_default();
+            let adapter = select_adapter(&config, flutter, seed);
             match run_device_smoke(
                 &config,
                 &DeviceSmokeOptions::default(),
                 &TokioRunner,
                 &ui,
+                adapter.as_ref(),
                 &env,
             )
             .await

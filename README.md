@@ -73,6 +73,18 @@ Secrets (`MORTSOM_*_NWC`, the daemon settings path) are accepted only as `env:`
 references, in every configuration layer including the gitignored
 `mortsom.local.toml` overlay; the loader reports every missing variable at once.
 
+**The app under test comes from a checkout by default.** `mobile.source_dir`
+points at it and every command that installs the app builds it with Flutter,
+so nothing else is needed. Point `mobile.apk_path` at a file instead when you
+already have the exact build you want to test — a CI artifact, or a build you
+are bisecting — and Mortsom installs that file untouched rather than building:
+
+```toml
+[mobile]
+source_dir = "../mobile"   # built when apk_path is empty
+apk_path = ""              # a prebuilt .apk to install as-is
+```
+
 **Set the spend caps to what you are willing to lose.** Mortsom moves real
 sats on mainnet, and the preflight refuses to start unless each wallet holds at
 least the larger cap:
