@@ -18,12 +18,48 @@ See [`spec.md`](./spec.md) for the design document, [`AGENTS.md`](./AGENTS.md)
 for contributor policy, and [`docs/stack.md`](./docs/stack.md) for the crate
 selection.
 
-## Language policy
+## Getting started
 
-All code, comments, identifiers, documentation, commit messages and issues in
-this project are written in **English**.
+### What Mortsom is doing, in one picture
 
-## Quick start
+Mortsom is not a client. It drives **two real installations of the app** on two
+Android emulators — Alice sells, Bob buys — and watches the trade from three
+independent vantage points: what the screens show, what the relay carries, and
+what the wallets actually paid. A scenario passes only when all three agree.
+
+That means a run needs more than this repository. The split is worth learning
+once, because almost every confusing failure comes from the right-hand column:
+
+| Mortsom creates and destroys per run | You provide and keep running |
+|---|---|
+| the Nostr relay (a Docker container) | the Mostro daemon (`mostrod`) |
+| both emulators, the app installs, the Appium sessions | the app checkout it builds from |
+| the run directory with all evidence | two funded NWC wallets, one per actor |
+
+Nothing in the left column outlives a run. There is no relay to start, no
+emulator to keep warm; the commands below bring up what they need and tear it
+down again, whether they pass or fail.
+
+### Before the first run
+
+You need, on this machine:
+
+- **Docker**, for the relay container.
+- **The Android SDK** (`ANDROID_HOME`), with the emulator, `adb`, `avdmanager`
+  and the system image the config pins.
+- **Appium 3** with the UiAutomator2 driver, and a **JDK**.
+- **Flutter**, to build the app under test.
+- **A checkout of the app** next to this one (`../mobile` by default).
+- **A Mostro daemon you control**, running locally, with its `settings.toml`
+  reachable and its relay list including `ws://localhost:7000`.
+- **Two Nostr Wallet Connect wallets**, one for Alice and one for Bob, each
+  funded above the spend caps you configure. They are separate wallets on
+  purpose: the run proves who paid.
+
+`mortsom doctor` checks every one of these and names what is missing, so run
+it first and read it rather than working from this list.
+
+### Configure
 
 ```sh
 cp mortsom.toml.example mortsom.toml       # non-secret baseline, gitignored copy
@@ -31,15 +67,65 @@ export MORTSOM_MOSTRO_PUBKEY='<daemon pubkey, hex or npub>'
 export MORTSOM_MOSTRO_SETTINGS_FILE=~/.mostro/settings.toml
 export MORTSOM_ALICE_NWC='nostr+walletconnect://…'
 export MORTSOM_BOB_NWC='nostr+walletconnect://…'
-
-cargo run -- doctor        # prerequisites, secrets, daemon, relay, wallets
 ```
-
-`mortsom doctor` performs no payment and creates no order.
 
 Secrets (`MORTSOM_*_NWC`, the daemon settings path) are accepted only as `env:`
 references, in every configuration layer including the gitignored
 `mortsom.local.toml` overlay; the loader reports every missing variable at once.
+
+**Set the spend caps to what you are willing to lose.** Mortsom moves real
+sats on mainnet, and the preflight refuses to start unless each wallet holds at
+least the larger cap:
+
+```toml
+[run]
+amount_sats = 500          # size of the trade a scenario opens
+max_order_sats = 500       # refuses any single order above this
+max_run_spend_sats = 2000  # refuses to keep going past this in one run
+```
+
+### Climb the ladder
+
+Each step brings up more of the system than the one before, and each tears
+everything down when it finishes. Only move up when the step below is clean —
+a failure at the bottom is a failure you can read.
+
+| | Command | What it proves | Costs sats |
+|---|---|---|---|
+| 1 | `cargo run -- doctor` | the host, the secrets, the daemon settings, the wallets | no |
+| 2 | `cargo run -- relay smoke` | the relay starts and **your daemon publishes to it** | no |
+| 3 | `cargo run -- device smoke` | both emulators boot and the app installs and launches | no |
+| 4 | `cargo run -- app setup` | both apps onboard through the UI and connect their wallets | no |
+| 5 | `cargo run -- run restart_at_pending` | a whole scenario, orders and all | no |
+| 6 | `cargo run -- run happy_sell` | a complete trade, paid for real | **yes** |
+
+`cargo run -- list` tells you which scenarios move value; step 5 can be any
+scenario marked otherwise.
+
+### Reading the output
+
+Every one of those commands ends in the same table. The four verdicts mean
+different things, and only one of them stops you:
+
+- **PASS** — checked and satisfied.
+- **FAIL** — a requirement is not met; fix it before climbing further. This is
+  the only verdict that makes a report `NOT healthy`.
+- **WARN** — usable, but worth your attention.
+- **SKIP** — not evaluated, because there was nothing to evaluate it against.
+
+`SKIP` is the one that surprises people. `mortsom doctor` starts nothing, so
+between runs it has no relay to talk to and skips everything that depends on
+one — that is the normal state, not a problem. The command that does prove the
+relay and the daemon's use of it is `mortsom relay smoke`.
+
+### When something fails
+
+Every run writes a directory under `artifacts/<run-id>/`: `timeline.md` (what
+happened, in order), `run.log`, `relay-events.jsonl`, and a screenshot and UI
+dump per actor at every step. Read the timeline first; it is written for that.
+[`docs/runbook.md`](./docs/runbook.md) maps each failure category to what to
+look at, and `mortsom cleanup <run-id>` removes what an interrupted run left
+behind.
 
 ## The relay is Mortsom's, not yours
 
@@ -165,3 +251,8 @@ Rejected, expired and failed-payout invoices need a controllable wallet
 provider (spec §6) and are not modelled against real NWC wallets.
 Interruption timing (`run.quiet_window_secs`, `run.background_secs`,
 `run.outage_secs`, `run.expiration_timeout_secs`) is configuration.
+
+## Language policy
+
+All code, comments, identifiers, documentation, commit messages and issues in
+this project are written in **English**.
