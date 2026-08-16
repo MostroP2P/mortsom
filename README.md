@@ -73,6 +73,13 @@ Secrets (`MORTSOM_*_NWC`, the daemon settings path) are accepted only as `env:`
 references, in every configuration layer including the gitignored
 `mortsom.local.toml` overlay; the loader reports every missing variable at once.
 
+**All four are required by every command**, including the ones that never
+reach a wallet, such as `device smoke`. The configuration is validated whole
+before anything runs: a harness that starts with half a configuration only
+discovers the other half after booting two emulators and building an app.
+Export them once per shell, or keep them in a file you source — never in the
+repository, and never in `mortsom.toml`, which the loader would refuse anyway.
+
 **The app under test comes from a checkout by default.** `mobile.source_dir`
 points at it and every command that installs the app builds it with Flutter,
 so nothing else is needed. Point `mobile.apk_path` at a file instead when you
