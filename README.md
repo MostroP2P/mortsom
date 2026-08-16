@@ -161,6 +161,16 @@ done
 click fights the driver mid-scenario and you debug a failure you caused. The
 windows close themselves when the run tears the emulators down.
 
+**Use a recent scrcpy.** Mirroring reaches into private Android APIs, so a
+version older than the emulator image cannot see the screen at all: against
+Android 15 anything before 2.4 dies with `NoSuchMethodException:
+SurfaceControl.createDisplay`. Distribution packages lag badly — Ubuntu 24.04
+still ships 1.25 — so take it from snap or from the project's releases:
+
+```sh
+sudo snap install scrcpy      # or: https://github.com/Genymobile/scrcpy/releases
+```
+
 Turning `android.headless` off is the obvious alternative and usually the
 wrong one. The emulator's own window depends on the desktop's display server
 — under Wayland it goes through Xwayland — and two of them compete for the
@@ -168,7 +178,14 @@ GPU with the app under test; a window server that drops one of them fails the
 run for a reason that has nothing to do with the app. Mirroring costs nothing
 and survives all of that.
 
-Without installing anything, the evidence is written as it happens:
+Without installing anything at all, two things work everywhere. A screenshot
+on demand, refreshed as often as you like:
+
+```sh
+$ADB -s emulator-5554 exec-out screencap -p > /tmp/alice.png
+```
+
+And the evidence Mortsom writes as it happens:
 
 ```sh
 watch -n 2 'ls -t artifacts/$(ls -t artifacts | head -1)/*/steps/ | head'
