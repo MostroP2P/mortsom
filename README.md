@@ -62,7 +62,7 @@ Restart the daemon so it republishes its relay list (kind-10002), then prove
 the whole chain in one command:
 
 ```sh
-cargo run -- relay smoke    # start a relay, check the daemon uses it, tear it down
+cargo run -- relay smoke    # start a relay, prove the daemon uses it
 ```
 
 Keeping the public relay in the list is optional. The local one carries the
