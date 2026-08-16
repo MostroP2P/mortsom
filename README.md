@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./mortsom.jpg" alt="Mortsom logo: a green creature inspecting a phone through a magnifying glass" width="240">
+</p>
+
 # Mortsom
 
 End-to-end test harness for the [Mostro](https://github.com/MostroP2P) mobile
