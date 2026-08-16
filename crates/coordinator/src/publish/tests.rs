@@ -160,3 +160,33 @@ fn missing_run_and_policy_parsing_are_explicit() {
     );
     assert!("some".parse::<ScreenshotPolicy>().is_err());
 }
+
+#[test]
+fn a_leak_discards_the_partial_bundle_but_other_errors_keep_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("bundle");
+    std::fs::create_dir_all(&out).unwrap();
+    std::fs::write(out.join("run.log"), "half written").unwrap();
+
+    let error = discard_bundle_on_leak(
+        &out,
+        PublishError::Leak {
+            path: PathBuf::from("run.log"),
+        },
+    );
+
+    assert!(matches!(error, PublishError::Leak { .. }));
+    assert!(!out.exists(), "the leak gate promises a discarded bundle");
+
+    std::fs::create_dir_all(&out).unwrap();
+    let error = discard_bundle_on_leak(
+        &out,
+        PublishError::Io {
+            path: out.clone(),
+            source: std::io::Error::other("disk"),
+        },
+    );
+
+    assert!(matches!(error, PublishError::Io { .. }));
+    assert!(out.exists(), "other errors keep the bundle for inspection");
+}

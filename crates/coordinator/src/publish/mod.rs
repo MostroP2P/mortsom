@@ -208,9 +208,11 @@ pub fn publish_run(
             &secrets,
             options,
             &mut manifest,
-        )?;
+        )
+        .map_err(|e| discard_bundle_on_leak(out, e))?;
     }
-    classify(&run_dir, &redactor, &secrets, &mut manifest)?;
+    classify(&run_dir, &redactor, &secrets, &mut manifest)
+        .map_err(|e| discard_bundle_on_leak(out, e))?;
     let json = serde_json::to_string_pretty(&manifest).unwrap_or_default();
     std::fs::write(out.join(MANIFEST_FILE), json).map_err(|source| PublishError::Io {
         path: out.join(MANIFEST_FILE),
@@ -218,6 +220,20 @@ pub fn publish_run(
     })?;
     info!(run = run_id, files = manifest.files.len(), out = %out.display(), "run published");
     Ok(manifest)
+}
+
+/// A leak aborts publication, and [`PublishError::Leak`] promises a
+/// discarded bundle: whatever was copied before the gate fired is removed so
+/// no partially redacted evidence is left behind. Other errors keep the
+/// directory for inspection. Removal is best effort; failing to remove must
+/// not mask the leak itself.
+fn discard_bundle_on_leak(out: &Path, error: PublishError) -> PublishError {
+    if matches!(error, PublishError::Leak { .. })
+        && let Err(e) = std::fs::remove_dir_all(out)
+    {
+        warn!(out = %out.display(), error = %e, "cannot remove the partial bundle after a leak");
+    }
+    error
 }
 
 fn collect(root: &Path, dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), PublishError> {

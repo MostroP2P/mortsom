@@ -70,7 +70,12 @@ fn doctor_json_output_never_contains_the_wallet_secret() {
         .failure();
 
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    // Neither the whole URI nor the raw secret it carries may appear.
+    let raw = secret.rsplit_once("secret=").unwrap().1;
+    assert!(!stdout.contains(secret), "{stdout}");
+    assert!(!stdout.contains(raw), "{stdout}");
     assert!(!stdout.contains("secret="), "{stdout}");
+    assert!(!stdout.contains("nostr+walletconnect://"), "{stdout}");
     assert!(stdout.contains("\"checks\""));
     assert!(stdout.contains("must be different wallets"));
 }

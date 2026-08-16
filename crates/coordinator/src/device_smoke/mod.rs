@@ -248,7 +248,7 @@ async fn record_launch(
         (false, _) => summary.checks.push(
             name,
             CheckStatus::Fail,
-            format!("app not in foreground within {LAUNCH_TIMEOUT:?}"),
+            format!("app not in foreground within {launch_timeout:?}"),
         ),
     }
 }

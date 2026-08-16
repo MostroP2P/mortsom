@@ -319,8 +319,16 @@ async fn every_missing_secret_and_tool_is_reported() {
 #[tokio::test]
 async fn missing_settings_file_and_wrong_identity_are_reported() {
     let dir = example_config();
-    let host = FakeHost::full();
-    // /tmp/settings.toml "exists" for the fake host but cannot be read.
+    let mut host = FakeHost::full();
+    // A settings path that the host reports as existing but that was never
+    // created, so the read fails; a real /tmp/settings.toml on the machine
+    // running the tests must not change the outcome.
+    let unreadable = dir.path().join("never-created-settings.toml");
+    host.env.insert(
+        "MORTSOM_MOSTRO_SETTINGS_FILE".into(),
+        unreadable.to_string_lossy().into_owned(),
+    );
+    host.existing.insert(unreadable);
     let report = run_doctor(
         &dir.path().join("mortsom.toml"),
         &DoctorOptions { no_network: true },

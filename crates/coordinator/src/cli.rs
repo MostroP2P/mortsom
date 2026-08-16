@@ -404,9 +404,12 @@ async fn run_relay(config_path: &std::path::Path, command: RelayCommand) -> Exit
             }
         }
         RelayCommand::Down { run, all } => {
-            let prefix = match (run, all) {
-                (Some(run), false) => format!("{}-{run}", config.relay.container_name_prefix),
-                (None, true) => format!("{}-", config.relay.container_name_prefix),
+            let (prefix, exact) = match (run, all) {
+                (Some(run), false) => {
+                    let name = format!("{}-{run}", config.relay.container_name_prefix);
+                    (name.clone(), Some(name))
+                }
+                (None, true) => (format!("{}-", config.relay.container_name_prefix), None),
                 _ => {
                     eprintln!("specify --run <id> or --all");
                     return ExitCode::from(2);
@@ -415,7 +418,7 @@ async fn run_relay(config_path: &std::path::Path, command: RelayCommand) -> Exit
             match docker.list_names(&prefix).await {
                 Ok(names) => {
                     let mut failed = false;
-                    for name in names {
+                    for name in relay_down_targets(names, exact.as_deref()) {
                         match docker.stop_and_remove(&name).await {
                             Ok(()) => println!("removed {name}"),
                             Err(e) => {
@@ -436,6 +439,17 @@ async fn run_relay(config_path: &std::path::Path, command: RelayCommand) -> Exit
                 }
             }
         }
+    }
+}
+
+/// Containers `relay down` removes out of a prefix listing: with `--run`
+/// only the run's exact container name (a prefix match could reach another
+/// run whose id extends this one, as `cleanup_run` also guards); with
+/// `--all` everything listed.
+fn relay_down_targets(names: Vec<String>, exact: Option<&str>) -> Vec<String> {
+    match exact {
+        Some(exact) => names.into_iter().filter(|n| n == exact).collect(),
+        None => names,
     }
 }
 
@@ -645,5 +659,29 @@ async fn run_command(
             eprintln!("{e}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::relay_down_targets;
+
+    fn names() -> Vec<String> {
+        ["relay-run1", "relay-run10", "relay-run2"]
+            .map(str::to_owned)
+            .to_vec()
+    }
+
+    #[test]
+    fn relay_down_with_run_removes_only_the_exact_container() {
+        assert_eq!(
+            relay_down_targets(names(), Some("relay-run1")),
+            vec!["relay-run1".to_owned()]
+        );
+    }
+
+    #[test]
+    fn relay_down_with_all_removes_every_listed_container() {
+        assert_eq!(relay_down_targets(names(), None), names());
     }
 }

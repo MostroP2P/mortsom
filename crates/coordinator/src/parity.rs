@@ -301,8 +301,10 @@ fn side_of(run: &LoadedRun, scenario: &str) -> Side {
     }
 }
 
-/// Entries between the scenario's first "attempt N started" marker and the
-/// next scenario's start.
+/// Entries of the scenario's last attempt: everything between its final
+/// "attempt N started" marker and the next scenario's start. Earlier
+/// attempts are dropped, so a retried scenario compares by what it finally
+/// did.
 fn scenario_section(timeline: &[TimelineEntry], scenario: &str) -> Vec<TimelineEntry> {
     let start = format!("scenario {scenario} attempt ");
     let mut inside = false;

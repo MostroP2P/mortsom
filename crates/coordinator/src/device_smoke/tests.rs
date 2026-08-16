@@ -315,13 +315,16 @@ async fn app_not_in_foreground_fails() {
     .unwrap();
 
     assert!(!summary.passed);
-    assert!(
-        summary
-            .checks
-            .checks
-            .iter()
-            .any(|c| c.name == "bob launch" && c.detail.contains("not in foreground"))
-    );
+    let bob = summary
+        .checks
+        .checks
+        .iter()
+        .find(|c| c.name == "bob launch")
+        .unwrap();
+    assert!(bob.detail.contains("not in foreground"), "{bob:?}");
+    // The waited-for timeout is the configured one, not the default.
+    assert!(bob.detail.contains("2s"), "{bob:?}");
+    assert!(!bob.detail.contains("120s"), "{bob:?}");
 }
 
 #[test]
