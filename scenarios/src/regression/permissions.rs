@@ -15,11 +15,14 @@ use crate::recovery::NO_VALUE_TIMEOUT_SECS;
 pub async fn unauthorized_actions_at_taken(ctx: &Context) -> Result<(), ScenarioError> {
     let taken = flow::create_and_take(ctx).await?;
     let baseline = message_baseline(ctx);
+    // Cancelling is allowed for both sides while the invoice is unpaid, and
+    // the scenario says so: requiring it catches a build that hides the way
+    // out of a trade nobody has funded yet.
     expect_actions(
         ctx,
         Actor::Alice,
         &taken.order,
-        &["pay-invoice"],
+        &["pay-invoice", "cancel"],
         &["release", "fiat-sent", "add-invoice", "rate"],
     )
     .await?;
@@ -27,7 +30,7 @@ pub async fn unauthorized_actions_at_taken(ctx: &Context) -> Result<(), Scenario
         ctx,
         Actor::Bob,
         &taken.order,
-        &[],
+        &["cancel"],
         &["release", "fiat-sent", "pay-invoice", "rate"],
     )
     .await?;

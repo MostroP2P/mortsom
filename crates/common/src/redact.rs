@@ -40,9 +40,14 @@ static PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
 const BUILTIN_PATTERN_COUNT: usize = 6;
 
 /// Removes secret values and secret-shaped patterns from text.
+///
+/// The registered values are held as [`Secret`], so the scrubber itself
+/// cannot print or leak what it exists to hide, and they are kept longest
+/// first: a secret that contains another must be replaced before it, or the
+/// tail of the longer one survives in the text.
 #[derive(Debug, Default, Clone)]
 pub struct Redactor {
-    known: Vec<String>,
+    known: Vec<Secret>,
 }
 
 impl Redactor {
@@ -61,9 +66,13 @@ impl Redactor {
     /// Registers a concrete secret value in place.
     pub fn add_secret(&mut self, secret: &Secret) {
         let value = secret.expose();
-        if !value.is_empty() && !self.known.iter().any(|known| known == value) {
-            self.known.push(value.to_owned());
+        if value.is_empty() || self.known.iter().any(|known| known.expose() == value) {
+            return;
         }
+        self.known.push(Secret::new(value.to_owned()));
+        // Longest first, so an overlapping secret is never half-replaced.
+        self.known
+            .sort_by_key(|known| std::cmp::Reverse(known.expose().len()));
     }
 
     /// Returns `text` with every known secret and secret-shaped pattern
@@ -71,7 +80,7 @@ impl Redactor {
     pub fn redact(&self, text: &str) -> String {
         let mut out = text.to_owned();
         for value in &self.known {
-            out = out.replace(value, REDACTED);
+            out = out.replace(value.expose(), REDACTED);
         }
         for pattern in PATTERNS.iter() {
             out = pattern.replace_all(&out, REDACTED).into_owned();
@@ -169,5 +178,34 @@ mod tests {
         let out = redactor.redact("password=abc token: xyz other=fine");
 
         assert_eq!(out, format!("{REDACTED} {REDACTED} other=fine"));
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod ordering_tests {
+    use super::*;
+
+    /// A secret that contains another must be redacted whole. Replacing the
+    /// shorter one first would leave the rest of the longer one in the text.
+    #[test]
+    fn an_overlapping_longer_secret_is_redacted_whole() {
+        let redactor = Redactor::new()
+            .with_secret(&Secret::new("abc123".to_owned()))
+            .with_secret(&Secret::new("abc123def456".to_owned()));
+
+        let clean = redactor.redact("token abc123def456 end");
+
+        assert!(!clean.contains("def456"), "{clean}");
+        assert_eq!(clean, format!("token {REDACTED} end"));
+    }
+
+    /// The redactor holds the very values it exists to hide, so its own
+    /// debug output must not print them.
+    #[test]
+    fn the_redactor_never_prints_the_secrets_it_holds() {
+        let redactor = Redactor::new().with_secret(&Secret::new("hunter2xyz".to_owned()));
+
+        assert!(!format!("{redactor:?}").contains("hunter2xyz"));
     }
 }

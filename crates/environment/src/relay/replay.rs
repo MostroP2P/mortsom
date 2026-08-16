@@ -62,7 +62,16 @@ pub async fn replay_events(
     for event in parsed {
         let id = event.id.to_hex();
         match tokio::time::timeout(timeout, client.send_event(&event)).await {
-            Ok(Ok(_)) => accepted += 1,
+            // `send_event` succeeds even when every relay refused the
+            // event; only an acceptance counts as a replayed event.
+            Ok(Ok(output)) if !output.success.is_empty() => accepted += 1,
+            Ok(Ok(_)) => {
+                client.disconnect().await;
+                return Err(ReplayError::Rejected {
+                    id,
+                    message: "no relay accepted the event".to_owned(),
+                });
+            }
             Ok(Err(e)) => {
                 client.disconnect().await;
                 return Err(ReplayError::Rejected {

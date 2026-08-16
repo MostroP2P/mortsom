@@ -6,10 +6,21 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-/// Identifier of one Mortsom run: `<UTC timestamp>-<6 hex chars>`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Identifier of one Mortsom run: `<UTC timestamp>-<12 hex chars>`.
+///
+/// The identifier names a directory, so it is validated wherever it enters
+/// the process — including deserialization, which would otherwise accept a
+/// path traversal straight out of a summary file.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct RunId(String);
+
+impl<'de> Deserialize<'de> for RunId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        text.parse().map_err(serde::de::Error::custom)
+    }
+}
 
 impl RunId {
     /// Creates a new identifier for now.
@@ -19,7 +30,9 @@ impl RunId {
 
     /// Deterministic constructor used by tests.
     pub fn at(now: chrono::DateTime<chrono::Utc>, nonce: uuid::Uuid) -> Self {
-        let suffix = &nonce.simple().to_string()[..6];
+        // Twelve hex characters: enough that two runs started in the same
+        // second do not silently share an evidence directory.
+        let suffix = &nonce.simple().to_string()[..12];
         Self(format!("{}-{suffix}", now.format("%Y%m%dT%H%M%SZ")))
     }
 
@@ -72,7 +85,7 @@ mod tests {
 
         let id = RunId::at(now, nonce);
 
-        assert_eq!(id.as_str(), "20260815T134500Z-012345");
+        assert_eq!(id.as_str(), "20260815T134500Z-0123456789ab");
         assert_eq!(id.to_string(), id.as_str());
     }
 
@@ -99,5 +112,29 @@ mod tests {
             serde_json::to_string(&id).unwrap(),
             "\"20260815T134500Z-abcdef\""
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod validation_tests {
+    use super::*;
+
+    /// A run id becomes a path segment, so one that arrives inside a summary
+    /// must pass the same validation as one parsed from the command line.
+    #[test]
+    fn deserializing_refuses_what_from_str_refuses() {
+        assert!(serde_json::from_str::<RunId>("\"../run\"").is_err());
+        assert!(serde_json::from_str::<RunId>("\"a/b\"").is_err());
+        assert!(serde_json::from_str::<RunId>("\"20260816T000000Z-aaaaaa\"").is_ok());
+    }
+
+    /// Run ids name directories that sit next to each other; six hex chars
+    /// is 24 bits, and a collision silently merges two runs' evidence.
+    #[test]
+    fn the_nonce_carries_more_than_twenty_four_bits() {
+        let id = RunId::new();
+        let nonce = id.as_str().rsplit_once('-').unwrap().1;
+        assert!(nonce.len() >= 12, "{nonce} is too short to stay unique");
     }
 }

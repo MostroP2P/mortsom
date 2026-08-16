@@ -217,6 +217,17 @@ async fn lost_port_race_retries_with_a_higher_port() {
     assert_eq!(seen.len(), 3, "{seen:?}");
     assert!(seen.windows(2).all(|w| w[1] > w[0]), "{seen:?}");
     assert_eq!(handle.host_port, seen[2]);
+    // Each lost race is cleaned up before the retry: the container name is
+    // the same every time, so a leftover would collide with the next run.
+    let removed = runtime.inner.removed.lock().unwrap().clone();
+    assert_eq!(
+        removed
+            .iter()
+            .filter(|n| *n == &handle.container_name)
+            .count(),
+        2,
+        "{removed:?}"
+    );
 }
 
 #[tokio::test]

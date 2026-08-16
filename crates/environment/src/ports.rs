@@ -26,7 +26,9 @@ mod tests {
         let holder = TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).unwrap();
         let base = holder.local_addr().unwrap().port();
         let next = allocate_port(base).unwrap();
-        assert!(next > base && next < base + PORT_SEARCH_WINDOW, "{next}");
+        // Widened: a base near the top of the range would overflow u16.
+        let ceiling = u32::from(base) + u32::from(PORT_SEARCH_WINDOW);
+        assert!(next > base && u32::from(next) < ceiling, "{next}");
 
         // A port nobody holds is returned as is (retry against races with
         // other tests grabbing ephemeral ports).

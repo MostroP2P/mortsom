@@ -22,6 +22,7 @@ fn observer(scope: ObserverScope) -> RelayObserver {
             log: Mutex::new(Vec::new()),
             seen: Mutex::new(HashSet::new()),
             subscriptions: Mutex::new(Vec::new()),
+            refresh: tokio::sync::Mutex::new(()),
             tx,
         }),
         task: Arc::new(Mutex::new(None)),

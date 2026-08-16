@@ -31,17 +31,18 @@ async fn relay_starts_answers_nostr_and_tears_down() {
     )
     .await
     .expect("relay should become ready");
-    assert!(docker.is_running(&handle.container_name).await.unwrap());
-    assert!(
-        docker
-            .list_names("mortsom-relay-it")
-            .await
-            .unwrap()
-            .contains(&handle.container_name)
-    );
+    // Observed before the teardown and asserted after it: a failed
+    // expectation must not leave a container running on the host.
+    let running = docker.is_running(&handle.container_name).await;
+    let listed = docker.list_names("mortsom-relay-it").await;
 
     let (teardown, logs) = teardown_relay(&docker, &handle, false).await;
 
+    assert!(running.unwrap(), "the relay should have been running");
+    assert!(
+        listed.unwrap().contains(&handle.container_name),
+        "the relay should have been listed"
+    );
     assert!(teardown.removed, "{teardown:?}");
     assert!(teardown.data_removed);
     assert!(!docker.is_running(&handle.container_name).await.unwrap());

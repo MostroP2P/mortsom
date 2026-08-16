@@ -173,6 +173,12 @@ pub async fn start_relay(
                     port = host_port,
                     "lost the host port race; retrying with the next free port"
                 );
+                // `docker run` can create the container and still fail to
+                // publish the port, and the next attempt uses the same name.
+                // Leaving it behind turns a retry into a name conflict.
+                if let Err(e) = runtime.stop_and_remove(&container_name).await {
+                    warn!(container = %container_name, error = %e, "cannot remove the container left by the lost port race");
+                }
                 base = host_port.saturating_add(1);
                 continue;
             }

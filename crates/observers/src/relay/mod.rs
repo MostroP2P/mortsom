@@ -98,6 +98,10 @@ struct Inner {
     log: Mutex<Vec<ObservedEvent>>,
     seen: Mutex<HashSet<String>>,
     subscriptions: Mutex<Vec<SubscriptionId>>,
+    /// Serialises `resubscribe`: the subscription ids are stable, so two
+    /// refreshes running at once would unsubscribe each other's work and
+    /// disagree about what is live.
+    refresh: tokio::sync::Mutex<()>,
     tx: broadcast::Sender<ObservedEvent>,
 }
 
@@ -142,6 +146,7 @@ impl RelayObserver {
             log: Mutex::new(Vec::new()),
             seen: Mutex::new(HashSet::new()),
             subscriptions: Mutex::new(Vec::new()),
+            refresh: tokio::sync::Mutex::new(()),
             tx,
         });
         let observer = Self {
@@ -176,6 +181,7 @@ impl RelayObserver {
                 log: Mutex::new(Vec::new()),
                 seen: Mutex::new(HashSet::new()),
                 subscriptions: Mutex::new(Vec::new()),
+                refresh: tokio::sync::Mutex::new(()),
                 tx,
             }),
             task: Arc::new(Mutex::new(None)),
@@ -208,6 +214,10 @@ impl RelayObserver {
     /// Replaces the current subscriptions with the scope's filter set. Ids
     /// are stable, so nothing accumulates on the relay across refreshes.
     async fn resubscribe(&self) -> Result<(), ObserverError> {
+        // Held for the whole refresh: `add_order` and `add_actor` can be
+        // called concurrently, and interleaving them would leave the relay
+        // subscribed to something nobody is tracking.
+        let _refresh = self.inner.refresh.lock().await;
         let previous: Vec<SubscriptionId> = std::mem::take(&mut *lock(&self.inner.subscriptions));
         for id in &previous {
             if let Err(e) = self.inner.client.unsubscribe(id).await {
@@ -219,12 +229,18 @@ impl RelayObserver {
         let mut current = Vec::with_capacity(filters.len());
         for (index, filter) in filters.into_iter().enumerate() {
             let id = SubscriptionId::new(format!("{SUBSCRIPTION_PREFIX}-{index}"));
-            self.inner
+            if let Err(e) = self
+                .inner
                 .client
                 .subscribe(filter)
                 .with_id(id.clone())
                 .await
-                .map_err(|e| ObserverError::Subscribe(e.to_string()))?;
+            {
+                // Whatever was created before the failure is live on the
+                // relay; forgetting it here would leak it past teardown.
+                *lock(&self.inner.subscriptions) = current;
+                return Err(ObserverError::Subscribe(e.to_string()));
+            }
             current.push(id);
         }
         *lock(&self.inner.subscriptions) = current;

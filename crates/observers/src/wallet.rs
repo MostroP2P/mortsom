@@ -61,6 +61,12 @@ pub enum WalletObserverError {
         /// Wallet label.
         label: String,
     },
+    /// No reader is registered under that label.
+    #[error("no wallet is registered as `{label}`")]
+    UnknownWallet {
+        /// Wallet label asked for.
+        label: String,
+    },
     /// The wallet did not answer or refused.
     #[error("{label}: lookup of {payment_hash} failed: {message}")]
     Lookup {
@@ -139,13 +145,17 @@ impl WalletReader for NwcReader {
             .map_err(|_| "lookup timed out".to_owned())?;
         match response {
             Ok(r) => Ok(Some((
-                r.amount / 1000,
-                r.fees_paid / 1000,
+                sats_from_msats(r.amount),
+                sats_from_msats(r.fees_paid),
                 map_state(r.state),
             ))),
             Err(e) => {
+                // The NIP-47 error code would be the thing to match, but the
+                // wallet client returns an opaque error whose kinds do not
+                // carry it; the code and its prose are both matched here.
                 let text = e.to_string();
-                if text.to_ascii_lowercase().contains("not found") {
+                let lowered = text.to_ascii_lowercase();
+                if lowered.contains("not_found") || lowered.contains("not found") {
                     Ok(None)
                 } else {
                     Err(text)
@@ -153,6 +163,13 @@ impl WalletReader for NwcReader {
             }
         }
     }
+}
+
+/// Sats from millisats, rounded up. Observations feed the spend accounting,
+/// where a truncated fraction would understate what actually left the
+/// wallet; a sub-satoshi remainder counts as a whole satoshi spent.
+fn sats_from_msats(msats: u64) -> u64 {
+    msats.div_ceil(1000)
 }
 
 fn map_state(state: Option<TransactionState>) -> PaymentState {
@@ -192,7 +209,9 @@ impl WalletObserver {
             .iter()
             .find(|(l, _)| l == label)
             .map(|(_, r)| Arc::clone(r))
-            .ok_or_else(|| WalletObserverError::InvalidUri {
+            // A label with no reader is a wiring mistake in the run, not a
+            // malformed URI; saying so points at the right place.
+            .ok_or_else(|| WalletObserverError::UnknownWallet {
                 label: label.to_owned(),
             })
     }
@@ -352,7 +371,7 @@ mod tests {
         ));
 
         let err = observer.observe("carol", "o1", "hash").await.unwrap_err();
-        assert!(matches!(err, WalletObserverError::InvalidUri { .. }));
+        assert!(matches!(err, WalletObserverError::UnknownWallet { .. }));
     }
 
     #[test]
@@ -375,5 +394,21 @@ mod tests {
             PaymentState::Failed
         );
         assert_eq!(map_state(None), PaymentState::Unknown);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod amount_tests {
+    use super::*;
+
+    /// Wallets answer in millisats. Truncating the remainder would report a
+    /// payment as smaller than it was, and the spend accounting believes it.
+    #[test]
+    fn a_sub_satoshi_remainder_counts_as_a_whole_satoshi() {
+        assert_eq!(sats_from_msats(0), 0);
+        assert_eq!(sats_from_msats(1_000), 1);
+        assert_eq!(sats_from_msats(1_001), 2);
+        assert_eq!(sats_from_msats(999), 1);
     }
 }

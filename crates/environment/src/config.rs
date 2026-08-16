@@ -54,7 +54,14 @@ impl RelayConfig {
         if self.docker_image.is_empty() {
             errors.push("relay.docker_image must not be empty".to_owned());
         }
-        if self.container_name_prefix.is_empty()
+        // Docker requires [a-zA-Z0-9][a-zA-Z0-9_.-]*: a name starting with a
+        // separator is refused by the daemon, not by us, and much later.
+        let starts_well = self
+            .container_name_prefix
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphanumeric());
+        if !starts_well
             || !self
                 .container_name_prefix
                 .chars()
@@ -319,5 +326,25 @@ mod tests {
         };
 
         assert!(!format!("{config:?}").contains("secret="));
+    }
+    /// Docker refuses a container name that does not start with a letter or
+    /// a digit, and it refuses it at `docker run`, long after the operator
+    /// could have been told.
+    #[test]
+    fn a_prefix_that_docker_would_refuse_is_rejected() {
+        for prefix in ["-relay", ".relay", "_relay", ""] {
+            let config = RelayConfig {
+                container_name_prefix: prefix.into(),
+                ..RelayConfig::default()
+            };
+            assert!(
+                collect(|e| config.validate(e))
+                    .iter()
+                    .any(|e| e.contains("container_name_prefix")),
+                "`{prefix}` should be rejected"
+            );
+        }
+        let config = RelayConfig::default();
+        assert!(collect(|e| config.validate(e)).is_empty());
     }
 }
