@@ -249,6 +249,99 @@ Three consequences are worth knowing before they look like bugs:
   command that proves the relay and the daemon's use of it is
   `mortsom relay smoke`.
 
+## Troubleshooting
+
+Failures worth naming, because each one looked like a different problem than
+it was. The evidence for all of them is under `artifacts/<run-id>/`.
+
+### The harness
+
+**`doctor` skips the relay, the relay list and the daemon.** Normal between
+runs: `doctor` starts nothing, so there is no relay to ask. `relay smoke`
+proves that chain.
+
+**`wallet …: below the run cap`.** The preflight requires each wallet to hold
+at least `max(max_run_spend_sats, max_order_sats)` — the worst case a run
+could spend, so it cannot stop halfway through a trade. Fund the wallets, or
+lower the caps to what you are willing to risk; lowering the caps lowers the
+real ceiling too, which is the point.
+
+**A run was interrupted and the next one will not start.** An interrupted run
+leaves its relay container, its emulators and its Appium server behind:
+`mortsom cleanup <run-id>` removes all three and says what it could not
+resolve. `mortsom relay down --all` sweeps containers from runs whose ids you
+no longer have.
+
+### The devices
+
+**`The instrumentation process cannot be initialized`** on a session that
+never opens. The UiAutomator2 server installed in the AVD is stale or broken,
+and Appium keeps it because its version matches. Delete the AVDs and let the
+next run recreate them:
+
+```sh
+$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager delete avd -n mortsom-alice
+$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager delete avd -n mortsom-bob
+```
+
+**`emulator … exited during boot: … X connection to :1 broken`.** The
+emulator's own window lost the desktop's display server, which is what
+`android.headless = false` exposes you to. Keep runs headless and mirror them
+instead (see [Watching a run](#watching-a-run)).
+
+**Onboarding times out on an identifier that exists in the app.** Something is
+covering the screen — a permission prompt, a legal notice, a confirmation
+dialog — and Flutter does not expose what is behind it. Open
+`artifacts/<run-id>/<actor>/steps/*-failed-screen.png`: the dialog is in the
+picture. If its control carries no automation id, that is a gap in the app's
+contract, not a harness bug, and it is fixed in the app.
+
+### The daemon
+
+**`daemon-uses-run-relay` fails although the daemon is reachable.** The
+daemon's published relay list (kind-10002) does not name the run relay. It is
+usually a stale event from before you added `ws://localhost:7000` to its
+`settings.toml`: restart the daemon so it republishes.
+
+**`kind-38385 not yet republished`.** The info event goes out on the daemon's
+own interval — `publish_mostro_info_interval`, an hour by default — so a relay
+that lives forty seconds rarely sees one. Lower that interval (and
+`publish_relays_interval`) while testing, or restart the daemon before a
+session. This is a warning, not a gate.
+
+**`Connection reset without closing handshake` in the daemon's log at the end
+of every run.** That is Mortsom destroying its relay. Harmless; the daemon
+reconnects when the next run brings one up. Keeping a public relay in the
+daemon's list as well removes the noise.
+
+### The app checkout
+
+**`Target file "lib/main_mortsom.dart" not found`.** The checkout is on a
+branch without the automation contract. The entry point and the identifiers
+live on the branch the app's PR adds; switch `mobile.source_dir`'s checkout to
+it.
+
+### Mirroring
+
+**`Could not find any ADB device`.** The emulators exist only while a run
+does. Start the mirror before the run and let it wait, as
+[Watching a run](#watching-a-run) shows.
+
+**`NoSuchMethodException: SurfaceControl.createDisplay`.** The scrcpy is older
+than the emulator image. Install a current one; distribution packages are
+years behind.
+
+**`command-chain for … gpu-2404-provider-wrapper not found`** from the scrcpy
+snap. Its interfaces are not connected yet:
+
+```sh
+sudo snap connect scrcpy:gpu-2404 mesa-2404:gpu-2404
+```
+
+**An old `scrcpy` runs after installing a new one.** `/usr/bin` precedes
+`/snap/bin` on most systems, so remove the packaged one and clear the shell's
+cached path with `hash -r`.
+
 ## Safety
 
 Mortsom moves real sats on mainnet through the wallets the operator provides.
