@@ -137,6 +137,46 @@ between runs it has no relay to talk to and skips everything that depends on
 one — that is the normal state, not a problem. The command that does prove the
 relay and the daemon's use of it is `mortsom relay smoke`.
 
+### Watching a run
+
+Runs are headless by default and the emulators exist only while a run does,
+which makes a passing run silent and a failing one hard to picture. To watch
+Alice and Bob work, mirror their emulators. Start this **before** the run, in
+another terminal: it waits for the devices and attaches as they come up.
+
+```sh
+export ADB=$ANDROID_HOME/platform-tools/adb
+booted() { $ADB -s "$1" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r'; }
+
+for s in emulator-5554 emulator-5556; do
+  (
+    $ADB -s "$s" wait-for-device
+    until [ "$(booted "$s")" = 1 ]; do sleep 1; done
+    scrcpy -s "$s" --no-control --window-title "$s"
+  ) &
+done
+```
+
+`--no-control` matters: it makes the mirror read-only. Without it a stray
+click fights the driver mid-scenario and you debug a failure you caused. The
+windows close themselves when the run tears the emulators down.
+
+Turning `android.headless` off is the obvious alternative and usually the
+wrong one. The emulator's own window depends on the desktop's display server
+— under Wayland it goes through Xwayland — and two of them compete for the
+GPU with the app under test; a window server that drops one of them fails the
+run for a reason that has nothing to do with the app. Mirroring costs nothing
+and survives all of that.
+
+Without installing anything, the evidence is written as it happens:
+
+```sh
+watch -n 2 'ls -t artifacts/$(ls -t artifacts | head -1)/*/steps/ | head'
+```
+
+Each step leaves a screenshot and a UI dump, so the newest file says where
+the run is right now.
+
 ### When something fails
 
 Every run writes a directory under `artifacts/<run-id>/`: `timeline.md` (what
