@@ -262,7 +262,8 @@ fn load_run(dir: &Path) -> Result<LoadedRun, String> {
         Ok(text) => serde_json::from_str(&text)
             .map_err(|e| format!("{} is not a timeline: {e}", timeline_path.display()))?,
         // A run that died before writing it compares with empty paths.
-        Err(_) => Vec::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => return Err(format!("{}: {e}", timeline_path.display())),
     };
     Ok(LoadedRun { summary, timeline })
 }
@@ -597,6 +598,20 @@ mod tests {
                 .contains("both runs use profile")
         );
         assert!(compare_runs(dir.path(), "a", "nope", &[]).is_err());
+    }
+
+    #[test]
+    fn missing_timeline_is_empty_but_unreadable_timeline_is_an_error() {
+        let dir = tempfile::tempdir().unwrap();
+        write_run(dir.path(), "a", &summary("a", "mobile-legacy", &[]), "");
+        write_run(dir.path(), "b", &summary("b", "mobile-v2", &[]), "");
+        assert!(compare_runs(dir.path(), "a", "b", &[]).is_ok());
+
+        // A timeline path that exists but cannot be read as a file must not
+        // silently compare as an empty timeline.
+        std::fs::create_dir(dir.path().join("b").join(files::TIMELINE_JSON)).unwrap();
+        let err = compare_runs(dir.path(), "a", "b", &[]).unwrap_err();
+        assert!(err.contains(files::TIMELINE_JSON), "{err}");
     }
 
     #[test]
