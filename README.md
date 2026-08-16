@@ -41,6 +41,52 @@ Secrets (`MORTSOM_*_NWC`, the daemon settings path) are accepted only as `env:`
 references, in every configuration layer including the gitignored
 `mortsom.local.toml` overlay; the loader reports every missing variable at once.
 
+## The relay is Mortsom's, not yours
+
+**Do not start a relay yourself.** Unlike a harness you point at existing
+infrastructure, Mortsom owns its relay: every run creates a `nostr-rs-relay`
+container, uses it, and destroys it when the run ends. There is no
+`mortsom relay up`, and that is deliberate — a relay that outlives a run
+carries state into the next one, and a test that inherits yesterday's events
+is not a test.
+
+What the operator does configure is **the daemon's side**. A relay only
+proves anything if the daemon under test publishes there too, so list it in
+`~/.mostro/settings.toml`:
+
+```toml
+relays = ['ws://localhost:7000', 'wss://relay.mostro.network']
+```
+
+Restart the daemon so it republishes its relay list (kind-10002), then prove
+the whole chain in one command:
+
+```sh
+cargo run -- relay smoke    # start a relay, check the daemon uses it, tear it down
+```
+
+Keeping the public relay in the list is optional. The local one carries the
+run's traffic; the public one keeps orders visible to real clients, which is
+what you want against a daemon other people also use. For a fully isolated
+run, list only the local relay — and expect the daemon to sit without a relay
+between runs.
+
+Three consequences are worth knowing before they look like bugs:
+
+- **`ws://localhost:7000` is Mortsom's port, not a free one.** If something
+  else already listens on 7000, the run allocates the next free port and logs
+  `configured relay port busy; the daemon must be pointed at the allocated
+  port`. A daemon pinned to 7000 would then talk to that other relay while the
+  apps talk to the run relay, and the two sides never meet. Leave the port to
+  Mortsom.
+- **`Connection reset without closing handshake` in the daemon log at the end
+  of a run is expected.** That is Mortsom removing its relay. The daemon
+  reconnects when the next run brings one up.
+- **`mortsom doctor` reports the relay as unreachable when no run is live**,
+  and that is correct: `doctor` only looks, it never starts anything. The
+  command that proves the relay and the daemon's use of it is
+  `mortsom relay smoke`.
+
 ## Safety
 
 Mortsom moves real sats on mainnet through the wallets the operator provides.
