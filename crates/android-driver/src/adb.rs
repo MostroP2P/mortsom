@@ -286,7 +286,7 @@ impl Adb {
         run_ok(
             runner,
             &self.command(&["emu", "avd", "snapshot", "save", name]),
-            INSTALL_TIMEOUT,
+            SNAPSHOT_TIMEOUT,
         )
         .await?;
         Ok(())
@@ -301,7 +301,7 @@ impl Adb {
         run_ok(
             runner,
             &self.command(&["emu", "avd", "snapshot", "load", name]),
-            INSTALL_TIMEOUT,
+            SNAPSHOT_TIMEOUT,
         )
         .await?;
         Ok(())
@@ -476,5 +476,24 @@ mod tests {
             !adb().is_booted(&half).await,
             "boot animation still running"
         );
+    }
+    /// Restoring a snapshot is slower than installing an APK; the deadline
+    /// must be the snapshot one or long restores are cut short.
+    #[tokio::test]
+    async fn snapshot_operations_use_the_snapshot_deadline() {
+        let adb = adb();
+        let runner = FakeRunner::default();
+        runner.script_timeout("adb -s emulator-5556 emu avd snapshot");
+
+        for error in [
+            adb.snapshot_save(&runner, "clean").await.unwrap_err(),
+            adb.snapshot_load(&runner, "clean").await.unwrap_err(),
+        ] {
+            let shown = error.to_string();
+            assert!(
+                shown.contains(&format!("{SNAPSHOT_TIMEOUT:?}")),
+                "{shown} should carry the snapshot deadline"
+            );
+        }
     }
 }

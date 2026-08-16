@@ -230,7 +230,13 @@ async fn version_mismatch_shuts_emulators_down() {
     .await
     .unwrap_err();
 
-    assert!(matches!(err, FarmError::VersionMismatch { .. }));
+    let FarmError::VersionMismatch { alice, bob } = &err else {
+        panic!("{err:?}");
+    };
+    // Two builds can share a version name, so the code must be shown.
+    for shown in [alice, bob] {
+        assert!(shown.contains('('), "{shown} lacks the version code");
+    }
     let kills: Vec<_> = runner
         .calls()
         .into_iter()

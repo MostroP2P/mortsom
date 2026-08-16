@@ -200,7 +200,6 @@ pub async fn ensure_avd(
                     &spec.image,
                     "-d",
                     &spec.device_profile,
-                    "--force",
                 ],
             ),
             AVD_TIMEOUT,
@@ -346,5 +345,27 @@ mod tests {
 
         assert!(matches!(err, AvdError::ImageMissing { .. }));
         assert!(runner.calls().is_empty());
+    }
+    /// An AVD created between the listing and the create call must survive:
+    /// `--force` would overwrite it and take another run's device with it.
+    #[tokio::test]
+    async fn creating_an_avd_never_forces_an_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let runner = FakeRunner::default();
+        runner.script("avdmanager list avd -c", "other\n");
+        let spec = AvdSpec::for_actor(&config(), Actor::Alice);
+
+        ensure_avd(&runner, &AndroidSdk::at("/sdk"), &spec, dir.path(), &|_| {
+            true
+        })
+        .await
+        .unwrap();
+
+        let create = runner
+            .calls()
+            .into_iter()
+            .find(|c| c.contains("create avd"))
+            .unwrap();
+        assert!(!create.contains("--force"), "{create}");
     }
 }

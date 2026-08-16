@@ -185,9 +185,25 @@ impl Emulator {
             process,
             log,
         };
-        emulator.wait_for_boot(runner, boot_timeout).await?;
-        emulator.configure(runner).await?;
+        // A failed startup must not leave the emulator running: the next
+        // run would find a stale device on this serial.
+        if let Err(e) = emulator.wait_for_boot(runner, boot_timeout).await {
+            emulator.kill_after_failed_start().await;
+            return Err(e);
+        }
+        if let Err(e) = emulator.configure(runner).await {
+            emulator.kill_after_failed_start().await;
+            return Err(e);
+        }
         Ok(emulator)
+    }
+
+    /// Best effort teardown of a process that never became usable; the
+    /// startup error is the one worth reporting.
+    async fn kill_after_failed_start(&self) {
+        if let Err(e) = self.process.kill().await {
+            warn!(actor = %self.slot.actor, error = %e, "cannot kill the emulator after a failed start");
+        }
     }
 
     async fn wait_for_boot(
@@ -569,5 +585,11 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, EmulatorError::BootTimeout { .. }));
+        // The emulator that never booted must not outlive the failure.
+        assert_eq!(
+            runner.children_alive(),
+            vec![false],
+            "a failed start leaked the emulator process"
+        );
     }
 }

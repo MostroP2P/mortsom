@@ -353,7 +353,7 @@ mod tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 pub mod tests_support {
     use std::collections::BTreeMap;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use super::*;
 
@@ -365,11 +365,12 @@ pub mod tests_support {
         timeouts: Mutex<Vec<String>>,
         calls: Mutex<Vec<String>>,
         spawned: Mutex<Vec<String>>,
+        children: Mutex<Vec<Arc<Mutex<bool>>>>,
     }
 
     /// A fake child that is alive until killed.
     pub struct FakeChild {
-        alive: Mutex<bool>,
+        alive: Arc<Mutex<bool>>,
     }
 
     impl FakeRunner {
@@ -405,6 +406,17 @@ pub mod tests_support {
         /// Every command run so far (`program-name args`).
         pub fn calls(&self) -> Vec<String> {
             self.calls.lock().unwrap().clone()
+        }
+
+        /// Liveness of every child spawned so far, in spawn order. A child
+        /// left alive after a failed startup is a leaked process.
+        pub fn children_alive(&self) -> Vec<bool> {
+            self.children
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|alive| *alive.lock().unwrap())
+                .collect()
         }
 
         /// Every command spawned so far.
@@ -472,9 +484,9 @@ pub mod tests_support {
             _log_file: Option<&Path>,
         ) -> Result<Box<dyn ChildProcess>, ProcessError> {
             self.spawned.lock().unwrap().push(Self::key(command));
-            Ok(Box::new(FakeChild {
-                alive: Mutex::new(true),
-            }))
+            let alive = Arc::new(Mutex::new(true));
+            self.children.lock().unwrap().push(Arc::clone(&alive));
+            Ok(Box::new(FakeChild { alive }))
         }
     }
 }

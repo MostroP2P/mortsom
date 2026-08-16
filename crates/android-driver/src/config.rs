@@ -118,6 +118,14 @@ impl AndroidConfig {
                 "android.appium_port and android.base_system_port must be non-zero".to_owned(),
             );
         }
+        // Every actor takes one system port; the last one must still fit.
+        let slots = u16::try_from(crate::avd::Actor::ALL.len()).unwrap_or(u16::MAX);
+        if self.base_system_port != 0 && self.base_system_port.checked_add(slots).is_none() {
+            errors.push(format!(
+                "android.base_system_port must leave room for {slots} actor ports below {}",
+                u16::MAX
+            ));
+        }
         if self.emulator_ram_mb < 1024 {
             errors.push("android.emulator_ram_mb must be at least 1024".to_owned());
         }
@@ -265,5 +273,19 @@ mod tests {
         );
         assert_eq!(image_api_level("platforms;android-36"), None);
         assert_eq!(image_api_level("system-images;android-x;a;b"), None);
+    }
+    #[test]
+    fn a_base_system_port_without_room_for_every_actor_is_rejected() {
+        let mut config = valid();
+        config.base_system_port = u16::MAX;
+        assert!(
+            errors_of(&config)
+                .iter()
+                .any(|e| e.contains("base_system_port")),
+            "the last actor port would overflow"
+        );
+
+        config.base_system_port = u16::MAX - u16::try_from(crate::avd::Actor::ALL.len()).unwrap();
+        assert!(errors_of(&config).is_empty(), "{:?}", errors_of(&config));
     }
 }

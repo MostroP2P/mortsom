@@ -279,9 +279,11 @@ async fn install_all(
     if let [alice, bob] = versions.as_slice()
         && alice != bob
     {
+        // Two builds can share a version name and differ in code; the
+        // report must show what actually differs.
         return Err(FarmError::VersionMismatch {
-            alice: alice.version_name.clone(),
-            bob: bob.version_name.clone(),
+            alice: format!("{} ({})", alice.version_name, alice.version_code),
+            bob: format!("{} ({})", bob.version_name, bob.version_code),
         });
     }
     Ok(versions)

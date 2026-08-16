@@ -252,8 +252,16 @@ pub mod tests_support {
                 })
             }
         }
-        async fn wait_gone(&self, _: &str, _: Duration) -> Result<(), AppiumError> {
-            Ok(())
+        async fn wait_gone(&self, id: &str, _: Duration) -> Result<(), AppiumError> {
+            if self.has(id) {
+                Err(AppiumError::WaitTimeout {
+                    accessibility_id: id.into(),
+                    condition: "still present",
+                    timeout: Duration::ZERO,
+                })
+            } else {
+                Ok(())
+            }
         }
         async fn tap(&self, id: &str) -> Result<(), AppiumError> {
             self.calls.lock().unwrap().push(format!("tap {id}"));
