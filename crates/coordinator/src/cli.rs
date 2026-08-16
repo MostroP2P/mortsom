@@ -159,6 +159,16 @@ pub enum RelayCommand {
     },
 }
 
+/// Whether terminal styling is welcome: a real terminal, no `NO_COLOR`, no
+/// dumb terminal. Redirected output stays plain so logs, pipes and CI
+/// artifacts read exactly as they always did.
+fn use_color() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+        && std::env::var_os("NO_COLOR").is_none()
+        && std::env::var("TERM").is_ok_and(|t| t != "dumb")
+}
+
 /// Runs the parsed command and returns the process exit code.
 pub async fn run(cli: Cli) -> ExitCode {
     // Stderr immediately; commands that own a run directory attach the
@@ -202,7 +212,7 @@ pub async fn run(cli: Cli) -> ExitCode {
                     }
                 }
             } else {
-                print!("{}", report.render());
+                print!("{}", report.render_with_color(use_color()));
             }
             if report.is_healthy() {
                 ExitCode::SUCCESS
@@ -397,7 +407,7 @@ async fn run_relay(config_path: &std::path::Path, command: RelayCommand) -> Exit
             .await
             {
                 Ok(summary) => {
-                    print!("{}", summary.checks.render());
+                    print!("{}", summary.checks.render_with_color(use_color()));
                     println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);
                     if summary.passed {
                         ExitCode::SUCCESS
@@ -487,7 +497,7 @@ async fn run_device(config_path: &std::path::Path, command: DeviceCommand) -> Ex
             .await
             {
                 Ok(summary) => {
-                    print!("{}", summary.checks.render());
+                    print!("{}", summary.checks.render_with_color(use_color()));
                     println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);
                     if summary.passed {
                         ExitCode::SUCCESS
@@ -543,7 +553,7 @@ async fn run_app(config_path: &std::path::Path, command: AppCommand) -> ExitCode
             };
             match run_app_setup(&config, &AppSetupOptions::default(), &deps).await {
                 Ok(summary) => {
-                    print!("{}", summary.checks.render());
+                    print!("{}", summary.checks.render_with_color(use_color()));
                     println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);
                     if summary.passed {
                         ExitCode::SUCCESS
@@ -649,7 +659,7 @@ async fn run_command(
     };
     match run_scenarios(&config, &options, &deps).await {
         Ok(summary) => {
-            print!("{}", summary.checks.render());
+            print!("{}", summary.checks.render_with_color(use_color()));
             for result in &summary.results {
                 println!(
                     "{:<28} {:?} (attempts {})",
