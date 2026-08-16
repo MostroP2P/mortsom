@@ -335,14 +335,20 @@ pub async fn pay_hold_invoice(
     match observation {
         Ok(obs) if obs.state == PaymentState::Settled => {
             let mut budget = ctx.budget.lock().unwrap_or_else(|p| p.into_inner());
-            budget
-                .commit(
-                    &reservation,
-                    obs.amount_sats,
-                    obs.fee_sats,
-                    Some(hash.clone()),
-                )
-                .map_err(|e| ScenarioError::environment(e.to_string()))?;
+            let committed = commit_settlement(&mut budget, &reservation, &obs, &hash);
+            drop(budget);
+            if let Err(e) = committed {
+                ctx.timeline.push(
+                    TimelineKind::Wallet,
+                    Some(actor.as_str()),
+                    format!(
+                        "settled {} sats (fee {}) for order {} but the budget refused it: {e}",
+                        obs.amount_sats, obs.fee_sats, order.id
+                    ),
+                    Some(hash),
+                );
+                return Err(ScenarioError::environment(e.to_string()));
+            }
             ctx.timeline.push_at(
                 obs.observed_at * 1000,
                 TimelineKind::Wallet,
@@ -491,6 +497,30 @@ pub fn mark_resolved(ctx: &Context, order: &OrderReference) {
     ctx.cleanup.resolved(order);
 }
 
+/// Records a settled payment against its reservation. The sats already
+/// left the wallet, so a refused commit (an overspend above the reserved
+/// amount) must not leave the entry `Reserved`: it is kept as in flight,
+/// which still counts towards the run spend, and the refusal propagates.
+fn commit_settlement(
+    budget: &mut crate::budget::Budget,
+    reservation: &crate::budget::Reservation,
+    observation: &mortsom_observers::wallet::PaymentObservation,
+    hash: &str,
+) -> Result<(), crate::budget::BudgetError> {
+    let Err(refused) = budget.commit(
+        reservation,
+        observation.amount_sats,
+        observation.fee_sats,
+        Some(hash.to_owned()),
+    ) else {
+        return Ok(());
+    };
+    // A failure here means the reservation itself is unknown; the refusal
+    // above is the one worth reporting.
+    let _ = budget.mark_in_flight(reservation, Some(hash.to_owned()));
+    Err(refused)
+}
+
 fn release_quietly(ctx: &Context, reservation: &crate::budget::Reservation) {
     let mut budget = ctx.budget.lock().unwrap_or_else(|p| p.into_inner());
     if let Err(e) = budget.release(reservation) {
@@ -613,5 +643,35 @@ mod tests {
             ctx.budget.lock().unwrap().ledger().is_empty(),
             "nothing reserved without clearance"
         );
+    }
+    /// The sats left the wallet even when the ledger refuses the amount, so
+    /// the reservation may not stay `Reserved` and drop out of the spend.
+    #[test]
+    fn a_refused_settlement_is_still_accounted_for() {
+        use crate::budget::{Budget, EntryStatus, SpendCaps};
+        use mortsom_observers::wallet::{PaymentObservation, PaymentState};
+
+        let mut budget = Budget::new(SpendCaps::new(100, 100).unwrap());
+        let reservation = budget.reserve("o1", 10).unwrap();
+        let observation = PaymentObservation {
+            wallet: "alice".into(),
+            order_id: "o1".into(),
+            payment_hash: "aa".into(),
+            amount_sats: 50,
+            fee_sats: 1,
+            state: PaymentState::Settled,
+            observed_at: 1,
+        };
+
+        let refused = commit_settlement(&mut budget, &reservation, &observation, "aa").unwrap_err();
+
+        assert!(matches!(
+            refused,
+            crate::budget::BudgetError::Overspend { .. }
+        ));
+        let entry = &budget.ledger()[0];
+        assert_eq!(entry.status, EntryStatus::InFlight, "{entry:?}");
+        assert_eq!(entry.payment_hash.as_deref(), Some("aa"));
+        assert!(budget.totals().reserved_sats > 0, "still counted as spend");
     }
 }

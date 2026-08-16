@@ -166,10 +166,42 @@ impl Context {
 
     /// Fails unless value-moving steps were authorized.
     pub fn require_mainnet(&self) -> Result<MainnetClearance, ScenarioError> {
-        self.mainnet.ok_or_else(|| {
+        let clearance = self.mainnet.ok_or_else(|| {
             ScenarioError::environment(
                 "value-moving step without mainnet clearance (run.allow_mainnet and MORTSOM_MAINNET_CONFIRM)",
             )
-        })
+        })?;
+        // A clearance authorizes the lane it was granted for; carrying one
+        // over into another lane would spend under the wrong approval.
+        if clearance.lane != self.env.lane {
+            return Err(ScenarioError::environment(format!(
+                "mainnet clearance was granted for the {} lane but the run is on {}",
+                clearance.lane, self.env.lane
+            )));
+        }
+        Ok(clearance)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// A clearance approves one lane. Reusing it on another lane would
+    /// spend real sats under an approval that was never given for it.
+    #[test]
+    fn a_clearance_from_another_lane_does_not_authorize_this_run() {
+        let mut ctx =
+            crate::test_support::context(std::sync::Arc::new(crate::test_support::StateAdapter(
+                std::sync::Mutex::new(mortsom_app_contract::OrderState::Pending),
+            )));
+        ctx.mainnet = Some(MainnetClearance { lane: Lane::Canary });
+
+        let err = ctx.require_mainnet().unwrap_err();
+        assert!(err.message.contains("lane"), "{err}");
+
+        ctx.env.lane = Lane::Canary;
+        assert!(ctx.require_mainnet().is_ok());
     }
 }

@@ -225,12 +225,23 @@ pub async fn rotate_device(
     );
     let in_landscape = wait_app_state(ctx, actor, order, expected).await;
     let back = session.ui.set_orientation(false).await;
-    ctx.timeline.push(
-        TimelineKind::Step,
-        Some(actor.as_str()),
-        "rotated back to portrait",
-        None,
-    );
+    // The restore is recorded for what it was, and it is recorded even when
+    // the landscape assertion is the error the caller sees: the next
+    // scenario would otherwise inherit a rotated device with no trace of it.
+    match &back {
+        Ok(()) => ctx.timeline.push(
+            TimelineKind::Step,
+            Some(actor.as_str()),
+            "rotated back to portrait",
+            None,
+        ),
+        Err(e) => ctx.timeline.push(
+            TimelineKind::Step,
+            Some(actor.as_str()),
+            format!("could not rotate back to portrait: {e}"),
+            None,
+        ),
+    }
     in_landscape?;
     back.map_err(infra("rotate to portrait"))?;
     wait_app_state(ctx, actor, order, expected)
@@ -551,5 +562,146 @@ mod tests {
         let calls = relay.replayed.lock().unwrap();
         assert_eq!(calls.len(), 2);
         assert!(calls[1][0].contains("\"pending\""), "stale = oldest event");
+    }
+    /// A device left in landscape poisons the next scenario, so a failed
+    /// restore is always visible in the timeline.
+    #[tokio::test]
+    async fn a_failed_rotation_restore_is_recorded() {
+        struct StuckRotation;
+        #[async_trait::async_trait]
+        impl mortsom_android_driver::ui::UiSession for StuckRotation {
+            /// Rotating away works; coming back does not.
+            async fn set_orientation(
+                &self,
+                landscape: bool,
+            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                if landscape {
+                    return Ok(());
+                }
+                Err(mortsom_android_driver::appium::AppiumError::NotReady {
+                    url: "x".into(),
+                    timeout: Duration::ZERO,
+                })
+            }
+            async fn exists(
+                &self,
+                _: &str,
+            ) -> Result<bool, mortsom_android_driver::appium::AppiumError> {
+                Ok(false)
+            }
+            async fn wait_for(
+                &self,
+                _: &str,
+                _: Duration,
+            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
+            async fn wait_gone(
+                &self,
+                _: &str,
+                _: Duration,
+            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
+            async fn tap(
+                &self,
+                _: &str,
+            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
+            async fn type_text(
+                &self,
+                _: &str,
+                _: &str,
+            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
+            async fn text_of(
+                &self,
+                _: &str,
+            ) -> Result<String, mortsom_android_driver::appium::AppiumError> {
+                Ok(String::new())
+            }
+            async fn is_enabled(
+                &self,
+                _: &str,
+            ) -> Result<bool, mortsom_android_driver::appium::AppiumError> {
+                Ok(true)
+            }
+            async fn label_of(
+                &self,
+                _: &str,
+            ) -> Result<String, mortsom_android_driver::appium::AppiumError> {
+                Ok(String::new())
+            }
+            async fn screenshot_png(
+                &self,
+            ) -> Result<Vec<u8>, mortsom_android_driver::appium::AppiumError> {
+                Ok(vec![])
+            }
+            async fn page_source(
+                &self,
+            ) -> Result<String, mortsom_android_driver::appium::AppiumError> {
+                Ok(String::new())
+            }
+            async fn background(
+                &self,
+                _: u64,
+            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
+            async fn terminate_app(
+                &self,
+            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
+            async fn activate_app(
+                &self,
+            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
+            async fn clear_app(&self) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
+            async fn set_connectivity(
+                &self,
+                _: bool,
+            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
+            async fn end(&self) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
+        }
+
+        let adapter: Arc<dyn mortsom_app_contract::AppAdapter> =
+            Arc::new(StateAdapter(Mutex::new(OrderState::Active)));
+        let mut ctx = context(adapter);
+        for session in &mut ctx.actors {
+            session.ui = Arc::new(StuckRotation);
+        }
+        let order = OrderReference::new("o1");
+
+        let err = rotate_device(&ctx, Actor::Alice, &order, OrderState::Active)
+            .await
+            .unwrap_err();
+
+        assert!(err.message.contains("rotate"), "{err}");
+        let summaries: Vec<String> = ctx
+            .timeline
+            .entries()
+            .into_iter()
+            .map(|e| e.summary)
+            .collect();
+        assert!(
+            summaries
+                .iter()
+                .any(|s| s.contains("could not rotate back to portrait")),
+            "{summaries:?}"
+        );
+        assert!(
+            !summaries.iter().any(|s| s == "rotated back to portrait"),
+            "a failed restore must not be reported as done: {summaries:?}"
+        );
     }
 }

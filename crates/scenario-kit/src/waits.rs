@@ -13,14 +13,39 @@ where
 {
     let deadline = tokio::time::Instant::now() + timeout;
     loop {
-        if let Some(value) = probe().await {
-            return Some(value);
+        match probe_before(deadline, probe()).await {
+            Probe::Found(value) => return Some(value),
+            Probe::Deadline => return None,
+            Probe::Absent => {}
         }
         let now = tokio::time::Instant::now();
         if now >= deadline {
             return None;
         }
         tokio::time::sleep(interval.min(deadline - now)).await;
+    }
+}
+
+/// Outcome of one probe attempt bounded by the deadline.
+enum Probe<T> {
+    Found(T),
+    Absent,
+    Deadline,
+}
+
+/// Races one probe against the deadline: a probe that never answers must
+/// not push the caller past its timeout, and its late answer is discarded.
+async fn probe_before<T, Fut>(deadline: tokio::time::Instant, probe: Fut) -> Probe<T>
+where
+    Fut: Future<Output = Option<T>>,
+{
+    tokio::select! {
+        biased;
+        answer = probe => match answer {
+            Some(value) => Probe::Found(value),
+            None => Probe::Absent,
+        },
+        () = tokio::time::sleep_until(deadline) => Probe::Deadline,
     }
 }
 
@@ -37,8 +62,12 @@ where
 {
     let deadline = tokio::time::Instant::now() + window;
     loop {
-        if let Some(value) = probe().await {
-            return Some(value);
+        match probe_before(deadline, probe()).await {
+            Probe::Found(value) => return Some(value),
+            // A probe still running when the window closes proves nothing
+            // appeared within it, which is what this function asserts.
+            Probe::Deadline => return None,
+            Probe::Absent => {}
         }
         let now = tokio::time::Instant::now();
         if now >= deadline {
@@ -88,5 +117,37 @@ mod tests {
         )
         .await;
         assert_eq!(seen, Some(7));
+    }
+    /// A probe that never answers (a wedged Appium call) must not push the
+    /// caller past its own deadline.
+    #[tokio::test]
+    async fn a_probe_that_never_answers_still_ends_at_the_deadline() {
+        let started = tokio::time::Instant::now();
+
+        let found: Option<()> = wait_until(
+            Duration::from_millis(50),
+            Duration::from_millis(5),
+            || async {
+                std::future::pending::<()>().await;
+                unreachable!()
+            },
+        )
+        .await;
+        let absent: Option<()> = stays_absent(
+            Duration::from_millis(50),
+            Duration::from_millis(5),
+            || async {
+                std::future::pending::<()>().await;
+                unreachable!()
+            },
+        )
+        .await;
+
+        assert!(found.is_none());
+        assert!(absent.is_none());
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "both waits returned at their deadlines"
+        );
     }
 }

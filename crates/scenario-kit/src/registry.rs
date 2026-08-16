@@ -48,7 +48,11 @@ pub fn find(name: &str) -> Option<&'static ScenarioDef> {
 pub fn select(names: &[String], tag: Option<&str>) -> Result<Vec<&'static ScenarioDef>, String> {
     let mut selected = Vec::new();
     for name in names {
-        selected.push(find(name).ok_or_else(|| format!("unknown scenario `{name}`"))?);
+        let def = find(name).ok_or_else(|| format!("unknown scenario `{name}`"))?;
+        // A name repeated on the command line runs the scenario once.
+        if !selected.iter().any(|d: &&ScenarioDef| d.name == def.name) {
+            selected.push(def);
+        }
     }
     if let Some(tag) = tag {
         let tagged: Vec<_> = all()
@@ -82,6 +86,7 @@ pub fn validate() -> Result<(), String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -110,5 +115,13 @@ mod tests {
         let by_tag = select(&[], Some("kit-selftest")).unwrap_or_default();
         assert_eq!(by_tag.len(), 1);
         assert!(validate().is_ok());
+    }
+    #[test]
+    fn a_name_repeated_on_the_command_line_runs_once() {
+        let names = vec!["zz_kit_selftest".to_owned(), "zz_kit_selftest".to_owned()];
+
+        let selected = select(&names, None).unwrap();
+
+        assert_eq!(selected.len(), 1, "a scenario must not run twice");
     }
 }

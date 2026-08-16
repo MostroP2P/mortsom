@@ -83,21 +83,34 @@ impl Timeline {
 
     /// Markdown rendering.
     pub fn render(&self, title: &str) -> String {
+        let heading = title.replace(['\r', '\n'], " ");
         let mut out = format!(
-            "# {title}\n\n| time (unix ms) | kind | actor | event | artifact |\n|---|---|---|---|---|\n"
+            "# {heading}\n\n| time (unix ms) | kind | actor | event | artifact |\n|---|---|---|---|---|\n"
         );
         for e in self.entries() {
             out.push_str(&format!(
                 "| {} | {:?} | {} | {} | {} |\n",
                 e.at_ms,
                 e.kind,
-                e.actor.as_deref().unwrap_or("-"),
-                e.summary.replace('|', "\\|"),
-                e.artifact.as_deref().unwrap_or("-")
+                cell(e.actor.as_deref()),
+                cell(Some(&e.summary)),
+                cell(e.artifact.as_deref())
             ));
         }
         out
     }
+}
+
+/// One Markdown table cell. Text comes from apps, relays and wallets, so a
+/// pipe or a line break in it would otherwise break the table apart.
+fn cell(value: Option<&str>) -> String {
+    let Some(value) = value.filter(|v| !v.is_empty()) else {
+        return "-".to_owned();
+    };
+    value
+        .replace('\\', "\\\\")
+        .replace('|', "\\|")
+        .replace(['\r', '\n'], " ")
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -113,6 +126,7 @@ pub fn now_ms() -> u64 {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -132,5 +146,34 @@ mod tests {
         let md = t.render("Run");
         assert!(md.contains("| 10 | Step | alice | create\\|order | - |"));
         assert!(md.contains("| 20 | RelayEvent | - | kind 38383 pending | ev1 |"));
+    }
+    /// Summaries, actor names and artifact ids come from apps, relays and
+    /// wallets; none of them may break the table apart.
+    #[test]
+    fn hostile_text_cannot_break_the_table() {
+        let t = Timeline::default();
+        t.push_at(
+            10,
+            TimelineKind::Step,
+            Some("ali|ce"),
+            "order o1\nsecond line | pipe \\ backslash",
+            Some("art|ifact\nid".into()),
+        );
+
+        let md = t.render("Run | with\na break");
+
+        let rows: Vec<&str> = md.lines().filter(|l| l.starts_with("| 10 ")).collect();
+        assert_eq!(rows.len(), 1, "one entry is one row: {md}");
+        assert_eq!(
+            rows[0].matches(" | ").count(),
+            4,
+            "five columns, four separators: {}",
+            rows[0]
+        );
+        assert_eq!(
+            md.lines().next().unwrap(),
+            "# Run | with a break",
+            "the heading stays on one line"
+        );
     }
 }
