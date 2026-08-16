@@ -42,13 +42,39 @@ pub enum EmulatorError {
         timeout: Duration,
     },
     /// The emulator process exited before boot completed.
-    #[error("emulator {serial} exited during boot; see {log}")]
+    #[error("emulator {serial} exited during boot: {reason} (full log: {log})")]
     Exited {
         /// Device serial.
         serial: String,
         /// Log path.
         log: PathBuf,
+        /// The end of that log, where the reason usually is.
+        reason: String,
     },
+}
+
+/// How many trailing log lines an exit failure carries.
+const LOG_TAIL_LINES: usize = 3;
+
+/// The end of an emulator log, joined into one line. An emulator that dies
+/// during boot explains itself there -- a missing KVM device, a window
+/// server that dropped it -- and the operator should read that in the
+/// failure instead of opening a file to find it.
+pub fn last_log_lines(log: &Path) -> String {
+    let Ok(text) = std::fs::read_to_string(log) else {
+        return "the emulator log could not be read".to_owned();
+    };
+    let tail: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .rev()
+        .take(LOG_TAIL_LINES)
+        .collect();
+    if tail.is_empty() {
+        return "the emulator log is empty".to_owned();
+    }
+    tail.into_iter().rev().collect::<Vec<_>>().join(" | ")
 }
 
 /// Ports and identity of one actor's emulator.
@@ -221,6 +247,7 @@ impl Emulator {
                 return Err(EmulatorError::Exited {
                     serial: self.slot.serial.clone(),
                     log: self.log.clone(),
+                    reason: last_log_lines(&self.log),
                 });
             }
             if tokio::time::Instant::now() >= deadline {
@@ -591,5 +618,29 @@ mod tests {
             vec![false],
             "a failed start leaked the emulator process"
         );
+    }
+    /// An emulator that dies during boot says why in its log, and the
+    /// operator should not have to open a file to learn that the window
+    /// server dropped it.
+    #[test]
+    fn the_boot_failure_carries_the_end_of_the_emulator_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("emulator-alice.log");
+        std::fs::write(
+            &log,
+            "INFO | booting\nINFO | Created extended window\nX connection to :1 broken\n",
+        )
+        .unwrap();
+
+        let error = EmulatorError::Exited {
+            serial: "emulator-5554".into(),
+            log: log.clone(),
+            reason: last_log_lines(&log),
+        };
+
+        let shown = error.to_string();
+        assert!(shown.contains("X connection to :1 broken"), "{shown}");
+        assert!(shown.contains("emulator-5554"), "{shown}");
+        assert!(shown.contains("emulator-alice.log"), "{shown}");
     }
 }
