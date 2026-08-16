@@ -8,11 +8,17 @@ use std::path::{Path, PathBuf};
 use mortsom_android_driver::adb::Adb;
 use mortsom_android_driver::avd::Actor;
 use mortsom_android_driver::emulator::DeviceSlot;
-use mortsom_android_driver::process::CommandRunner;
+use mortsom_android_driver::process::{CommandRunner, run_ok};
 use mortsom_android_driver::sdk::AndroidSdk;
+use mortsom_android_driver::webdriver::server_ready;
 use mortsom_common::RunId;
 use mortsom_environment::docker::ContainerRuntime;
 use mortsom_scenario_kit::cleanup::CleanupReport;
+
+/// How long the orphan probe waits for an answer on the Appium port.
+const APPIUM_PROBE: std::time::Duration = std::time::Duration::from_secs(2);
+/// Deadline for the command that stops it.
+const APPIUM_KILL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -21,6 +27,17 @@ use crate::config::Config;
 
 /// File the command writes into the run directory when it exists.
 pub const CLEANUP_COMMAND_FILE: &str = "cleanup-command.json";
+
+/// An Appium server found still listening on the configured port.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AppiumItem {
+    /// Port it was answering on.
+    pub port: u16,
+    /// Whether it is gone now.
+    pub stopped: bool,
+    /// Why it could not be stopped.
+    pub error: Option<String>,
+}
 
 /// What happened to one relay container.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,6 +101,8 @@ pub struct CleanupRunSummary {
     pub containers: Vec<ContainerItem>,
     /// Emulator slots.
     pub emulators: Vec<EmulatorItem>,
+    /// The Appium server a crashed run left listening, if any.
+    pub appium: Option<AppiumItem>,
     /// True when nothing of this run is known to remain on the host and no
     /// order is unresolved.
     pub clean: bool,
@@ -118,6 +137,17 @@ impl CleanupRunSummary {
                     c.name
                 )),
             }
+        }
+        match &self.appium {
+            None => out.push_str("  appium server: none left behind\n"),
+            Some(a) if a.stopped => {
+                out.push_str(&format!("  appium server on port {}: stopped\n", a.port))
+            }
+            Some(a) => out.push_str(&format!(
+                "  appium server on port {}: NOT stopped ({})\n",
+                a.port,
+                a.error.as_deref().unwrap_or("still answering")
+            )),
         }
         for e in &self.emulators {
             let detail = match (&e.avd_name, &e.error) {
@@ -161,6 +191,10 @@ pub async fn cleanup_run(
     let (cleanup_report_found, unresolved_orders) = read_unresolved(&run_dir);
     let containers = remove_containers(deps.docker, config, run_id).await;
     let emulators = shut_down_emulators(deps, config).await;
+    // Mortsom starts the Appium server and stops it on teardown; a run that
+    // died before teardown leaves it holding the port, and the next run
+    // cannot start its own.
+    let appium = stop_orphan_appium(deps.runner, config.android.appium_port).await;
     // Orders count as verified only when the run's own sweep reported them;
     // a run that died before its sweep leaves them unknown, not clean.
     let clean = cleanup_report_found
@@ -168,7 +202,8 @@ pub async fn cleanup_run(
         && containers.iter().all(|c| c.removed)
         && emulators
             .iter()
-            .all(|e| !matches!(e.action, EmulatorAction::Failed | EmulatorAction::NoSdk));
+            .all(|e| !matches!(e.action, EmulatorAction::Failed | EmulatorAction::NoSdk))
+        && appium.as_ref().is_none_or(|a| a.stopped);
     let summary = CleanupRunSummary {
         run_id: run_id.to_owned(),
         run_dir_found,
@@ -176,6 +211,7 @@ pub async fn cleanup_run(
         unresolved_orders,
         containers,
         emulators,
+        appium,
         clean,
     };
     if run_dir_found {
@@ -232,6 +268,38 @@ async fn remove_containers(
         });
     }
     items
+}
+
+/// The command that stops an Appium server Mortsom started: it matches the
+/// very argument list [`AppiumServer::start`] uses, so nothing else on the
+/// host is a candidate.
+fn appium_kill_command(port: u16) -> mortsom_android_driver::process::Command {
+    mortsom_android_driver::process::Command::new(
+        std::path::Path::new("pkill"),
+        &["-f", &format!("appium --address 127.0.0.1 --port {port}")],
+    )
+}
+
+/// Stops an Appium server left listening on `port`, if one is there.
+///
+/// Returns `None` when the port is quiet, which is the normal case: only a
+/// run that died before teardown leaves one.
+async fn stop_orphan_appium(runner: &dyn CommandRunner, port: u16) -> Option<AppiumItem> {
+    let base = format!("http://127.0.0.1:{port}");
+    if !server_ready(&base, APPIUM_PROBE).await {
+        return None;
+    }
+    let killed = run_ok(runner, &appium_kill_command(port), APPIUM_KILL_TIMEOUT).await;
+    let still_there = server_ready(&base, APPIUM_PROBE).await;
+    Some(AppiumItem {
+        port,
+        stopped: !still_there,
+        error: match (killed, still_there) {
+            (_, false) => None,
+            (Err(e), true) => Some(e.to_string()),
+            (Ok(_), true) => Some("still answering after being asked to stop".to_owned()),
+        },
+    })
 }
 
 async fn shut_down_emulators(deps: &CleanupDeps<'_>, config: &Config) -> Vec<EmulatorItem> {

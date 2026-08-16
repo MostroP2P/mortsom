@@ -256,3 +256,31 @@ async fn an_unusable_adb_is_a_failure_not_an_absent_emulator() {
     assert_eq!(summary.emulators[0].action, EmulatorAction::Failed);
     assert!(!summary.clean);
 }
+
+/// Mortsom starts the Appium server, so cleaning up after a run that died
+/// must stop it: the next run cannot take a port someone else still holds.
+#[test]
+fn the_kill_command_matches_only_the_server_mortsom_starts() {
+    let command = appium_kill_command(4723);
+
+    let line = format!("{} {}", command.program.display(), command.args.join(" "));
+    assert!(line.starts_with("pkill -f"), "{line}");
+    assert!(
+        line.contains("appium --address 127.0.0.1 --port 4723"),
+        "an unrelated process must not match: {line}"
+    );
+}
+
+/// A quiet port is the normal case and says so, rather than reporting a
+/// server that was never there.
+#[tokio::test]
+async fn a_quiet_port_leaves_nothing_to_report() {
+    let runner = FakeRunner::default();
+    // Port 1 is privileged and unused; nothing answers there.
+    assert!(stop_orphan_appium(&runner, 1).await.is_none());
+    assert!(
+        runner.calls().is_empty(),
+        "nothing is killed when nothing is listening: {:?}",
+        runner.calls()
+    );
+}
