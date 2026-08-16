@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use thiserror::Error;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::process::{ChildProcess, Command, CommandRunner, ProcessError};
 use crate::webdriver::{Element, Locator, Session, WebDriverError, server_ready};
@@ -400,10 +400,31 @@ impl AppiumSession {
     }
 
     /// Clears the app's data (`mobile: clearApp`), leaving it stopped.
+    ///
+    /// Clearing also revokes the runtime permissions the install granted, so
+    /// they are granted again: otherwise the next launch opens on a system
+    /// permission dialog covering the app, and every wait for a screen the
+    /// app never got to show times out.
     pub async fn clear_app(&self) -> Result<(), AppiumError> {
         self.session
             .execute("mobile: clearApp", vec![json!({ "appId": self.package })])
             .await?;
+        if let Err(e) = self
+            .session
+            .execute(
+                "mobile: changePermissions",
+                vec![json!({
+                    "appPackage": self.package,
+                    "permissions": "all",
+                    "action": "grant",
+                })],
+            )
+            .await
+        {
+            // An app with no runtime permissions, or a driver without the
+            // command, must not fail the clear itself.
+            warn!(error = %e, "cannot re-grant runtime permissions after clearing the app");
+        }
         Ok(())
     }
 
@@ -571,6 +592,17 @@ mod tests {
         ));
         s.relaunch().await.unwrap();
         s.clear_app().await.unwrap();
+        // Clearing revokes what the install granted; the harness grants it
+        // back or the next launch opens on a permission dialog.
+        assert!(
+            server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .iter()
+                .any(|r| String::from_utf8_lossy(&r.body).contains("changePermissions")),
+            "clearing the app must re-grant its runtime permissions"
+        );
         s.end().await.unwrap();
 
         let err = s
