@@ -37,7 +37,12 @@ PR #650); the pieces are:
    true))`), so they surface as Android `resource-id`s.
 2. `lib/main_mortsom.dart` + `--dart-define=MORTSOM_TEST_ENV=true`: arms the
    test environment, seeds `MORTSOM_RELAYS`, disables the production relay
-   fallback, allows `ws://`, and shows the `env.marker` banner.
+   fallback, allows `ws://`, and shows the `env.marker` banner. It also
+   applies `MOSTRO_PUB_KEY` as the active node before the relay pool starts,
+   so the first subscription already targets the daemon under test —
+   `configure_node_and_relay` then finds the node already selected and skips
+   the dialog. `mortsom.toml` passes that define through `mobile.dart_defines`
+   and needs no change.
 3. `order.status` exposes the machine name of `TradeStatus` (kebab-case) as
    its accessibility label; `keys.public_key`, `settings.mostro_node.pubkey`,
    `wallet.connection`, `pay.invoice.text` and `invoice.nwc.text` expose
