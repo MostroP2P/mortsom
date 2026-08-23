@@ -315,12 +315,14 @@ fn app_with_orders() -> FakeUi {
     );
     ui.on_tap(Ids::TRADE_RELEASE, &[Ids::TRADE_RELEASE_CONFIRM]);
     ui.on_tap(Ids::TRADE_CANCEL, &[Ids::TRADE_CANCEL_CONFIRM]);
-    ui.on_tap(Ids::ORDER_BOOK_TAB_SELL, &["order.book.item.o1"]);
+    // A sell order is listed on the "Buy BTC" tab: the taker buys.
+    ui.on_tap(Ids::ORDER_BOOK_TAB_BUY, &["order.book.item.o1"]);
     ui.on_tap("order.book.item.o1", &[Ids::ORDER_TAKE_CONFIRM]);
     ui.on_tap(Ids::ORDER_TAKE_CONFIRM, &[Ids::ORDER_STATUS]);
     ui.present(&[
         Ids::NAV_TRADES,
         Ids::NAV_ORDER_BOOK,
+        Ids::ORDER_BOOK_TAB_BUY,
         Ids::ORDER_BOOK_TAB_SELL,
     ]);
     ui.label(Ids::ORDER_STATUS, "pending");
@@ -398,7 +400,9 @@ async fn trade_actions_drive_the_expected_controls_and_never_record_invoices() {
     assert!(!format!("{handoff:?}").contains("secretinvoice"));
     let calls = ui.calls();
     for expected in [
-        "tap order.book.tab.sell",
+        // A sell order is taken from the "Buy BTC" tab, which is the one
+        // that lists it.
+        "tap order.book.tab.buy",
         "tap order.book.item.o1",
         "tap order.take.confirm",
         "tap trade.payInvoice",

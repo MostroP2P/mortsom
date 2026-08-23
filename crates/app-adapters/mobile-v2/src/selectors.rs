@@ -54,6 +54,7 @@ impl Ids {
     pub const ORDER_ADD_BUY: &'static str = "order.add.buy";
     pub const ORDER_ADD_SELL: &'static str = "order.add.sell";
     pub const ORDER_CREATE_CURRENCY: &'static str = "order.create.currency";
+    pub const ORDER_CREATE_CURRENCY_SEARCH: &'static str = "order.create.currency.search";
     pub const ORDER_CREATE_FIAT_AMOUNT: &'static str = "order.create.fiat_amount";
     pub const ORDER_CREATE_PAYMENT_METHOD: &'static str = "order.create.payment_method";
     pub const ORDER_CREATE_PRICE_TYPE: &'static str = "order.create.price_type";
@@ -61,8 +62,9 @@ impl Ids {
     pub const ORDER_CREATE_SUBMIT: &'static str = "order.create.submit";
     pub const ORDER_CREATE_CANCEL: &'static str = "order.create.cancel";
     pub const ORDER_CONFIRM_HOME: &'static str = "order.confirm.home";
-    // Take screen (v2 asks the amount on the same screen).
+    // Take screen (v2 asks the amount in a dialog, for range orders only).
     pub const ORDER_TAKE_AMOUNT: &'static str = "order.take.amount";
+    pub const ORDER_TAKE_AMOUNT_CONFIRM: &'static str = "order.take.amount.confirm";
     pub const ORDER_TAKE_CONFIRM: &'static str = "order.take.confirm";
     pub const ORDER_TAKE_CLOSE: &'static str = "order.take.close";
     // Trade detail.
@@ -78,10 +80,14 @@ impl Ids {
     pub const TRADE_DISPUTE: &'static str = "trade.dispute";
     pub const TRADE_DISPUTE_CONFIRM: &'static str = "trade.dispute.confirm";
     pub const TRADE_RATE: &'static str = "trade.rate";
-    // Buyer invoice (NWC generate or manual) and hold invoice payment.
-    pub const INVOICE_NWC_GENERATE: &'static str = "invoice.nwc.generate";
+    // Buyer invoice and hold invoice payment.
+    //
+    // There is no generate/confirm pair: with a wallet connected v2 asks NWC
+    // for the invoice and submits it in one step, so `invoice.nwc.text` is a
+    // readout of what was submitted, not a step to drive. `invoice.manual`
+    // and the manual form below are the fallback the app shows when NWC
+    // cannot produce one.
     pub const INVOICE_NWC_TEXT: &'static str = "invoice.nwc.text";
-    pub const INVOICE_NWC_CONFIRM: &'static str = "invoice.nwc.confirm";
     pub const INVOICE_MANUAL: &'static str = "invoice.manual";
     pub const INVOICE_TEXT: &'static str = "invoice.text";
     pub const INVOICE_SUBMIT: &'static str = "invoice.submit";
@@ -132,6 +138,7 @@ impl Ids {
         Self::ORDER_ADD_BUY,
         Self::ORDER_ADD_SELL,
         Self::ORDER_CREATE_CURRENCY,
+        Self::ORDER_CREATE_CURRENCY_SEARCH,
         Self::ORDER_CREATE_FIAT_AMOUNT,
         Self::ORDER_CREATE_PAYMENT_METHOD,
         Self::ORDER_CREATE_PRICE_TYPE,
@@ -140,6 +147,7 @@ impl Ids {
         Self::ORDER_CREATE_CANCEL,
         Self::ORDER_CONFIRM_HOME,
         Self::ORDER_TAKE_AMOUNT,
+        Self::ORDER_TAKE_AMOUNT_CONFIRM,
         Self::ORDER_TAKE_CONFIRM,
         Self::ORDER_TAKE_CLOSE,
         Self::ORDER_ID,
@@ -154,9 +162,7 @@ impl Ids {
         Self::TRADE_DISPUTE,
         Self::TRADE_DISPUTE_CONFIRM,
         Self::TRADE_RATE,
-        Self::INVOICE_NWC_GENERATE,
         Self::INVOICE_NWC_TEXT,
-        Self::INVOICE_NWC_CONFIRM,
         Self::INVOICE_MANUAL,
         Self::INVOICE_TEXT,
         Self::INVOICE_SUBMIT,
@@ -181,10 +187,23 @@ impl Ids {
         format!("order.create.currency.{code}")
     }
 
-    /// Row of a configured relay in the relays screen.
+    /// Row of a configured relay in the relays card.
+    ///
+    /// The url is normalized the way the app normalizes it, so a relay named
+    /// with and without a trailing slash is one row and not two.
     pub fn relay_item(url: &str) -> String {
-        format!("settings.relays.item.{url}")
+        format!("settings.relays.item.{}", normalize_relay_url(url))
     }
+
+    /// Delete control of a configured relay.
+    pub fn relay_delete(url: &str) -> String {
+        format!("{}.delete", Self::relay_item(url))
+    }
+}
+
+/// Mirrors `AutomationIds._normalizeRelayUrl` in the v2 app.
+fn normalize_relay_url(url: &str) -> &str {
+    url.trim().trim_end_matches('/')
 }
 
 /// Path of the v2 app's identifier registry, relative to its checkout.
@@ -268,5 +287,24 @@ mod tests {
             Ids::relay_item("ws://10.0.2.2:7000"),
             "settings.relays.item.ws://10.0.2.2:7000"
         );
+        assert_eq!(
+            Ids::relay_delete("ws://10.0.2.2:7000"),
+            "settings.relays.item.ws://10.0.2.2:7000.delete"
+        );
+    }
+
+    /// The app normalizes a relay url before keying its row; a harness that
+    /// did not would look for a row that is never rendered.
+    #[test]
+    fn a_relay_keeps_one_identifier_however_its_url_is_written() {
+        let canonical = "settings.relays.item.ws://10.0.2.2:7000";
+        for written in [
+            "ws://10.0.2.2:7000",
+            "ws://10.0.2.2:7000/",
+            "ws://10.0.2.2:7000//",
+            "  ws://10.0.2.2:7000/  ",
+        ] {
+            assert_eq!(Ids::relay_item(written), canonical, "{written}");
+        }
     }
 }

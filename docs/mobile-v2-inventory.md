@@ -21,13 +21,13 @@ the UI and public Android behaviour, exactly as with the classic app.
 | Buyer invoice | `/addInvoice` (`add_lightning_invoice_screen.dart`, NWC generate or manual) | |
 | Fiat sent / release / cancel / dispute / rate | `/tradeDetail` (`trade_detail_screen.dart`) with `TradeStatus` = loading, pending, waitingInvoice, waitingPayment, inProgress, active, fiatSent, completed, cancelled, disputed, pendingRating, rated | `pendingRating`/`rated` are post-success UI states, mapped to `Completed` by the adapter. |
 | Notifications / deep links | present (`/notifications`, `firebase.json`) | Not part of the v2 contract yet; scenarios needing them are skipped with a reason. |
-| Test-environment marker | none | Required (below). |
-| Accessibility identifiers | none (`Semantics.identifier` unused) | Required (below). |
+| Test-environment marker | `env.marker`, shown by `lib/main_mortsom.dart` builds | Adopted (below). |
+| Accessibility identifiers | `lib/core/automation/automation_ids.dart` | Adopted (below). |
 
-## Required application-facing changes for v2 (spec §17)
+## Application-facing changes for v2 (spec §17)
 
-The v2 app must adopt the same mechanism the classic app has on its
-`mortsom-automation-contract` branch:
+The v2 app adopted the same mechanism the classic app carries (its
+PR #650); the pieces are:
 
 1. `lib/core/automation/automation_ids.dart` with the identifiers listed in
    `crates/app-adapters/mobile-v2/src/selectors.rs` (`Ids::ALL` plus the
@@ -37,17 +37,46 @@ The v2 app must adopt the same mechanism the classic app has on its
    true))`), so they surface as Android `resource-id`s.
 2. `lib/main_mortsom.dart` + `--dart-define=MORTSOM_TEST_ENV=true`: arms the
    test environment, seeds `MORTSOM_RELAYS`, disables the production relay
-   fallback, allows `ws://`, and shows the `env.marker` banner.
+   fallback, allows `ws://`, and shows the `env.marker` banner. It also
+   applies `MOSTRO_PUB_KEY` as the active node before the relay pool starts,
+   so the first subscription already targets the daemon under test —
+   `configure_node_and_relay` then finds the node already selected and skips
+   the dialog. `mortsom.toml` passes that define through `mobile.dart_defines`
+   and needs no change.
 3. `order.status` exposes the machine name of `TradeStatus` (kebab-case) as
    its accessibility label; `keys.public_key`, `settings.mostro_node.pubkey`,
    `wallet.connection`, `pay.invoice.text` and `invoice.nwc.text` expose
    their values the same way.
 
-Until that branch exists, `mortsom run` against `mobile-v2` fails at
-onboarding with an `automation-contract` failure ("test-environment marker
-missing"), which is the honest result; the adapter's contract test
-`selectors_match_the_v2_app_contract` starts checking the mirror the moment
-the file appears in the checkout.
+The adapter's contract test `selectors_match_the_v2_app_contract` reads the
+app's registry out of the checkout and fails when the two drift apart. An
+APK built from a checkout without the contract still fails at onboarding
+with "test-environment marker missing", which is the honest result.
+
+## Where v2 differs from the classic app
+
+The vocabulary is shared, but three flows are not, and the adapter follows
+the app rather than the other way round:
+
+* **The buyer invoice has no confirm step.** With a wallet connected, v2
+  asks NWC for the invoice and submits it in one action, so there is no
+  `invoice.nwc.generate`/`invoice.nwc.confirm` pair. `invoice.nwc.text` is a
+  readout of what was submitted. The manual form appearing instead means NWC
+  produced nothing, which the adapter reports rather than works around.
+* **The pay screen offers Cancel only on the manual path.** With a wallet
+  connected the auto-pay widget covers it, so `cancel_payment` falls back to
+  cancelling from the trade detail. Both reach the same dialog.
+* **Settings → Wallet leads straight to the connect screen** while no wallet
+  is configured, so `wallet.settings.connect` is tapped only when present.
+
+Two further notes that are contract, not difference:
+
+* A pending order the user created opens on `/my_order`, not
+  `/trade_detail`, so both screens expose `order.status` and `order.id`.
+* The book tabs are named by their visible label and each lists the opposite
+  side — the "Buy BTC" tab lists sell orders. The adapter picks the tab that
+  lists the side it wants. This matches the classic app, whose adapter had
+  the pairing inverted and is fixed alongside.
 
 ## Shared contract changes (Phase 7.2)
 
