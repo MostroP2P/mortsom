@@ -214,7 +214,13 @@ fn app_with_orders() -> FakeUi {
             Ids::ORDER_CREATE_SUBMIT,
         ],
     );
-    ui.on_tap(Ids::ORDER_CREATE_CURRENCY, &["order.create.currency.USD"]);
+    ui.on_tap(
+        Ids::ORDER_CREATE_CURRENCY,
+        &[
+            Ids::ORDER_CREATE_CURRENCY_SEARCH,
+            "order.create.currency.USD",
+        ],
+    );
     ui.on_tap(
         Ids::ORDER_CREATE_PRICE_TYPE,
         &[Ids::ORDER_CREATE_SATS_AMOUNT],
@@ -241,24 +247,20 @@ fn app_with_orders() -> FakeUi {
         Ids::TRADE_PAY_INVOICE,
         &[Ids::PAY_INVOICE_TEXT, Ids::PAY_NWC, Ids::PAY_CANCEL],
     );
-    ui.on_tap(Ids::TRADE_ADD_INVOICE, &[Ids::INVOICE_NWC_GENERATE]);
-    ui.on_tap_hide(
-        Ids::INVOICE_NWC_CONFIRM,
-        &[Ids::ORDER_STATUS, Ids::INVOICE_NWC_CONFIRM],
-    );
+    // With a wallet connected v2 generates and submits the buyer invoice in
+    // one step; the readout is all the screen leaves behind.
+    ui.on_tap(Ids::TRADE_ADD_INVOICE, &[Ids::INVOICE_NWC_TEXT]);
     ui.on_tap_hide(Ids::PAY_NWC, &[Ids::PAY_NWC, Ids::PAY_INVOICE_TEXT]);
-    ui.on_tap(
-        Ids::INVOICE_NWC_GENERATE,
-        &[Ids::INVOICE_NWC_TEXT, Ids::INVOICE_NWC_CONFIRM],
-    );
     ui.on_tap(Ids::TRADE_RELEASE, &[Ids::TRADE_RELEASE_CONFIRM]);
     ui.on_tap(Ids::TRADE_CANCEL, &[Ids::TRADE_CANCEL_CONFIRM]);
-    ui.on_tap(Ids::ORDER_BOOK_TAB_SELL, &["order.book.item.o1"]);
+    // A sell order is listed on the "Buy BTC" tab: the taker buys.
+    ui.on_tap(Ids::ORDER_BOOK_TAB_BUY, &["order.book.item.o1"]);
     ui.on_tap("order.book.item.o1", &[Ids::ORDER_TAKE_CONFIRM]);
     ui.on_tap(Ids::ORDER_TAKE_CONFIRM, &[Ids::ORDER_STATUS]);
     ui.present(&[
         Ids::NAV_TRADES,
         Ids::NAV_ORDER_BOOK,
+        Ids::ORDER_BOOK_TAB_BUY,
         Ids::ORDER_BOOK_TAB_SELL,
     ]);
     ui.label(Ids::ORDER_STATUS, "pending");

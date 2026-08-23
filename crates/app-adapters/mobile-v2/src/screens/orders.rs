@@ -34,6 +34,10 @@ pub async fn create(
     };
     tap(device, side).await?;
     tap(device, Ids::ORDER_CREATE_CURRENCY).await?;
+    // The picker lists every supported currency in a lazy list, so the row
+    // for one further down is never built. Narrowing it is how a user
+    // reaches a currency, and how the driver does.
+    type_into(device, Ids::ORDER_CREATE_CURRENCY_SEARCH, &draft.fiat_code).await?;
     tap(device, &Ids::currency_option(&draft.fiat_code)).await?;
     type_into(
         device,
@@ -77,9 +81,13 @@ pub async fn find_and_take(
     kind: OrderKind,
 ) -> Result<(), AdapterError> {
     go_home(device).await?;
+    // The tabs are named by their visible label, and each lists the opposite
+    // side: the "Buy BTC" tab lists sell orders, because the taker buys.
+    // Picking the tab whose name matches the order's kind would open the
+    // book that cannot contain it.
     let tab = match kind {
-        OrderKind::Sell => Ids::ORDER_BOOK_TAB_SELL,
-        OrderKind::Buy => Ids::ORDER_BOOK_TAB_BUY,
+        OrderKind::Sell => Ids::ORDER_BOOK_TAB_BUY,
+        OrderKind::Buy => Ids::ORDER_BOOK_TAB_SELL,
     };
     tap(device, tab).await?;
     tap(device, &Ids::order_book_item(&order.id)).await?;
@@ -135,17 +143,32 @@ pub async fn pay_hold_invoice(
     })
 }
 
-/// Generates and submits the buyer invoice through the connected wallet.
+/// Provides the buyer invoice through the connected wallet.
+///
+/// v2 asks NWC for the invoice and submits it in one step, so there is
+/// nothing to confirm: opening the screen is the whole action. The invoice
+/// is read back for payment correlation and is optional — the screen may
+/// already have left by the time it is looked for.
+///
+/// The manual form appearing instead means NWC could not produce an
+/// invoice. The harness has no invoice to type, so that is reported rather
+/// than worked around.
 pub async fn provide_buyer_invoice(
     device: &DeviceContext<'_>,
     order: &OrderReference,
 ) -> Result<Option<Secret>, AdapterError> {
     open_trade(device, order).await?;
     tap(device, Ids::TRADE_ADD_INVOICE).await?;
-    tap(device, Ids::INVOICE_NWC_GENERATE).await?;
-    let invoice = label(device, Ids::INVOICE_NWC_TEXT).await?;
-    tap(device, Ids::INVOICE_NWC_CONFIRM).await?;
-    expect(device, Ids::ORDER_ADD_FAB).await?;
+    if present(device, Ids::INVOICE_MANUAL).await? || present(device, Ids::INVOICE_TEXT).await? {
+        return Err(AdapterError::product(
+            "the app fell back to the manual invoice form: the connected wallet did not generate one",
+        ));
+    }
+    let invoice = if present(device, Ids::INVOICE_NWC_TEXT).await? {
+        label(device, Ids::INVOICE_NWC_TEXT).await?
+    } else {
+        String::new()
+    };
     Ok((!invoice.is_empty()).then(|| Secret::new(invoice)))
 }
 
@@ -215,19 +238,29 @@ pub async fn visible_actions(
     Ok(actions)
 }
 
-/// Opens the pay screen and cancels the order from there.
+/// Cancels the order while the seller is being asked to pay the hold
+/// invoice.
+///
+/// The pay screen offers Cancel only on the manual path; with a wallet
+/// connected the auto-pay widget covers the screen and the only way out is
+/// the trade detail. Both end in the same confirmation dialog, so the
+/// outcome is the same either way.
 pub async fn cancel_payment(
     device: &DeviceContext<'_>,
     order: &OrderReference,
 ) -> Result<(), AdapterError> {
     open_trade(device, order).await?;
     tap(device, Ids::TRADE_PAY_INVOICE).await?;
-    tap(device, Ids::PAY_CANCEL).await?;
-    // The v2 pay screen confirms cancellation in a dialog.
-    if present(device, Ids::TRADE_CANCEL_CONFIRM).await? {
-        tap(device, Ids::TRADE_CANCEL_CONFIRM).await?;
+    if present(device, Ids::PAY_CANCEL).await? {
+        tap(device, Ids::PAY_CANCEL).await?;
+        if present(device, Ids::TRADE_CANCEL_CONFIRM).await? {
+            tap(device, Ids::TRADE_CANCEL_CONFIRM).await?;
+        }
+        return expect(device, Ids::ORDER_ADD_FAB).await;
     }
-    expect(device, Ids::ORDER_ADD_FAB).await
+    open_trade(device, order).await?;
+    tap(device, Ids::TRADE_CANCEL).await?;
+    tap(device, Ids::TRADE_CANCEL_CONFIRM).await
 }
 
 /// Ids of the trades currently listed.
