@@ -75,10 +75,14 @@ pub async fn find_and_take(
     kind: OrderKind,
 ) -> Result<(), AdapterError> {
     go_home(device).await?;
-    // Sell offers are what a buyer sees; the tab named after the offer side.
+    // The tabs are named by their visible label, and each lists the opposite
+    // side: the "Buy BTC" tab lists sell orders, because the taker buys
+    // (`AutomationIds.orderBookTabBuy` sits on the tab that filters for
+    // `OrderType.sell`). Picking the tab whose name matches the order's kind
+    // would open the book that cannot contain it.
     let tab = match kind {
-        OrderKind::Sell => Ids::ORDER_BOOK_TAB_SELL,
-        OrderKind::Buy => Ids::ORDER_BOOK_TAB_BUY,
+        OrderKind::Sell => Ids::ORDER_BOOK_TAB_BUY,
+        OrderKind::Buy => Ids::ORDER_BOOK_TAB_SELL,
     };
     tap(device, tab).await?;
     tap(device, &Ids::order_book_item(&order.id)).await?;

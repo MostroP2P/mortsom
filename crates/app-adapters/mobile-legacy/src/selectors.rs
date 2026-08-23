@@ -43,7 +43,7 @@ impl Ids {
     pub const SETTINGS_RELAYS_ADD_URL: &'static str = "settings.relays.add.url";
     pub const SETTINGS_RELAYS_ADD_CONFIRM: &'static str = "settings.relays.add.confirm";
     pub const SETTINGS_RELAYS_ADD_CANCEL: &'static str = "settings.relays.add.cancel";
-    pub const SETTINGS_RELAY_DELETE: &'static str = "settings.relays.item.delete";
+
     pub const NODE_ADD_CUSTOM: &'static str = "node.add_custom";
     pub const NODE_CUSTOM_PUBKEY: &'static str = "node.custom.pubkey";
     pub const NODE_CUSTOM_NAME: &'static str = "node.custom.name";
@@ -133,7 +133,6 @@ impl Ids {
         Self::SETTINGS_RELAYS_ADD_URL,
         Self::SETTINGS_RELAYS_ADD_CONFIRM,
         Self::SETTINGS_RELAYS_ADD_CANCEL,
-        Self::SETTINGS_RELAY_DELETE,
         Self::NODE_ADD_CUSTOM,
         Self::NODE_CUSTOM_PUBKEY,
         Self::NODE_CUSTOM_NAME,
@@ -194,8 +193,19 @@ impl Ids {
         format!("node.item.{pubkey}")
     }
     /// Relay row in settings.
+    ///
+    /// The url is normalized the way the app normalizes it, so a relay named
+    /// with and without a trailing slash is one row and not two.
     pub fn relay_item(url: &str) -> String {
-        format!("settings.relays.item.{url}")
+        format!("settings.relays.item.{}", normalize_relay_url(url))
+    }
+
+    /// Delete control of a relay row.
+    ///
+    /// Keyed by url: every delete control used to share one identifier, and
+    /// automation could not choose which relay to remove.
+    pub fn relay_delete(url: &str) -> String {
+        format!("{}.delete", Self::relay_item(url))
     }
     /// Order book row.
     pub fn order_book_item(order_id: &str) -> String {
@@ -217,6 +227,11 @@ impl Ids {
 
 /// Path of the app's identifier registry, relative to the app checkout.
 pub const APP_IDS_FILE: &str = "lib/core/automation/automation_ids.dart";
+
+/// Mirrors `AutomationIds._normalizeRelayUrl` in the classic app.
+fn normalize_relay_url(url: &str) -> &str {
+    url.trim().trim_end_matches('/')
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -259,6 +274,11 @@ mod tests {
     fn dynamic_helpers_keep_prefixes() {
         assert_eq!(Ids::community_card("ab"), "onboarding.community.card.ab");
         assert_eq!(Ids::relay_item("ws://x"), "settings.relays.item.ws://x");
+        assert_eq!(
+            Ids::relay_delete("ws://x/"),
+            "settings.relays.item.ws://x.delete"
+        );
+        assert_eq!(Ids::relay_item(" ws://x// "), Ids::relay_item("ws://x"));
         assert_eq!(Ids::trade_action("fiatSent"), Ids::TRADE_FIAT_SENT);
         assert_eq!(Ids::node_item("p"), "node.item.p");
         assert_eq!(Ids::order_book_item("o"), "order.book.item.o");
