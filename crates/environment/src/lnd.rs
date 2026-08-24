@@ -365,12 +365,17 @@ impl LndWallet {
     /// would report every hold-invoice payment as unknown.
     ///
     /// `Ok(None)` when the node knows the hash in neither direction.
+    ///
+    /// Returns `(amount_sats, fee_sats, state)`. The fee is nonzero only
+    /// for an outgoing payment: it is what routing actually cost this node,
+    /// and the spend accounting counts it. An incoming invoice costs the
+    /// payer, not this node, so its fee is zero.
     pub async fn lookup(
         &self,
         payment_hash: &str,
-    ) -> Result<Option<(u64, LndPaymentState)>, LndError> {
-        if let Some(incoming) = self.lookup_incoming(payment_hash).await? {
-            return Ok(Some(incoming));
+    ) -> Result<Option<(u64, u64, LndPaymentState)>, LndError> {
+        if let Some((sats, state)) = self.lookup_incoming(payment_hash).await? {
+            return Ok(Some((sats, 0, state)));
         }
         self.lookup_outgoing(payment_hash).await
     }
@@ -379,7 +384,7 @@ impl LndWallet {
     async fn lookup_outgoing(
         &self,
         payment_hash: &str,
-    ) -> Result<Option<(u64, LndPaymentState)>, LndError> {
+    ) -> Result<Option<(u64, u64, LndPaymentState)>, LndError> {
         let Some(hash_bytes) = hex_to_bytes(payment_hash) else {
             return Err(self.failed("track_payment_v2", "payment hash is not hex".to_owned()));
         };
@@ -416,7 +421,11 @@ impl LndWallet {
             // it, which is most of a trade.
             _ => LndPaymentState::Pending,
         };
-        Ok(Some(((update.value_msat / 1000).max(0) as u64, state)))
+        let sats = (update.value_msat / 1000).max(0) as u64;
+        // Rounded up like every fee that feeds the spend accounting: a
+        // truncated fraction would understate what left the wallet.
+        let fee_sats = u64::try_from(update.fee_msat).unwrap_or(0).div_ceil(1000);
+        Ok(Some((sats, fee_sats, state)))
     }
 
     async fn lookup_incoming(

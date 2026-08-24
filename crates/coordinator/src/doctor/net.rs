@@ -380,6 +380,16 @@ pub async fn check_wallet(
                         "{detail}; below the run cap ({floor} sats): top up the dedicated wallet, do not lower the cap"
                     ),
                 )
+            } else if probe.inbound_sats.is_some_and(|inbound| inbound < floor) {
+                // A node with outbound but no inbound passes every balance
+                // check and then cannot receive the buyer payout: the trade
+                // dies after the sats already moved. Fail it here instead.
+                (
+                    CheckStatus::Fail,
+                    format!(
+                        "{detail}; inbound liquidity below the run cap ({floor} sats): the node cannot receive the payout, open or rebalance a channel towards it"
+                    ),
+                )
             } else {
                 (CheckStatus::Pass, detail)
             };

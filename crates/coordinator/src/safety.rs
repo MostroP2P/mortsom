@@ -29,6 +29,19 @@ pub enum SafetyError {
         /// Configured lane.
         lane: Lane,
     },
+    /// A node did not prove it runs on regtest.
+    #[error(
+        "regtest refused: node {label} reports network `{network}`; only a node that reports `regtest` may move value without the mainnet guard"
+    )]
+    NotRegtest {
+        /// Wallet label.
+        label: String,
+        /// Network the node reported.
+        network: String,
+    },
+    /// No node network was verified at all.
+    #[error("regtest refused: no node reported its network")]
+    NoNetworkVerified,
 }
 
 impl SafetyError {
@@ -58,6 +71,31 @@ where
         Some(value) if value == MAINNET_CONFIRM_VALUE => Ok(MainnetClearance { lane: run.lane }),
         _ => Err(SafetyError::NotConfirmed { lane: run.lane }),
     }
+}
+
+/// Grants clearance for value-moving work over Mortsom-held nodes that
+/// proved they run on regtest, where sats are worthless by construction.
+///
+/// `networks` is what each connected node answered for `get_info`, never
+/// configuration: nothing infers the network, the node states it. Every
+/// node must report exactly `regtest`; anything else — including an empty
+/// list — is refused, so this path can never weaken the mainnet guard.
+pub fn authorize_regtest(
+    run: &RunConfig,
+    networks: &[(String, String)],
+) -> Result<MainnetClearance, SafetyError> {
+    if networks.is_empty() {
+        return Err(SafetyError::NoNetworkVerified);
+    }
+    for (label, network) in networks {
+        if network != "regtest" {
+            return Err(SafetyError::NotRegtest {
+                label: label.clone(),
+                network: network.clone(),
+            });
+        }
+    }
+    Ok(MainnetClearance { lane: run.lane })
 }
 
 #[cfg(test)]
@@ -112,6 +150,43 @@ mod tests {
         let err = authorize_mainnet(&run(true, Lane::Ci), |_| Some("yes".into())).unwrap_err();
 
         assert_eq!(err, SafetyError::NotConfirmed { lane: Lane::Ci });
+    }
+
+    #[test]
+    fn regtest_clearance_needs_every_node_on_regtest() {
+        let networks = vec![
+            ("alice".to_owned(), "regtest".to_owned()),
+            ("bob".to_owned(), "mainnet".to_owned()),
+        ];
+
+        let err = authorize_regtest(&run(false, Lane::Local), &networks).unwrap_err();
+
+        assert!(
+            matches!(&err, SafetyError::NotRegtest { label, network } if label == "bob" && network == "mainnet"),
+            "{err}"
+        );
+        assert_eq!(err.category(), FailureCategory::EnvironmentMisconfiguration);
+    }
+
+    #[test]
+    fn regtest_clearance_refuses_an_empty_verification() {
+        let err = authorize_regtest(&run(false, Lane::Local), &[]).unwrap_err();
+
+        assert_eq!(err, SafetyError::NoNetworkVerified);
+    }
+
+    /// Regtest sats are worthless: verified regtest nodes clear value moves
+    /// without the mainnet opt-ins.
+    #[test]
+    fn regtest_clearance_is_granted_without_the_mainnet_guard() {
+        let networks = vec![
+            ("alice".to_owned(), "regtest".to_owned()),
+            ("bob".to_owned(), "regtest".to_owned()),
+        ];
+
+        let clearance = authorize_regtest(&run(false, Lane::Local), &networks).unwrap();
+
+        assert_eq!(clearance.lane, Lane::Local);
     }
 
     #[test]

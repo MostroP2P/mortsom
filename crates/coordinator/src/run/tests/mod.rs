@@ -537,6 +537,7 @@ async fn run(
             Ok(crate::run::WalletHandles {
                 reader: Arc::new(SettledReader),
                 node: None,
+                network: None,
             })
         })
     }

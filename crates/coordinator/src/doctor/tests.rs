@@ -122,6 +122,7 @@ struct FakeNet {
     daemon: DaemonProbe,
     wallets_ok: bool,
     balance_sats: u64,
+    inbound_sats: Option<u64>,
 }
 
 impl FakeNet {
@@ -158,6 +159,7 @@ impl FakeNet {
             },
             wallets_ok: true,
             balance_sats: 25_000,
+            inbound_sats: None,
         }
     }
 }
@@ -177,7 +179,7 @@ impl NetProbes for FakeNet {
     ) -> Result<WalletProbe, WalletProbeError> {
         if self.wallets_ok {
             Ok(WalletProbe {
-                inbound_sats: None,
+                inbound_sats: self.inbound_sats,
                 label: label.into(),
                 alias: Some("testwallet".into()),
                 network: Some("mainnet".into()),
@@ -599,6 +601,32 @@ async fn wallet_liquidity_below_the_run_cap_fails_the_preflight() {
     let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
     assert_eq!(status_of(&report, "wallet bob").status, CheckStatus::Fail);
     assert!(!report.is_healthy());
+}
+
+/// An LND node with ample outbound but too little inbound passes every
+/// balance check and then cannot receive the buyer payout: the doctor must
+/// fail it before any sats move.
+#[tokio::test]
+async fn wallet_inbound_liquidity_below_the_run_cap_fails_the_preflight() {
+    let dir = example_config();
+    let mut host = FakeHost::full();
+    with_settings(&mut host, &dir);
+    let path = dir.path().join("mortsom.toml");
+
+    // Example caps: max_order_sats = 5000, max_run_spend_sats = 20000.
+    let mut net = FakeNet::healthy();
+    net.inbound_sats = Some(1_000);
+    let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
+    assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Fail);
+    assert!(
+        status_of(&report, "wallet alice")
+            .detail
+            .contains("inbound liquidity below the run cap (20000 sats)")
+    );
+
+    net.inbound_sats = Some(25_000);
+    let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
+    assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Pass);
 }
 
 /// The info event is republished on the daemon's own long interval (an hour

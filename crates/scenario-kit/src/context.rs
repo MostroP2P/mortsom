@@ -114,6 +114,25 @@ pub trait NodeWallet: Send + Sync {
     async fn start_payment(&self, invoice: &Secret) -> Result<(), String>;
 }
 
+/// A hold-invoice payment that is in flight but not yet settled.
+///
+/// On the node path the daemon holds the HTLC from funding until release,
+/// so funding can only confirm the payment is in flight. The reservation
+/// stays open (in flight) in the budget until
+/// [`crate::actions::settle_hold_payment`] observes the settlement after
+/// release, or [`crate::actions::expect_hold_refunded`] observes the refund
+/// after a cancellation.
+pub struct PendingHold {
+    /// Actor whose node pays.
+    pub actor: Actor,
+    /// Wallet label used by the wallet observer.
+    pub wallet_label: String,
+    /// Payment hash of the hold invoice.
+    pub payment_hash: String,
+    /// The budget reservation, committed or released once the fate is known.
+    pub reservation: crate::budget::Reservation,
+}
+
 /// Everything a scenario can reach.
 pub struct Context {
     /// Application adapter.
@@ -143,7 +162,11 @@ pub struct Context {
     pub timeline: Arc<Timeline>,
     /// Evidence sink.
     pub evidence: Arc<dyn EvidenceSink>,
-    /// Mainnet clearance; `None` means no value-moving step may run.
+    /// Hold payments in flight, keyed by order id. See [`PendingHold`].
+    pub pending_holds: Mutex<BTreeMap<String, PendingHold>>,
+    /// Value-movement clearance; `None` means no value-moving step may run.
+    /// Granted by the mainnet guard, or by the runner once every node
+    /// wallet proved it is on regtest.
     pub mainnet: Option<MainnetClearance>,
     /// Sats per order.
     pub amount_sats: u64,
@@ -199,11 +222,23 @@ impl Context {
         self.evidence.protect(secret);
     }
 
+    /// Records a hold payment whose settlement is deferred to release.
+    pub fn record_pending_hold(&self, order_id: &str, pending: PendingHold) {
+        let mut holds = self.pending_holds.lock().unwrap_or_else(|p| p.into_inner());
+        holds.insert(order_id.to_owned(), pending);
+    }
+
+    /// Removes and returns the pending hold for `order_id`, if any.
+    pub fn take_pending_hold(&self, order_id: &str) -> Option<PendingHold> {
+        let mut holds = self.pending_holds.lock().unwrap_or_else(|p| p.into_inner());
+        holds.remove(order_id)
+    }
+
     /// Fails unless value-moving steps were authorized.
     pub fn require_mainnet(&self) -> Result<MainnetClearance, ScenarioError> {
         let clearance = self.mainnet.ok_or_else(|| {
             ScenarioError::environment(
-                "value-moving step without mainnet clearance (run.allow_mainnet and MORTSOM_MAINNET_CONFIRM)",
+                "value-moving step without clearance (mainnet needs run.allow_mainnet and MORTSOM_MAINNET_CONFIRM; regtest needs both wallets on Mortsom-held nodes that report regtest)",
             )
         })?;
         // A clearance authorizes the lane it was granted for; carrying one

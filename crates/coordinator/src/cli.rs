@@ -715,6 +715,7 @@ async fn connect_wallet(
             Ok(crate::run::WalletHandles {
                 reader: Arc::new(reader),
                 node: None,
+                network: None,
             })
         }
         WalletConfig::Lnd {
@@ -725,9 +726,13 @@ async fn connect_wallet(
             let node = mortsom_environment::LndWallet::connect(label, host, cert, macaroon)
                 .await
                 .map_err(|e| e.to_string())?;
+            // The node names its own network; regtest clearance rests on
+            // this answer, never on what the configuration claims.
+            let (_alias, network) = node.info().await.map_err(|e| e.to_string())?;
             Ok(crate::run::WalletHandles {
                 reader: Arc::new(mortsom_observers::wallet::LndReader::new(node.clone())),
                 node: Some(Arc::new(NodeWalletOverLnd(node))),
+                network: Some(network),
             })
         }
     }

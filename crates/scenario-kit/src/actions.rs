@@ -9,7 +9,7 @@ use mortsom_app_contract::{OrderDraft, OrderReference, OrderState, PaymentPath};
 use mortsom_observers::wallet::{PaymentObservation, PaymentState, payment_hash_of};
 use tracing::info;
 
-use crate::context::{Context, ScenarioError};
+use crate::context::{Context, PendingHold, ScenarioError};
 use crate::timeline::TimelineKind;
 use crate::waits::{stays_absent, wait_until};
 
@@ -274,7 +274,13 @@ pub async fn wait_relay_state(
 }
 
 /// Pays the hold invoice as `actor` through the app's wallet path, within
-/// the caps, and waits for the wallet to report the payment settled.
+/// the caps.
+///
+/// On the NWC path the wallet must report the payment settled. On the node
+/// path the daemon holds the HTLC until release, so this only confirms the
+/// payment is in flight; settlement is committed by
+/// [`settle_hold_payment`] after release (or the refund observed by
+/// [`expect_hold_refunded`] after a cancellation).
 pub async fn pay_hold_invoice(
     ctx: &Context,
     actor: Actor,
@@ -342,38 +348,16 @@ pub async fn pay_hold_invoice(
         ),
         Some(step),
     );
+    if node.is_some() {
+        return accept_hold(ctx, actor, order, &session.wallet_label, reservation, hash).await;
+    }
     let observation = ctx
         .wallets
         .wait_terminal(&session.wallet_label, &order.id, &hash, ctx.settle_timeout)
         .await;
     match observation {
         Ok(obs) if obs.state == PaymentState::Settled => {
-            let mut budget = ctx.budget.lock().unwrap_or_else(|p| p.into_inner());
-            let committed = commit_settlement(&mut budget, &reservation, &obs, &hash);
-            drop(budget);
-            if let Err(e) = committed {
-                ctx.timeline.push(
-                    TimelineKind::Wallet,
-                    Some(actor.as_str()),
-                    format!(
-                        "settled {} sats (fee {}) for order {} but the budget refused it: {e}",
-                        obs.amount_sats, obs.fee_sats, order.id
-                    ),
-                    Some(hash),
-                );
-                return Err(ScenarioError::environment(e.to_string()));
-            }
-            ctx.timeline.push_at(
-                obs.observed_at * 1000,
-                TimelineKind::Wallet,
-                Some(actor.as_str()),
-                format!(
-                    "wallet: {} sats settled (fee {}) for order {}",
-                    obs.amount_sats, obs.fee_sats, order.id
-                ),
-                Some(hash),
-            );
-            Ok(obs)
+            record_settled(ctx, actor, order, &reservation, obs, &hash)
         }
         Ok(obs) => {
             release_quietly(ctx, &reservation);
@@ -387,6 +371,196 @@ pub async fn pay_hold_invoice(
             Err(ScenarioError::wallet(e.to_string()))
         }
     }
+}
+
+/// Accepts a hold payment that is in flight from Mortsom's own node.
+///
+/// A Mostro hold invoice cannot settle before release: the daemon holds
+/// the HTLC across fiat-sent and release, several steps away, and those
+/// steps only run after this action returns. Requiring settlement here
+/// would deadlock the trade, so the pending state is the success: the
+/// reservation stays in flight and the hold is recorded for
+/// [`settle_hold_payment`] or [`expect_hold_refunded`] to resolve.
+async fn accept_hold(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+    wallet_label: &str,
+    reservation: crate::budget::Reservation,
+    hash: String,
+) -> Result<PaymentObservation, ScenarioError> {
+    let observation = ctx
+        .wallets
+        .wait_known(wallet_label, &order.id, &hash, ctx.settle_timeout)
+        .await;
+    match observation {
+        Ok(obs) if obs.state == PaymentState::Settled => {
+            record_settled(ctx, actor, order, &reservation, obs, &hash)
+        }
+        Ok(obs) if obs.state == PaymentState::Failed => {
+            release_quietly(ctx, &reservation);
+            Err(ScenarioError::wallet(format!(
+                "hold invoice payment failed for order {}",
+                order.id
+            )))
+        }
+        Ok(obs) => {
+            mark_in_flight(ctx, &reservation, Some(hash.clone()));
+            ctx.record_pending_hold(
+                &order.id,
+                PendingHold {
+                    actor,
+                    wallet_label: wallet_label.to_owned(),
+                    payment_hash: hash.clone(),
+                    reservation,
+                },
+            );
+            ctx.timeline.push_at(
+                obs.observed_at * 1000,
+                TimelineKind::Wallet,
+                Some(actor.as_str()),
+                format!(
+                    "wallet: hold invoice accepted for order {} ({} sats in flight; settlement follows release)",
+                    order.id, obs.amount_sats
+                ),
+                Some(hash),
+            );
+            Ok(obs)
+        }
+        Err(e) => {
+            mark_in_flight(ctx, &reservation, Some(hash));
+            Err(ScenarioError::wallet(e.to_string()))
+        }
+    }
+}
+
+/// Records a settled payment: commits it against the budget and puts the
+/// settlement on the timeline. A refused commit keeps the entry in flight
+/// (the sats already left the wallet) and propagates the refusal.
+fn record_settled(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+    reservation: &crate::budget::Reservation,
+    obs: PaymentObservation,
+    hash: &str,
+) -> Result<PaymentObservation, ScenarioError> {
+    let mut budget = ctx.budget.lock().unwrap_or_else(|p| p.into_inner());
+    let committed = commit_settlement(&mut budget, reservation, &obs, hash);
+    drop(budget);
+    if let Err(e) = committed {
+        ctx.timeline.push(
+            TimelineKind::Wallet,
+            Some(actor.as_str()),
+            format!(
+                "settled {} sats (fee {}) for order {} but the budget refused it: {e}",
+                obs.amount_sats, obs.fee_sats, order.id
+            ),
+            Some(hash.to_owned()),
+        );
+        return Err(ScenarioError::environment(e.to_string()));
+    }
+    ctx.timeline.push_at(
+        obs.observed_at * 1000,
+        TimelineKind::Wallet,
+        Some(actor.as_str()),
+        format!(
+            "wallet: {} sats settled (fee {}) for order {}",
+            obs.amount_sats, obs.fee_sats, order.id
+        ),
+        Some(hash.to_owned()),
+    );
+    Ok(obs)
+}
+
+/// Settlement of the held HTLC, after release. On the node path funding
+/// only proved the payment was in flight; here the seller's wallet must
+/// show it settled and the budget records the spend, fee included. No-op
+/// when the order has no pending hold (the NWC path settles at funding).
+pub async fn settle_hold_payment(
+    ctx: &Context,
+    order: &OrderReference,
+) -> Result<Option<PaymentObservation>, ScenarioError> {
+    let Some(pending) = ctx.take_pending_hold(&order.id) else {
+        return Ok(None);
+    };
+    let obs = ctx
+        .wallets
+        .wait_terminal(
+            &pending.wallet_label,
+            &order.id,
+            &pending.payment_hash,
+            ctx.settle_timeout,
+        )
+        .await
+        // The reservation stays in flight: the HTLC's fate is unknown.
+        .map_err(|e| ScenarioError::wallet(e.to_string()))?;
+    if obs.state != PaymentState::Settled {
+        return Err(ScenarioError::wallet(format!(
+            "hold payment for order {} ended {:?} after release",
+            order.id, obs.state
+        )));
+    }
+    record_settled(
+        ctx,
+        pending.actor,
+        order,
+        &pending.reservation,
+        obs,
+        &pending.payment_hash,
+    )
+    .map(Some)
+}
+
+/// Refund of the held HTLC, after a cancellation: the daemon returns the
+/// escrow, so the payment must fail and the reservation is freed. No-op
+/// when the order has no pending hold.
+pub async fn expect_hold_refunded(
+    ctx: &Context,
+    order: &OrderReference,
+) -> Result<(), ScenarioError> {
+    let Some(pending) = ctx.take_pending_hold(&order.id) else {
+        return Ok(());
+    };
+    let obs = ctx
+        .wallets
+        .wait_terminal(
+            &pending.wallet_label,
+            &order.id,
+            &pending.payment_hash,
+            ctx.settle_timeout,
+        )
+        .await
+        .map_err(|e| ScenarioError::wallet(e.to_string()))?;
+    if obs.state == PaymentState::Failed {
+        release_quietly(ctx, &pending.reservation);
+        ctx.timeline.push_at(
+            obs.observed_at * 1000,
+            TimelineKind::Wallet,
+            Some(pending.actor.as_str()),
+            format!(
+                "wallet: hold payment for cancelled order {} returned",
+                order.id
+            ),
+            Some(pending.payment_hash.clone()),
+        );
+        return Ok(());
+    }
+    // Sats left the wallet on a cancelled order: keep the accounting
+    // honest, then report the product failure.
+    let state = obs.state;
+    let _ = record_settled(
+        ctx,
+        pending.actor,
+        order,
+        &pending.reservation,
+        obs,
+        &pending.payment_hash,
+    );
+    Err(ScenarioError::product(format!(
+        "hold payment for cancelled order {} ended {state:?}; the escrow was not returned",
+        order.id
+    )))
 }
 
 /// Generates the buyer invoice as `actor` (no value moves).
@@ -677,6 +851,95 @@ mod tests {
             "nothing reserved without clearance"
         );
     }
+    /// Without a pending hold (the NWC path) release and cancel have no
+    /// deferred settlement to resolve; both must be clean no-ops.
+    #[tokio::test]
+    async fn hold_resolution_is_a_no_op_without_a_pending_hold() {
+        let ctx = context(Arc::new(StateAdapter(Mutex::new(OrderState::Completed))));
+        let order = OrderReference::new("o1");
+
+        assert_eq!(settle_hold_payment(&ctx, &order).await.unwrap(), None);
+        expect_hold_refunded(&ctx, &order).await.unwrap();
+        assert!(ctx.budget.lock().unwrap().ledger().is_empty());
+    }
+
+    /// After release the pending hold must settle and its reservation is
+    /// committed against the budget, fee included; after a cancellation
+    /// the payment must fail and the reservation is freed.
+    #[tokio::test]
+    async fn a_pending_hold_settles_after_release_and_refunds_after_cancel() {
+        use crate::budget::EntryStatus;
+        use crate::context::PendingHold;
+
+        let mut ctx = context(Arc::new(StateAdapter(Mutex::new(OrderState::Completed))));
+        ctx.wallets = Arc::new(mortsom_observers::wallet::WalletObserver::new(vec![(
+            "alice".into(),
+            Arc::new(SettledWallet) as Arc<dyn mortsom_observers::wallet::WalletReader>,
+        )]));
+        let order = OrderReference::new("o1");
+        let reservation = ctx.budget.lock().unwrap().reserve("o1", 5).unwrap();
+        ctx.record_pending_hold(
+            "o1",
+            PendingHold {
+                actor: Actor::Alice,
+                wallet_label: "alice".into(),
+                payment_hash: "aa".into(),
+                reservation,
+            },
+        );
+
+        let obs = settle_hold_payment(&ctx, &order).await.unwrap().unwrap();
+
+        assert_eq!(obs.state, PaymentState::Settled);
+        {
+            let budget = ctx.budget.lock().unwrap();
+            assert_eq!(budget.ledger()[0].status, EntryStatus::Settled);
+            assert_eq!(budget.ledger()[0].fee_sats, 1);
+        }
+
+        // A second call finds nothing: the hold was consumed.
+        assert_eq!(settle_hold_payment(&ctx, &order).await.unwrap(), None);
+
+        // Cancellation path: the payment fails and the budget is freed.
+        ctx.wallets = Arc::new(mortsom_observers::wallet::WalletObserver::new(vec![(
+            "alice".into(),
+            Arc::new(FailedWallet) as Arc<dyn mortsom_observers::wallet::WalletReader>,
+        )]));
+        // 6 of the 10-sat run cap are already settled (5 + fee 1).
+        let order2 = OrderReference::new("o2");
+        let reservation = ctx.budget.lock().unwrap().reserve("o2", 3).unwrap();
+        ctx.record_pending_hold(
+            "o2",
+            PendingHold {
+                actor: Actor::Alice,
+                wallet_label: "alice".into(),
+                payment_hash: "bb".into(),
+                reservation,
+            },
+        );
+
+        expect_hold_refunded(&ctx, &order2).await.unwrap();
+
+        let budget = ctx.budget.lock().unwrap();
+        assert_eq!(budget.ledger()[1].status, EntryStatus::Released);
+    }
+
+    struct SettledWallet;
+    #[async_trait::async_trait]
+    impl mortsom_observers::wallet::WalletReader for SettledWallet {
+        async fn lookup(&self, _: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
+            Ok(Some((5, 1, PaymentState::Settled)))
+        }
+    }
+
+    struct FailedWallet;
+    #[async_trait::async_trait]
+    impl mortsom_observers::wallet::WalletReader for FailedWallet {
+        async fn lookup(&self, _: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
+            Ok(Some((5, 0, PaymentState::Failed)))
+        }
+    }
+
     /// The sats left the wallet even when the ledger refuses the amount, so
     /// the reservation may not stay `Reserved` and drop out of the spend.
     #[test]

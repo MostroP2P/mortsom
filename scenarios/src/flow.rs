@@ -104,13 +104,15 @@ pub async fn fiat_sent(ctx: &Context, order: &OrderReference) -> Result<(), Scen
         .map(|_| ())
 }
 
-/// Alice releases; both apps and the relay show completion and, when the
-/// payout hash is known, Bob's wallet shows it settled. Marks the order
-/// resolved for cleanup.
+/// Alice releases; both apps and the relay show completion, the held HTLC
+/// settles (on the node path, this is where funding is finally committed
+/// against the budget) and, when the payout hash is known, Bob's wallet
+/// shows it settled. Marks the order resolved for cleanup.
 pub async fn release_and_settle(ctx: &Context, taken: &Taken) -> Result<(), ScenarioError> {
     actions::release(ctx, Actor::Alice, &taken.order).await?;
     actions::wait_both(ctx, &taken.order, OrderState::Completed).await?;
     actions::wait_relay_state(ctx, &taken.order, OrderState::Completed).await?;
+    actions::settle_hold_payment(ctx, &taken.order).await?;
     if let Some(hash) = &taken.payout_hash {
         actions::expect_payout_settled(ctx, Actor::Bob, &taken.order, hash).await?;
     }
@@ -118,10 +120,12 @@ pub async fn release_and_settle(ctx: &Context, taken: &Taken) -> Result<(), Scen
     Ok(())
 }
 
-/// Both apps and the relay agree the order is cancelled; marks it resolved.
+/// Both apps and the relay agree the order is cancelled and, when a hold
+/// payment was in flight, the escrow came back; marks it resolved.
 pub async fn expect_cancelled(ctx: &Context, order: &OrderReference) -> Result<(), ScenarioError> {
     actions::wait_both(ctx, order, OrderState::Cancelled).await?;
     actions::wait_relay_state(ctx, order, OrderState::Cancelled).await?;
+    actions::expect_hold_refunded(ctx, order).await?;
     actions::mark_resolved(ctx, order);
     Ok(())
 }

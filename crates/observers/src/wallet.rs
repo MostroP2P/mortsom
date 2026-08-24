@@ -202,9 +202,11 @@ impl LndReader {
 impl WalletReader for LndReader {
     async fn lookup(&self, payment_hash: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
         match self.wallet.lookup(payment_hash).await {
-            // Fees are the payer's, and this reader looks up invoices this
-            // node issued — so nothing was paid out of it.
-            Ok(Some((sats, state))) => Ok(Some((sats, 0, map_lnd_state(state)))),
+            // The node reports the fee itself: zero for an invoice it
+            // issued (the payer's cost, not this node's), and the routing
+            // fee actually paid for an outgoing payment such as the hold
+            // invoice — which the spend accounting must count.
+            Ok(Some((sats, fee, state))) => Ok(Some((sats, fee, map_lnd_state(state)))),
             Ok(None) => Ok(None),
             Err(e) => Err(e.to_string()),
         }
@@ -300,6 +302,37 @@ impl WalletObserver {
                 observation.state,
                 PaymentState::Settled | PaymentState::Failed
             ) {
+                return Ok(observation);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(WalletObserverError::NotSettled {
+                    label: label.to_owned(),
+                    payment_hash: payment_hash.to_owned(),
+                    timeout,
+                    last: observation.state,
+                });
+            }
+            tokio::time::sleep(self.poll).await;
+        }
+    }
+
+    /// Polls until the wallet knows the payment at all — pending or
+    /// terminal — bounded by `timeout`.
+    ///
+    /// This is the wait the hold-invoice path needs: a Mostro hold invoice
+    /// stays pending from funding until release, so the funding step can
+    /// only confirm the payment is in flight, never that it settled.
+    pub async fn wait_known(
+        &self,
+        label: &str,
+        order_id: &str,
+        payment_hash: &str,
+        timeout: Duration,
+    ) -> Result<PaymentObservation, WalletObserverError> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let observation = self.observe(label, order_id, payment_hash).await?;
+            if observation.state != PaymentState::Unknown {
                 return Ok(observation);
             }
             if tokio::time::Instant::now() >= deadline {
@@ -410,6 +443,41 @@ mod tests {
 
         let err = observer.observe("carol", "o1", "hash").await.unwrap_err();
         assert!(matches!(err, WalletObserverError::UnknownWallet { .. }));
+    }
+
+    /// A hold-invoice payment is pending from funding until release:
+    /// `wait_known` must return that pending observation instead of waiting
+    /// for a settlement that cannot happen yet.
+    #[tokio::test]
+    async fn wait_known_returns_a_pending_hold_payment() {
+        let observer = observer(vec![None, Some((1000, 2, PaymentState::Pending))]);
+
+        let known = observer
+            .wait_known("alice", "o1", "hash", Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        assert_eq!(known.state, PaymentState::Pending);
+        assert_eq!(known.amount_sats, 1000);
+        assert_eq!(known.fee_sats, 2);
+    }
+
+    #[tokio::test]
+    async fn wait_known_times_out_when_the_wallet_never_learns_the_payment() {
+        let observer = observer(vec![None]);
+
+        let err = observer
+            .wait_known("alice", "o1", "hash", Duration::from_millis(5))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            WalletObserverError::NotSettled {
+                last: PaymentState::Unknown,
+                ..
+            }
+        ));
     }
 
     #[test]

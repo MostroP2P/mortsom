@@ -254,6 +254,7 @@ pub fn context_with(adapter: Arc<dyn AppAdapter>, relay_control: Arc<dyn RelayCo
         cleanup: Arc::new(CleanupRegistry::default()),
         timeline: Arc::new(Timeline::default()),
         evidence: Arc::new(NullSink),
+        pending_holds: Mutex::new(std::collections::BTreeMap::new()),
         mainnet: None,
         amount_sats: 5,
         fiat_code: "USD".into(),

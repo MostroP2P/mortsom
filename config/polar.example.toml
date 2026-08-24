@@ -83,7 +83,9 @@ max_run_spend_sats = 20000
 jobs = 1
 artifacts_dir = "./artifacts"
 cleanup = true
-allow_mainnet = false             # value-moving scenarios also need MORTSOM_MAINNET_CONFIRM
+allow_mainnet = false             # stays false on Polar: with both wallets on LND nodes, value
+                                  # scenarios clear at startup once every node proves it runs on
+                                  # regtest -- no MORTSOM_MAINNET_CONFIRM needed for worthless sats
 infra_retries = 1                 # only classified infrastructure failures retry, at most once
 fiat_code = "USD"                 # order drafts
 fiat_amount = 1

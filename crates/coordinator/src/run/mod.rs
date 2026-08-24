@@ -78,6 +78,10 @@ pub struct WalletHandles {
     /// `None` on the NWC path: there the app has the wallet and pays for
     /// itself, and Mortsom only watches.
     pub node: Option<Arc<dyn NodeWallet>>,
+    /// The network the node itself reported at connect time (`regtest`,
+    /// `mainnet`, ...), when the wallet is a node Mortsom holds. Regtest
+    /// clearance rests on this answer, never on configuration.
+    pub network: Option<String>,
 }
 
 /// Wallet factory (real: NWC or a local LND node; tests: fakes).
@@ -185,7 +189,11 @@ pub async fn run_scenarios(
     deps: &RunDeps<'_>,
 ) -> Result<RunSummary, String> {
     let selected = select(&options.scenarios, options.tag.as_deref())?;
-    let mainnet = clear_mainnet(config, deps, &selected)?;
+    let clearance = clear_value_moving(config, deps, &selected)?;
+    let mainnet = match clearance {
+        Clearance::Mainnet(c) => Some(c),
+        Clearance::NotNeeded | Clearance::PendingRegtest => None,
+    };
     let caps = SpendCaps::new(config.run.max_order_sats, config.run.max_run_spend_sats)
         .map_err(|e| e.to_string())?;
 
@@ -222,7 +230,15 @@ pub async fn run_scenarios(
         return finish(&artifacts, &mut summary).map(|()| summary);
     }
 
-    let mut world = World::new(config, options, deps, &artifacts, caps, mainnet);
+    let mut world = World::new(
+        config,
+        options,
+        deps,
+        &artifacts,
+        caps,
+        mainnet,
+        matches!(clearance, Clearance::PendingRegtest),
+    );
     if let Err(stage) = world.bring_up(&mut summary).await {
         for def in &runnable {
             summary.results.push(ScenarioResult {
@@ -248,18 +264,38 @@ pub async fn run_scenarios(
     finish(&artifacts, &mut summary).map(|()| summary)
 }
 
-/// Value-moving scenarios need explicit mainnet clearance before anything
-/// is started (spec §16.1, Phase 4.6).
-fn clear_mainnet(
+/// How value-moving scenarios were cleared to run.
+enum Clearance {
+    /// No selected scenario moves value.
+    NotNeeded,
+    /// Mainnet spending was confirmed by configuration and environment.
+    Mainnet(MainnetClearance),
+    /// Every wallet is a node Mortsom holds; clearance is granted during
+    /// bring-up, once each connected node has proved it runs on regtest.
+    PendingRegtest,
+}
+
+/// Value-moving scenarios need explicit clearance before anything is
+/// started (spec §16.1, Phase 4.6). Mainnet needs the double opt-in. When
+/// both wallets are Mortsom-held nodes and the operator did not enable
+/// mainnet, the decision is deferred to bring-up: the nodes themselves
+/// must report `regtest`, where sats are worthless by construction.
+fn clear_value_moving(
     config: &Config,
     deps: &RunDeps<'_>,
     selected: &[&ScenarioDef],
-) -> Result<Option<MainnetClearance>, String> {
+) -> Result<Clearance, String> {
     if !selected.iter().any(|d| d.moves_value) {
-        return Ok(None);
+        return Ok(Clearance::NotNeeded);
+    }
+    let all_nodes = [&config.wallets.alice, &config.wallets.bob]
+        .into_iter()
+        .all(|w| matches!(w, WalletConfig::Lnd { .. }));
+    if !config.run.allow_mainnet && all_nodes {
+        return Ok(Clearance::PendingRegtest);
     }
     authorize_mainnet(&config.run, deps.env)
-        .map(|c| Some(MainnetClearance { lane: c.lane }))
+        .map(|c| Clearance::Mainnet(MainnetClearance { lane: c.lane }))
         .map_err(|e| e.to_string())
 }
 
@@ -307,6 +343,9 @@ struct World<'a> {
     shutdown_grace: Duration,
     budget: Arc<Mutex<Budget>>,
     mainnet: Option<MainnetClearance>,
+    /// Value clearance still owed: granted in `bring_up` once every node
+    /// wallet has proved it runs on regtest.
+    regtest_pending: bool,
     cleanup: Arc<CleanupRegistry>,
     timeline: Arc<Timeline>,
     recorder: Arc<StepRecorder>,
@@ -325,6 +364,7 @@ impl<'a> World<'a> {
         artifacts: &'a RunArtifacts,
         caps: SpendCaps,
         mainnet: Option<MainnetClearance>,
+        regtest_pending: bool,
     ) -> Self {
         Self {
             config,
@@ -333,6 +373,7 @@ impl<'a> World<'a> {
             shutdown_grace: options.shutdown_grace.unwrap_or(SHUTDOWN_GRACE),
             budget: Arc::new(Mutex::new(Budget::new(caps))),
             mainnet,
+            regtest_pending,
             cleanup: Arc::new(CleanupRegistry::default()),
             timeline: Arc::new(Timeline::default()),
             recorder: Arc::new(StepRecorder::default()),
@@ -381,6 +422,7 @@ impl<'a> World<'a> {
 
         let mut readers = Vec::new();
         let mut nodes: BTreeMap<String, Arc<dyn NodeWallet>> = BTreeMap::new();
+        let mut networks: Vec<(String, String)> = Vec::new();
         for (label, wallet) in [
             ("alice", &self.config.wallets.alice),
             ("bob", &self.config.wallets.bob),
@@ -390,6 +432,13 @@ impl<'a> World<'a> {
                 .map_err(|e| record_fail(summary, "wallet-observer", e))?;
             if let Some(node) = handles.node {
                 nodes.insert(label.to_owned(), node);
+                // A node that answered without naming its network cannot
+                // clear the regtest path; record it as such and let
+                // `authorize_regtest` refuse it by name.
+                networks.push((
+                    label.to_owned(),
+                    handles.network.unwrap_or_else(|| "unknown".to_owned()),
+                ));
             }
             readers.push((label.to_owned(), handles.reader));
         }
@@ -400,6 +449,21 @@ impl<'a> World<'a> {
             "alice and bob readers ready",
         );
         self.wallets = Some(Arc::new(WalletObserver::new(readers)));
+        if self.regtest_pending {
+            match crate::safety::authorize_regtest(&self.config.run, &networks) {
+                Ok(clearance) => {
+                    self.mainnet = Some(MainnetClearance {
+                        lane: clearance.lane,
+                    });
+                    summary.checks.push(
+                        "regtest-clearance",
+                        CheckStatus::Pass,
+                        "every node reports regtest; value moves without the mainnet guard",
+                    );
+                }
+                Err(e) => return Err(record_fail(summary, "regtest-clearance", e.to_string())),
+            }
+        }
 
         let farm = self.bring_up_farm(summary).await?;
         summary.app_version = Some(
@@ -424,10 +488,12 @@ impl<'a> World<'a> {
             summary.actors.push(actor);
         }
         self.farm = Some(farm);
-        let bootstrapped = summary
-            .actors
-            .iter()
-            .all(|a| a.identity.is_some() && a.wallet.as_ref().is_some_and(|w| w.connected));
+        // On the LND path the app is deliberately walletless, so a missing
+        // wallet is the intended, successful outcome there.
+        let bootstrapped = summary.actors.iter().all(|a| {
+            a.identity.is_some()
+                && (!a.wallet_expected || a.wallet.as_ref().is_some_and(|w| w.connected))
+        });
         if !bootstrapped {
             return Err("actor bootstrap failed (see checks)".into());
         }
@@ -559,6 +625,7 @@ impl<'a> World<'a> {
                 self.artifacts.clone(),
                 Arc::clone(&self.recorder),
             )),
+            pending_holds: Mutex::new(BTreeMap::new()),
             mainnet: self.mainnet,
             amount_sats: config.run.amount_sats,
             fiat_code: config.run.fiat_code.clone(),
