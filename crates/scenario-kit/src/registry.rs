@@ -25,6 +25,12 @@ pub struct ScenarioDef {
     pub timeout_secs: u64,
     /// True when the scenario moves sats; it then needs mainnet clearance.
     pub moves_value: bool,
+    /// True when the scenario is *about* the app's own connected wallet --
+    /// cancelling from the pay screen instead of paying through it -- so a
+    /// run whose payer is a node Mortsom holds never takes that path and
+    /// must skip the scenario rather than report a pass for a path it did
+    /// not exercise.
+    pub needs_app_wallet: bool,
     /// Body.
     pub run: ScenarioFn,
 }
@@ -43,8 +49,41 @@ pub fn find(name: &str) -> Option<&'static ScenarioDef> {
     all().into_iter().find(|d| d.name == name)
 }
 
+/// Which side of a trade this run drives by hand.
+///
+/// A run mixes backends per actor: `[wallets]` names Alice's and Bob's
+/// wallets separately, and a trade with one of each is a configuration the
+/// loader accepts. Collapsing that into a single run-wide flag loses the
+/// half that still pays through the app, so what a scenario needs is
+/// resolved against the actor that performs each step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ManualPayments {
+    /// Alice — the seller, who pays the hold invoice.
+    pub alice: bool,
+    /// Bob — the buyer, whose payout invoice the app must accept.
+    pub bob: bool,
+}
+
+impl ManualPayments {
+    /// Both actors pay through the app's own connected wallet.
+    pub const NONE: Self = Self {
+        alice: false,
+        bob: false,
+    };
+    /// Both actors are driven from nodes Mortsom holds.
+    pub const BOTH: Self = Self {
+        alice: true,
+        bob: true,
+    };
+
+    /// Whether either actor is driven through the app's manual controls.
+    pub fn any(self) -> bool {
+        self.alice || self.bob
+    }
+}
+
 /// The capabilities a scenario needs from the app on this run's wallet
-/// backend.
+/// backends.
 ///
 /// A scenario names the journey, not the plumbing: "fund the escrow" is
 /// the same step whether the app pays it through its own connected wallet
@@ -54,23 +93,36 @@ pub fn find(name: &str) -> Option<&'static ScenarioDef> {
 /// path and this resolves it -- rather than making every scenario carry
 /// both and the gate check requirements the run will never exercise.
 ///
-/// On a node Mortsom holds the app has no wallet at all: `nwc` and
-/// `hold-invoice-payment` are never reached, and `external-wallet` -- the
-/// manual pay and invoice controls -- is what the run depends on instead.
-pub fn required_on(requires: &[Capability], manual_payments: bool) -> Vec<Capability> {
-    if !manual_payments {
+/// The resolution is per actor, because the run's wallets are: Alice pays
+/// the hold invoice, so `hold-invoice-payment` becomes `external-wallet`
+/// only when *her* wallet is a node Mortsom holds; Bob hands in the payout
+/// invoice, so his node adds the manual invoice control to
+/// `buyer-invoice`; and `nwc` -- the app's own wallet connection -- is
+/// still reached as long as either actor pays through the app.
+pub fn required_on(requires: &[Capability], manual: ManualPayments) -> Vec<Capability> {
+    if !manual.any() {
         return requires.to_vec();
     }
-    let mut resolved = Vec::with_capacity(requires.len());
+    let mut resolved = Vec::with_capacity(requires.len() + 1);
+    // Both wallet capabilities map onto the same manual controls; asking
+    // for them twice would report one missing capability as two.
+    let mut push = |capability: Capability| {
+        if !resolved.contains(&capability) {
+            resolved.push(capability);
+        }
+    };
     for capability in requires {
-        let needed = match capability {
-            Capability::Nwc | Capability::HoldInvoicePayment => Capability::ExternalWallet,
-            other => *other,
-        };
-        // Both map onto the same manual controls; asking for them twice
-        // would report one missing capability as two.
-        if !resolved.contains(&needed) {
-            resolved.push(needed);
+        match capability {
+            // Nobody's app connects a wallet only when nobody's app pays.
+            Capability::Nwc if manual.alice && manual.bob => push(Capability::ExternalWallet),
+            Capability::HoldInvoicePayment if manual.alice => push(Capability::ExternalWallet),
+            // The app still needs its invoice control, and it must accept
+            // the invoice our node issued rather than making its own.
+            Capability::BuyerInvoice if manual.bob => {
+                push(Capability::BuyerInvoice);
+                push(Capability::ExternalWallet);
+            }
+            other => push(*other),
         }
     }
     resolved
@@ -131,21 +183,30 @@ mod backend_tests {
         Capability::BuyerInvoice,
     ];
 
+    const ALICE_ONLY: ManualPayments = ManualPayments {
+        alice: true,
+        bob: false,
+    };
+    const BOB_ONLY: ManualPayments = ManualPayments {
+        alice: false,
+        bob: true,
+    };
+
     /// The app's own wallet is what the scenario declared; nothing to
     /// resolve.
     #[test]
     fn on_the_apps_own_wallet_the_requirements_are_what_the_scenario_declared() {
-        assert_eq!(required_on(TRADE, false), TRADE.to_vec());
+        assert_eq!(required_on(TRADE, ManualPayments::NONE), TRADE.to_vec());
     }
 
-    /// On a node Mortsom holds, the run drives the manual controls and
+    /// On nodes Mortsom holds, the run drives the manual controls and
     /// never touches the app's wallet. Requiring `nwc` would skip a profile
     /// over a capability the run does not use, and not requiring
     /// `external-wallet` would start a profile that cannot pay by hand and
     /// let it fail mid-trade instead of being skipped with a reason.
     #[test]
-    fn on_a_node_mortsom_holds_the_manual_controls_replace_the_apps_wallet() {
-        let resolved = required_on(TRADE, true);
+    fn on_nodes_mortsom_holds_the_manual_controls_replace_the_apps_wallet() {
+        let resolved = required_on(TRADE, ManualPayments::BOTH);
 
         assert!(!resolved.contains(&Capability::Nwc));
         assert!(!resolved.contains(&Capability::HoldInvoicePayment));
@@ -158,7 +219,7 @@ mod backend_tests {
     /// one missing capability must be reported once.
     #[test]
     fn two_wallet_capabilities_resolve_to_one_requirement() {
-        let resolved = required_on(TRADE, true);
+        let resolved = required_on(TRADE, ManualPayments::BOTH);
 
         assert_eq!(
             resolved
@@ -167,6 +228,40 @@ mod backend_tests {
                 .count(),
             1,
             "{resolved:?}"
+        );
+    }
+
+    /// One actor on a node Mortsom holds and the other on its own wallet
+    /// is a configuration `[wallets]` accepts. The half that still pays
+    /// through the app reaches `nwc`, so dropping it run-wide would let a
+    /// profile without it start and fail mid-trade.
+    #[test]
+    fn a_run_that_moves_only_the_sellers_wallet_still_needs_the_apps_wallet() {
+        let resolved = required_on(TRADE, ALICE_ONLY);
+
+        assert!(
+            resolved.contains(&Capability::Nwc),
+            "bob still pays through the app: {resolved:?}"
+        );
+        assert!(!resolved.contains(&Capability::HoldInvoicePayment));
+        assert!(resolved.contains(&Capability::ExternalWallet));
+    }
+
+    /// Bob's node issues the payout invoice, so the app has to accept one
+    /// typed in; Alice still pays the hold invoice through her own wallet.
+    #[test]
+    fn a_run_that_moves_only_the_buyers_wallet_keeps_the_payment_the_app_makes() {
+        let resolved = required_on(TRADE, BOB_ONLY);
+
+        assert!(resolved.contains(&Capability::Nwc));
+        assert!(
+            resolved.contains(&Capability::HoldInvoicePayment),
+            "alice still pays through the app: {resolved:?}"
+        );
+        assert!(resolved.contains(&Capability::BuyerInvoice));
+        assert!(
+            resolved.contains(&Capability::ExternalWallet),
+            "bob's invoice is ours to hand over: {resolved:?}"
         );
     }
 }
@@ -187,6 +282,7 @@ mod tests {
             requires: &[],
             timeout_secs: 1,
             moves_value: false,
+            needs_app_wallet: false,
             run: noop,
         }
     }

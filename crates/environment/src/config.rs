@@ -275,11 +275,6 @@ impl WalletsConfig {
         }
     }
 
-    /// Whether either actor is driven through the app's manual controls.
-    pub fn drives_manual_payments(&self) -> bool {
-        self.alice.drives_manual_payments() || self.bob.drives_manual_payments()
-    }
-
     /// The wallet for `label` (`alice` or `bob`).
     pub fn for_label(&self, label: &str) -> Option<&WalletConfig> {
         match label {
@@ -499,7 +494,8 @@ mod tests {
         };
 
         assert!(collect(|e| config.validate(e)).is_empty());
-        assert!(config.drives_manual_payments());
+        assert!(config.bob.drives_manual_payments());
+        assert!(!config.alice.drives_manual_payments());
         assert_eq!(config.bob.kind(), "lnd");
     }
 
@@ -554,7 +550,8 @@ mod tests {
             bob: nwc(BOB),
         };
 
-        assert!(!config.drives_manual_payments());
+        assert!(!config.alice.drives_manual_payments());
+        assert!(!config.bob.drives_manual_payments());
     }
     /// Docker refuses a container name that does not start with a letter or
     /// a digit, and it refuses it at `docker run`, long after the operator

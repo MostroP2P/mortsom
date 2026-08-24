@@ -14,7 +14,7 @@ use mortsom_app_contract::{
 };
 use mortsom_environment::docker::{ContainerRuntime, ContainerSpec, DockerError};
 use mortsom_observers::wallet::PaymentState;
-use mortsom_scenario_kit::registry::ScenarioFuture;
+use mortsom_scenario_kit::registry::{ManualPayments, ScenarioFuture};
 use nostr_sdk::prelude::{EventBuilder, FinalizeEvent, Keys, Kind, PublicKey, Tag};
 
 use super::*;
@@ -679,16 +679,6 @@ async fn unknown_scenario_and_missing_capability_are_explicit() {
 fn the_gate_asks_for_the_controls_the_run_will_actually_drive() {
     mortsom_scenarios::link();
     let happy = mortsom_scenario_kit::registry::find("happy_sell").unwrap();
-    let without = |dropped: Capability| {
-        let mut adapter = FakeAdapter::full();
-        adapter.capabilities = CapabilitySet::new(
-            FakeAdapter::full()
-                .capabilities
-                .iter()
-                .filter(|c| *c != dropped),
-        );
-        adapter
-    };
     let reason = |results: &[ScenarioResult]| match &results[0].outcome {
         Outcome::Skipped { reason } => reason.clone(),
         other => panic!("expected a skip, got {other:?}"),
@@ -696,24 +686,87 @@ fn the_gate_asks_for_the_controls_the_run_will_actually_drive() {
 
     // The app pays: it must be able to.
     let no_nwc = without(Capability::Nwc);
-    let (runnable, skipped) = gate_capabilities(&no_nwc, &[happy], false);
+    let (runnable, skipped) = gate_capabilities(&no_nwc, &[happy], ManualPayments::NONE);
     assert!(runnable.is_empty());
     assert!(reason(&skipped).contains("nwc"), "{}", reason(&skipped));
 
-    // Mortsom pays: the app's own wallet is never reached.
-    let (runnable, skipped) = gate_capabilities(&no_nwc, &[happy], true);
+    // Mortsom pays for both: the app's own wallet is never reached.
+    let (runnable, skipped) = gate_capabilities(&no_nwc, &[happy], ManualPayments::BOTH);
     assert_eq!(runnable.len(), 1, "{skipped:?}");
     assert!(skipped.is_empty());
 
     // But the controls Mortsom drives by hand must exist.
     let no_manual = without(Capability::ExternalWallet);
-    let (runnable, skipped) = gate_capabilities(&no_manual, &[happy], true);
+    let (runnable, skipped) = gate_capabilities(&no_manual, &[happy], ManualPayments::BOTH);
     assert!(runnable.is_empty());
     assert!(
         reason(&skipped).contains("external-wallet"),
         "{}",
         reason(&skipped)
     );
+}
+
+/// `[wallets]` lets each actor name its own backend, and a trade with one
+/// node and one connected wallet still reaches the app's wallet on the
+/// half that pays for itself. Reading the run as manual because *either*
+/// actor is would let a profile without NWC start and fail mid-trade --
+/// the false start the gate exists to prevent.
+#[test]
+fn a_mixed_run_still_gates_on_the_wallet_the_other_actor_pays_with() {
+    mortsom_scenarios::link();
+    let happy = mortsom_scenario_kit::registry::find("happy_sell").unwrap();
+    let alice_on_a_node = ManualPayments {
+        alice: true,
+        bob: false,
+    };
+
+    let (runnable, skipped) =
+        gate_capabilities(&without(Capability::Nwc), &[happy], alice_on_a_node);
+
+    assert!(runnable.is_empty(), "bob's app still pays through NWC");
+    match &skipped[0].outcome {
+        Outcome::Skipped { reason } => assert!(reason.contains("nwc"), "{reason}"),
+        other => panic!("expected a skip, got {other:?}"),
+    }
+}
+
+/// A scenario whose subject is the connected wallet -- cancelling from the
+/// pay screen instead of paying through it -- cannot be exercised by a run
+/// that pays from a node Mortsom holds: the seller never opens that
+/// screen. Rewriting its requirements onto the manual controls would let
+/// it report a pass for a path the run never took.
+#[test]
+fn a_scenario_about_the_connected_wallet_is_skipped_when_mortsom_pays_by_hand() {
+    mortsom_scenarios::link();
+    let cancel = mortsom_scenario_kit::registry::find("nwc_cancel_payment").unwrap();
+    let full = FakeAdapter::full();
+
+    let (runnable, skipped) = gate_capabilities(&full, &[cancel], ManualPayments::BOTH);
+
+    assert!(runnable.is_empty(), "the NWC path is not reachable here");
+    match &skipped[0].outcome {
+        Outcome::Skipped { reason } => assert!(
+            reason.contains("wallet the app is connected to"),
+            "{reason}"
+        ),
+        other => panic!("expected a skip, got {other:?}"),
+    }
+
+    // On the wallet it is about, it runs.
+    let (runnable, skipped) = gate_capabilities(&full, &[cancel], ManualPayments::NONE);
+    assert_eq!(runnable.len(), 1, "{skipped:?}");
+}
+
+/// An adapter that supports everything but `dropped`.
+fn without(dropped: Capability) -> FakeAdapter {
+    let mut adapter = FakeAdapter::full();
+    adapter.capabilities = CapabilitySet::new(
+        FakeAdapter::full()
+            .capabilities
+            .iter()
+            .filter(|c| *c != dropped),
+    );
+    adapter
 }
 
 #[tokio::test]
@@ -794,6 +847,7 @@ inventory::submit! {
         requires: &[],
         timeout_secs: 5,
         moves_value: false,
+        needs_app_wallet: false,
         run: flaky_infra,
     }
 }
@@ -820,6 +874,7 @@ inventory::submit! {
         requires: &[],
         timeout_secs: 5,
         moves_value: false,
+        needs_app_wallet: false,
         run: noop,
     }
 }

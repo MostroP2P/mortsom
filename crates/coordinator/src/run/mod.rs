@@ -35,7 +35,7 @@ use mortsom_scenario_kit::context::NodeWallet;
 use mortsom_scenario_kit::context::{ActorSession, Context, MainnetClearance, RecoveryTiming};
 use mortsom_scenario_kit::outcome::{Outcome, ScenarioResult};
 use mortsom_scenario_kit::recovery::{NoRelayControl, RelayControl};
-use mortsom_scenario_kit::registry::{ScenarioDef, required_on, select};
+use mortsom_scenario_kit::registry::{ManualPayments, ScenarioDef, required_on, select};
 use mortsom_scenario_kit::timeline::{Timeline, TimelineKind};
 use relay_control::LiveRelayControl;
 use serde::{Deserialize, Serialize};
@@ -227,7 +227,10 @@ pub async fn run_scenarios(
     let (runnable, gated) = gate_capabilities(
         deps.adapter.as_ref(),
         &selected,
-        config.wallets.drives_manual_payments(),
+        ManualPayments {
+            alice: config.wallets.alice.drives_manual_payments(),
+            bob: config.wallets.bob.drives_manual_payments(),
+        },
     );
     summary.results.extend(gated);
     if runnable.is_empty() {
@@ -307,37 +310,54 @@ fn clear_value_moving(
 fn gate_capabilities<'a>(
     adapter: &dyn AppAdapter,
     selected: &[&'a ScenarioDef],
-    manual_payments: bool,
+    manual: ManualPayments,
 ) -> (Vec<&'a ScenarioDef>, Vec<ScenarioResult>) {
     let capabilities = adapter.capabilities();
     let profile = adapter.profile().name;
     let mut runnable = Vec::new();
     let mut skipped = Vec::new();
+    let mut skip = |def: &ScenarioDef, reason: String| {
+        skipped.push(ScenarioResult {
+            name: def.name.into(),
+            app_profile: profile.clone(),
+            app_version: None,
+            outcome: Outcome::Skipped { reason },
+            attempts: 0,
+            duration: Duration::ZERO,
+        });
+    };
     for def in selected {
-        // What a scenario needs depends on the wallet the run gave it: on a
-        // node Mortsom holds, the app pays nothing and the manual controls
-        // are what must exist.
-        let missing = capabilities.missing(&required_on(def.requires, manual_payments));
+        // A scenario about the app's own wallet cannot be run against one
+        // Mortsom holds: the path it exists to exercise is not taken, and
+        // reporting a pass for it would say the suite covered something it
+        // never touched.
+        if def.needs_app_wallet && manual.alice {
+            skip(
+                def,
+                format!(
+                    "{} is about the wallet the app is connected to, and this run pays \
+                     alice's side from a node Mortsom holds",
+                    def.name
+                ),
+            );
+            continue;
+        }
+        // What is left of a scenario's requirements depends on the wallet
+        // each actor was given: where Mortsom pays, the app's own wallet is
+        // never reached and the manual controls are what must exist.
+        let missing = capabilities.missing(&required_on(def.requires, manual));
         if missing.is_empty() {
             runnable.push(*def);
         } else {
-            skipped.push(ScenarioResult {
-                name: def.name.into(),
-                app_profile: profile.clone(),
-                app_version: None,
-                outcome: Outcome::Skipped {
-                    reason: format!(
-                        "profile {profile} lacks {}",
-                        missing
-                            .iter()
-                            .map(|c| c.as_str())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    ),
-                },
-                attempts: 0,
-                duration: Duration::ZERO,
-            });
+            let reason = format!(
+                "profile {profile} lacks {}",
+                missing
+                    .iter()
+                    .map(|c| c.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            skip(def, reason);
         }
     }
     (runnable, skipped)
