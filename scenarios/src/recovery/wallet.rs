@@ -54,6 +54,10 @@ crate::register_scenario! {
     requires: NWC_CANCEL_REQUIRES,
     timeout_secs: NO_VALUE_TIMEOUT_SECS,
     moves_value: false,
+    // The scenario *is* the connected-wallet cancellation: on a node
+    // Mortsom holds the seller never opens that pay screen, so a run that
+    // pays by hand has to skip it rather than pass a path it never took.
+    needs_app_wallet: true,
 }
 crate::register_scenario! {
     name: "wallet_unavailable_then_pay",

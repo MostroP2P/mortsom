@@ -18,6 +18,25 @@ macro_rules! register_scenario {
         timeout_secs: $timeout:expr,
         moves_value: $moves_value:expr $(,)?
     ) => {
+        $crate::register_scenario! {
+            name: $name,
+            body: $body,
+            tags: $tags,
+            requires: $requires,
+            timeout_secs: $timeout,
+            moves_value: $moves_value,
+            needs_app_wallet: false,
+        }
+    };
+    (
+        name: $name:literal,
+        body: $body:path,
+        tags: $tags:expr,
+        requires: $requires:expr,
+        timeout_secs: $timeout:expr,
+        moves_value: $moves_value:expr,
+        needs_app_wallet: $needs_app_wallet:expr $(,)?
+    ) => {
         inventory::submit! {
             ::mortsom_scenario_kit::registry::ScenarioDef {
                 name: $name,
@@ -25,6 +44,7 @@ macro_rules! register_scenario {
                 requires: $requires,
                 timeout_secs: $timeout,
                 moves_value: $moves_value,
+                needs_app_wallet: $needs_app_wallet,
                 run: |ctx| Box::pin($body(ctx)),
             }
         }
