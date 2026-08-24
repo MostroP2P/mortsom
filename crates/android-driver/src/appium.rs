@@ -21,6 +21,11 @@ use crate::webdriver::{Element, Locator, Session, WebDriverError, server_ready};
 pub const SCROLL_SEARCH_SWIPES: u32 = 10;
 /// Interval between element polls inside a bounded wait.
 pub const POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// How long a bounded wait polls the plain lookup before it also looks
+/// below the fold. Long enough that a screen still being built is not
+/// swiped while it renders; short enough that an off-screen control costs
+/// a moment rather than its whole deadline.
+pub const SCROLL_PROBE_DELAY: Duration = Duration::from_secs(2);
 /// Interval between server readiness probes.
 pub const SERVER_POLL: Duration = Duration::from_millis(500);
 /// Appium's own idle timeout for a session, in seconds.
@@ -255,14 +260,7 @@ impl AppiumSession {
             Ok(element) => Ok(element),
             // Not on screen is not the same as not there: scroll for it
             // before believing the app never rendered it.
-            Err(not_visible) => match self
-                .session
-                .find_element(
-                    Locator::UiAutomator,
-                    &scroll_into_view_selector(accessibility_id),
-                )
-                .await
-            {
+            Err(not_visible) => match self.scroll_to(accessibility_id).await {
                 Ok(element) => Ok(element),
                 // Nothing to scroll, or scrolled to the end without it: the
                 // first failure is the one that describes the situation.
@@ -271,7 +269,27 @@ impl AppiumSession {
         }
     }
 
+    /// Scrolls the first scrollable container until the element comes into
+    /// view, and returns it. Fails when there is nothing to scroll or the
+    /// search reaches the end without finding it.
+    async fn scroll_to(&self, accessibility_id: &str) -> Result<Element, WebDriverError> {
+        self.session
+            .find_element(
+                Locator::UiAutomator,
+                &scroll_into_view_selector(accessibility_id),
+            )
+            .await
+    }
+
     /// Whether an element with this accessibility id is present right now.
+    ///
+    /// Deliberately the plain lookup, with no scrolling: this probe answers
+    /// "what is on the screen now", and callers ask it in loops -- which
+    /// screen am I on, is the notice still up, can I go back yet. A probe
+    /// that scrolled would answer the question by changing the thing it was
+    /// asked about, leaving the screen somewhere the caller never navigated
+    /// to, and would cost a full swipe search every time the answer is no.
+    /// [`Self::wait_for`] is the primitive that looks below the fold.
     pub async fn exists(&self, accessibility_id: &str) -> Result<bool, AppiumError> {
         match self
             .session
@@ -288,12 +306,24 @@ impl AppiumSession {
     }
 
     /// Waits until the element is present, bounded by `timeout`.
+    ///
+    /// Polling uses the plain lookup: it is cheap and it moves nothing,
+    /// which matters because some waits are minutes long and a scrolling
+    /// search on every poll would swipe the screen for the whole of one.
+    /// But a control below the fold is absent from the accessibility tree
+    /// until something scrolls to it, so the wait looks there too -- once,
+    /// after the screen has had time to build, and once more before it
+    /// gives up. Off-screen is a fixed property of a laid-out screen, so
+    /// two probes settle it; one per poll would only thrash the device.
     pub async fn wait_for(
         &self,
         accessibility_id: &str,
         timeout: Duration,
     ) -> Result<Element, AppiumError> {
-        let deadline = tokio::time::Instant::now() + timeout;
+        let started = tokio::time::Instant::now();
+        let deadline = started + timeout;
+        let probe_at = started + SCROLL_PROBE_DELAY.min(timeout);
+        let mut probed = false;
         loop {
             match self
                 .session
@@ -307,7 +337,21 @@ impl AppiumSession {
                 Err(e) if e.is_no_such_element() => {}
                 Err(e) => return Err(e.into()),
             }
+            let now = tokio::time::Instant::now();
+            let probing_now = !probed && now >= probe_at;
+            if probing_now {
+                probed = true;
+                if let Ok(element) = self.scroll_to(accessibility_id).await {
+                    return Ok(element);
+                }
+            }
             if tokio::time::Instant::now() >= deadline {
+                // A screen that finished building late is below the fold
+                // only now; look once more before calling the control
+                // missing, unless this very iteration already did.
+                if !probing_now && let Ok(element) = self.scroll_to(accessibility_id).await {
+                    return Ok(element);
+                }
                 return Err(AppiumError::WaitTimeout {
                     accessibility_id: accessibility_id.to_owned(),
                     condition: "not found",
@@ -560,6 +604,109 @@ mod tests {
             .mount(server)
             .await;
         AppiumSession::create(&server.uri(), &spec()).await.unwrap()
+    }
+
+    /// A settings page is taller than the phone, and Flutter does not build
+    /// what is not visible: a control below the fold is absent from the
+    /// accessibility tree until something scrolls to it. `find` already
+    /// knows that. A wait that does not would fail on a screen that is
+    /// behaving perfectly, and blame the app's automation contract for it.
+    #[tokio::test]
+    async fn a_wait_finds_a_control_below_the_fold_without_burning_its_deadline() {
+        let server = MockServer::start().await;
+        let s = session(&server).await;
+        mount_below_the_fold(&server, "settings.mostro_node").await;
+
+        let started = tokio::time::Instant::now();
+        s.wait_for("settings.mostro_node", Duration::from_secs(30))
+            .await
+            .expect("a control below the fold is present, not missing");
+
+        // Waiting out the whole deadline first would be correct and useless:
+        // every off-screen control in a run would cost its full timeout.
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "the below-the-fold probe must not wait for the deadline: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// The counterpart guarantee: a probe answers about the screen without
+    /// changing it. `go_home` asks "is the order book up yet?" on every
+    /// pass of its unwind loop, and `dismiss_notice` asks three such
+    /// questions per poll. A probe that scrolled would swipe a screen the
+    /// caller only meant to look at -- and leave it there.
+    #[tokio::test]
+    async fn a_probe_never_scrolls_the_screen_it_is_asked_about() {
+        let server = MockServer::start().await;
+        let s = session(&server).await;
+        mount_below_the_fold(&server, "order.add.fab").await;
+
+        assert!(!s.exists("order.add.fab").await.unwrap());
+        assert!(
+            !server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .iter()
+                .any(|r| String::from_utf8_lossy(&r.body).contains("UiScrollable")),
+            "a probe must not swipe the screen to answer"
+        );
+    }
+
+    /// The scrolling probe must not turn a genuinely missing control into a
+    /// hang or a false pass: it is searched for, not found, and the wait
+    /// still ends in a timeout.
+    #[tokio::test]
+    async fn a_control_that_is_nowhere_still_times_out() {
+        let server = MockServer::start().await;
+        let s = session(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+            )
+            .mount(&server)
+            .await;
+
+        let err = s
+            .wait_for("nowhere", Duration::from_millis(300))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            AppiumError::WaitTimeout {
+                condition: "not found",
+                ..
+            }
+        ));
+        assert!(!s.exists("nowhere").await.unwrap());
+    }
+
+    /// A control that is off-screen: the plain `resourceId` lookup misses it
+    /// and only the scrolling lookup returns it.
+    async fn mount_below_the_fold(server: &MockServer, id: &str) {
+        let scrolled = format!("scrollIntoView(new UiSelector().resourceId(\\\"{id}\\\")");
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .and(move |request: &wiremock::Request| {
+                String::from_utf8_lossy(&request.body).contains(scrolled.as_str())
+            })
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+            )
+            .mount(server)
+            .await;
     }
 
     #[tokio::test]
