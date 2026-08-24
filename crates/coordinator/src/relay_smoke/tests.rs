@@ -16,7 +16,7 @@ fn config(artifacts_dir: &std::path::Path) -> Config {
         "/../../mortsom.toml.example"
     ))
     .unwrap()
-    .replace("health_timeout_secs = 60", "health_timeout_secs = 1")
+    .replace("health_timeout_secs = 120", "health_timeout_secs = 1")
     .replace("host_port = 7000", "host_port = 47200")
     .replace(
         "artifacts_dir = \"./artifacts\"",

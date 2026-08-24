@@ -45,7 +45,12 @@ container_port = 8080
 [mostro]
 mode = "external_local"           # a locally managed Mostro daemon; never restarted by Mortsom
 settings_file = "env:MORTSOM_MOSTRO_SETTINGS_FILE"
-health_timeout_secs = 60
+# `relay smoke` waits this long for the daemon's kind-10002 on the run relay.
+# The daemon publishes it on its own `publish_relays_interval` -- 60s is a
+# common setting -- and only after reconnecting to a relay that did not exist
+# a moment ago. A window the same size as that interval is a coin toss, and
+# it lands as `daemon-uses-run-relay` FAIL on a daemon that is behaving.
+health_timeout_secs = 120
 relays = ["ws://host.docker.internal:7000"]
 
 [wallets]
