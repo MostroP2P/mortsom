@@ -41,7 +41,7 @@ fn world() -> World {
     )
     .replace("boot_timeout_secs = 180", "boot_timeout_secs = 3")
     .replace("ui_timeout_secs = 30", "ui_timeout_secs = 1")
-    .replace("health_timeout_secs = 60", "health_timeout_secs = 1")
+    .replace("health_timeout_secs = 120", "health_timeout_secs = 1")
     .replace("host_port = 7000", "host_port = 47400")
     .replace(
         "artifacts_dir = \"./artifacts\"",
@@ -524,7 +524,7 @@ async fn missing_apk_fails_before_devices_but_after_relay_cleanup() {
     ))
     .unwrap()
     .replace("apk_path = \"\"", "apk_path = \"/nonexistent.apk\"")
-    .replace("health_timeout_secs = 60", "health_timeout_secs = 1")
+    .replace("health_timeout_secs = 120", "health_timeout_secs = 1")
     .replace("host_port = 7000", "host_port = 47400")
     .replace(
         "artifacts_dir = \"./artifacts\"",

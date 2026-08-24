@@ -53,7 +53,7 @@ fn world(allow_mainnet: bool) -> World {
     )
     .replace("boot_timeout_secs = 180", "boot_timeout_secs = 3")
     .replace("ui_timeout_secs = 30", "ui_timeout_secs = 1")
-    .replace("health_timeout_secs = 60", "health_timeout_secs = 1")
+    .replace("health_timeout_secs = 120", "health_timeout_secs = 1")
     .replace("state_timeout_secs = 180", "state_timeout_secs = 5")
     .replace("settle_timeout_secs = 600", "settle_timeout_secs = 5")
     .replace(
