@@ -26,6 +26,10 @@ pub enum Capability {
     TakeOrder,
     /// Paying the hold invoice through the connected wallet.
     HoldInvoicePayment,
+    /// Handing the hold invoice to an outside payer and accepting a buyer
+    /// invoice typed in by hand — the controls a run uses when the wallet
+    /// is a node Mortsom holds rather than one the app is connected to.
+    ExternalWallet,
     /// Submitting a buyer invoice.
     BuyerInvoice,
     /// Reporting fiat sent.
@@ -50,7 +54,7 @@ pub enum Capability {
 
 impl Capability {
     /// Every capability, in declaration order.
-    pub const ALL: [Capability; 17] = [
+    pub const ALL: [Capability; 18] = [
         Capability::Onboarding,
         Capability::CustomNodeSelection,
         Capability::LocalRelayConfiguration,
@@ -58,6 +62,7 @@ impl Capability {
         Capability::CreateOrder,
         Capability::TakeOrder,
         Capability::HoldInvoicePayment,
+        Capability::ExternalWallet,
         Capability::BuyerInvoice,
         Capability::FiatSent,
         Capability::Release,
@@ -80,6 +85,7 @@ impl Capability {
             Capability::CreateOrder => "create-order",
             Capability::TakeOrder => "take-order",
             Capability::HoldInvoicePayment => "hold-invoice-payment",
+            Capability::ExternalWallet => "external-wallet",
             Capability::BuyerInvoice => "buyer-invoice",
             Capability::FiatSent => "fiat-sent",
             Capability::Release => "release",

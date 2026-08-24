@@ -1,10 +1,13 @@
-//! Read-only NWC wallet probing: reachability and capability summary. Never
-//! creates an invoice or pays anything, and never returns the URI.
+//! Read-only wallet probing: reachability and capability summary, over NWC
+//! or a local LND node. Never creates an invoice or pays anything, and never
+//! returns a URI, a macaroon or a certificate.
 
 use std::str::FromStr;
 use std::time::Duration;
 
 use mortsom_common::{Redactor, Secret};
+
+use crate::lnd::LndWallet;
 use nostr_sdk::prelude::NostrWalletConnectUri;
 use nwc::NostrWalletConnect;
 use serde::{Deserialize, Serialize};
@@ -21,8 +24,15 @@ pub struct WalletProbe {
     pub network: Option<String>,
     /// NWC methods the wallet supports.
     pub methods: Vec<String>,
-    /// Spendable balance in sats.
+    /// Spendable balance in sats. On a node this is outbound liquidity.
     pub balance_sats: u64,
+    /// Inbound liquidity in sats, when the backend can report it.
+    ///
+    /// A node with no inbound liquidity cannot be paid, which on a freshly
+    /// created Polar network is the usual reason a trade dies halfway
+    /// through. NWC exposes nothing equivalent, so this stays `None` there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inbound_sats: Option<u64>,
 }
 
 /// Failures while probing; messages never contain the URI.
@@ -44,6 +54,10 @@ pub enum WalletProbeError {
         /// Deadline used.
         timeout: Duration,
     },
+    /// The backend reported a failure. The message is already labelled and
+    /// scrubbed by the backend that produced it.
+    #[error("{0}")]
+    Backend(String),
     /// The wallet service returned an error.
     #[error("{label}: NWC {operation} failed: {message}")]
     Failed {
@@ -83,6 +97,33 @@ pub async fn probe_nwc(
         network: info.network,
         methods: info.methods.iter().map(|m| m.to_string()).collect(),
         balance_sats: balance_msats.balance / 1000,
+        inbound_sats: None,
+    })
+}
+
+/// What Mortsom asks of an LND node. Unlike NWC, where the wallet service
+/// advertises its own method list, these are fixed: they are the calls this
+/// backend makes.
+pub const LND_METHODS: [&str; 3] = ["make_invoice", "pay_invoice", "lookup_invoice"];
+
+/// Probes an LND node with `get_info` and `channel_balance` only.
+pub async fn probe_lnd(wallet: &LndWallet) -> Result<WalletProbe, WalletProbeError> {
+    let label = wallet.label().to_owned();
+    let (alias, network) = wallet
+        .info()
+        .await
+        .map_err(|e| WalletProbeError::Backend(e.to_string()))?;
+    let (outbound, inbound) = wallet
+        .channel_balance()
+        .await
+        .map_err(|e| WalletProbeError::Backend(e.to_string()))?;
+    Ok(WalletProbe {
+        label,
+        alias: (!alias.is_empty()).then_some(alias),
+        network: (!network.is_empty()).then_some(network),
+        methods: LND_METHODS.iter().map(|m| (*m).to_owned()).collect(),
+        balance_sats: outbound,
+        inbound_sats: Some(inbound),
     })
 }
 

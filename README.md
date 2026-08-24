@@ -52,9 +52,12 @@ You need, on this machine:
 - **A checkout of the app** next to this one (`../mobile` by default).
 - **A Mostro daemon you control**, running locally, with its `settings.toml`
   reachable and its relay list including `ws://localhost:7000`.
-- **Two Nostr Wallet Connect wallets**, one for Alice and one for Bob, each
-  funded above the spend caps you configure. They are separate wallets on
-  purpose: the run proves who paid.
+- **Two wallets**, one for Alice and one for Bob, each funded above the spend
+  caps you configure. They are separate wallets on purpose: the run proves who
+  paid. Either backend will do — NWC, or two LND nodes on a local
+  [Polar](https://lightningpolar.com/) network. See
+  [Choosing a wallet backend](#choosing-a-wallet-backend); for a local setup,
+  Polar is the one you want.
 
 `mortsom doctor` checks every one of these and names what is missing, so run
 it first and read it rather than working from this list.
@@ -69,8 +72,8 @@ export MORTSOM_ALICE_NWC='nostr+walletconnect://…'
 export MORTSOM_BOB_NWC='nostr+walletconnect://…'
 ```
 
-Secrets (`MORTSOM_*_NWC`, the daemon settings path) are accepted only as `env:`
-references, in every configuration layer including the gitignored
+Secrets (wallet credentials, the daemon settings path) are accepted only as
+`env:` references, in every configuration layer including the gitignored
 `mortsom.local.toml` overlay; the loader reports every missing variable at once.
 
 **All four are required by every command**, including the ones that never
@@ -202,6 +205,80 @@ dump per actor at every step. Read the timeline first; it is written for that.
 [`docs/runbook.md`](./docs/runbook.md) maps each failure category to what to
 look at, and `mortsom cleanup <run-id>` removes what an interrupted run left
 behind.
+
+## Choosing a wallet backend
+
+Every run so far has cost mainnet sats and a wallet service's latency. That is
+the point of this harness on the canary lane — but it is a slow way to iterate.
+A local Polar network on regtest makes a second setup practical, where a whole
+trade settles in **under a second of worthless sats**.
+
+Each actor names its own backend, so you can mix them.
+
+| | `kind = "nwc"` | `kind = "lnd"` |
+|---|---|---|
+| Who holds the wallet | The app. Mortsom types the URI into its settings and the app pays for itself. | Mortsom. The app has **no wallet connected at all**. |
+| Who pays the hold invoice | The app, through its connected wallet. | Mortsom, from the node, after reading the invoice off the pay screen. |
+| Who issues the buyer invoice | The app. | Mortsom, typed into the app's manual invoice form. |
+| What is under test | The app's own NWC integration. | Everything else: the app's manual paths, the protocol, the daemon. |
+| Money | Real sats, real latency. | Regtest. Worthless, and fast. |
+| Where it fits | The canary lane, and any run whose subject *is* the NWC integration. | Local iteration. |
+
+Both backends are observed the same way: Mortsom asks the wallet that moved the
+money whether the payment settled, so value assertions are identical either way.
+The spend caps are enforced identically too — a cap that only works on mainnet
+is a cap nobody has tested.
+
+### Driving a local Polar network
+
+Create a network with **three** LND nodes and open channels between them.
+
+**The third node is not optional.** `mostrod` must point at a node of its own.
+With two, the harness trades with itself: the hold invoice would be paid by the
+node that issued it, and every value assertion would be meaningless. Point your
+daemon's Lightning backend at the third node before you run anything.
+
+Then copy the config and fill in what Polar's *Connect* tab shows you:
+
+```sh
+cp config/polar.example.toml mortsom.toml
+
+export MORTSOM_ALICE_LND_HOST='127.0.0.1:10001'
+export MORTSOM_ALICE_LND_CERT=~/.polar/networks/1/volumes/lnd/alice/tls.cert
+export MORTSOM_ALICE_LND_MACAROON=~/.polar/networks/1/volumes/lnd/alice/data/chain/bitcoin/regtest/admin.macaroon
+# …and the same three for bob, on its own port
+```
+
+Paste them exactly as Polar displays them. A host without a scheme is read as
+`https://` (LND's gRPC endpoint is TLS-only, so there is no other choice), and
+a leading `~` in a credential path is expanded — a config file is not a shell,
+and without this the most natural thing to paste is also the thing that fails.
+
+Two things the config refuses, because both fail late and confusingly otherwise:
+
+- **A host with no port.** LND's gRPC port is never the default, so
+  `127.0.0.1` alone connects somewhere else instead of failing honestly.
+- **A credential path that does not exist.** The network number in a Polar path
+  (`networks/1`) changes with every network you create, so a stale path is *the*
+  failure mode. Both files are checked when the config loads, and the error
+  names the path with the `~` already expanded — the path that was looked for.
+
+Then, as always:
+
+```sh
+mortsom doctor
+```
+
+which reports each wallet's liquidity in both directions:
+
+```
+[PASS] wallet alice  reachable; lnd backend, alias alice, network regtest,
+                     9998735 sats outbound / 9994325 sats inbound, methods […]
+```
+
+Inbound matters as much as outbound: a node with no inbound liquidity cannot be
+paid, which on a freshly created network is the usual reason a trade dies
+halfway through.
 
 ## The relay is Mortsom's, not yours
 

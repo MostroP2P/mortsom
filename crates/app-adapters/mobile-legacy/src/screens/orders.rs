@@ -123,6 +123,7 @@ pub async fn observe(
 pub async fn pay_hold_invoice(
     device: &DeviceContext<'_>,
     order: &OrderReference,
+    path: PaymentPath,
 ) -> Result<PaymentHandoff, AdapterError> {
     open_trade(device, order).await?;
     tap(device, Ids::TRADE_PAY_INVOICE).await?;
@@ -132,6 +133,21 @@ pub async fn pay_hold_invoice(
         .await?
         .trim()
         .to_owned();
+    if path == PaymentPath::ExternalWallet {
+        // Nothing is tapped: the app has no wallet to pay with, and the
+        // caller holds the node that does. The screen stays open until the
+        // daemon sees the payment, which is the app's own signal to move
+        // on — pressing anything here would be inventing one.
+        if invoice.is_empty() {
+            return Err(AdapterError::product(
+                "the pay screen shows no invoice, so there is nothing to pay externally",
+            ));
+        }
+        return Ok(PaymentHandoff {
+            kind: PaymentPath::ExternalWallet,
+            invoice: Some(Secret::new(invoice)),
+        });
+    }
     tap(device, Ids::PAY_NWC).await?;
     // On success the app returns home; the wallet observer confirms the
     // settlement, the adapter only reports the handoff.
@@ -149,9 +165,18 @@ pub async fn pay_hold_invoice(
 pub async fn provide_buyer_invoice(
     device: &DeviceContext<'_>,
     order: &OrderReference,
+    supplied: Option<&Secret>,
 ) -> Result<Option<Secret>, AdapterError> {
     open_trade(device, order).await?;
     tap(device, Ids::TRADE_ADD_INVOICE).await?;
+    if let Some(invoice) = supplied {
+        // The caller issued this one on a node it holds; the app only has
+        // to accept it, through the same form a user types into.
+        type_into(device, Ids::INVOICE_TEXT, invoice.expose()).await?;
+        tap(device, Ids::INVOICE_SUBMIT).await?;
+        expect(device, Ids::ORDER_ADD_FAB).await?;
+        return Ok(Some(invoice.clone()));
+    }
     tap(device, Ids::INVOICE_NWC_GENERATE).await?;
     let invoice = label(device, Ids::INVOICE_NWC_TEXT)
         .await?

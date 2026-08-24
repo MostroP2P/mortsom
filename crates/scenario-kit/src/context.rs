@@ -2,9 +2,11 @@
 //! business actions and observations only; the runner owns construction and
 //! teardown.
 
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use mortsom_android_driver::avd::Actor;
 use mortsom_android_driver::ui::UiSession;
 use mortsom_app_contract::{AppAdapter, DeviceContext, TestEnvironment};
@@ -93,6 +95,25 @@ impl ActorSession {
     }
 }
 
+/// A Lightning node Mortsom holds and pays with directly.
+///
+/// This is what a local Polar network gives a run that NWC cannot: the
+/// wallet is ours, so a whole trade settles in a fraction of a second on
+/// regtest with worthless sats, instead of costing mainnet sats and a
+/// wallet service's latency.
+#[async_trait]
+pub trait NodeWallet: Send + Sync {
+    /// Issues an invoice for `sats`, to be typed into the app.
+    async fn make_invoice(&self, sats: u64, memo: &str) -> Result<Secret, String>;
+
+    /// Starts paying `invoice`, returning once it is in flight.
+    ///
+    /// A Mostro hold invoice is held until release, so waiting for
+    /// settlement here would stall the trade that is supposed to release
+    /// it. Settlement is confirmed by the wallet observer, as always.
+    async fn start_payment(&self, invoice: &Secret) -> Result<(), String>;
+}
+
 /// Everything a scenario can reach.
 pub struct Context {
     /// Application adapter.
@@ -105,6 +126,13 @@ pub struct Context {
     pub relay: Arc<RelayObserver>,
     /// Wallet observer.
     pub wallets: Arc<WalletObserver>,
+    /// Nodes Mortsom holds, keyed by actor label.
+    ///
+    /// Empty on an NWC run: there the app has its own wallet and pays for
+    /// itself. An entry here means the app has no wallet connected, so
+    /// Mortsom issues the buyer invoice and pays the hold invoice through
+    /// the app's manual controls instead.
+    pub node_wallets: BTreeMap<String, Arc<dyn NodeWallet>>,
     /// Relay fault injection (restart, replay).
     pub relay_control: Arc<dyn RelayControl>,
     /// Cap accounting.
@@ -149,6 +177,13 @@ pub struct RecoveryTiming {
 }
 
 impl Context {
+    /// The node backing `actor`, when Mortsom holds one.
+    ///
+    /// `None` means the app has its own wallet and pays for itself.
+    pub fn node_wallet(&self, actor: Actor) -> Option<&Arc<dyn NodeWallet>> {
+        self.node_wallets.get(actor.as_str())
+    }
+
     /// The session of `actor`.
     pub fn actor(&self, actor: Actor) -> Result<&ActorSession, ScenarioError> {
         self.actors

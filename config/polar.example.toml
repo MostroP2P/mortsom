@@ -1,0 +1,96 @@
+# config/polar.example.toml -- same lanes and caps as mortsom.toml.example,
+# with both wallets on a local Polar network instead of NWC.
+#
+# This is the fast local setup: a whole trade settles in a fraction of a
+# second, on regtest, with worthless sats. See the Polar section of the
+# README for the network layout and the third-node requirement.
+#
+# Copy to `mortsom.toml` (gitignored) or layer overrides in
+# `mortsom.local.toml` (gitignored). Every secret is an `env:` reference; the
+# loader lists all missing variables at once and refuses to start anything
+# until they are present. Secrets never live in TOML -- not even in the
+# gitignored overlay: wallet URIs and the daemon settings path are accepted
+# only as `env:` references.
+
+[mobile]
+profile = "mobile-v2"             # second-generation app (../mobilev2)
+source_dir = "../mobilev2"
+flavor = "mortsom"                # v2 has no flavors: "mortsom" is a no-op, "debug" builds a debug APK
+apk_path = ""                     # empty means build from source_dir
+mostro_pubkey = "env:MORTSOM_MOSTRO_PUBKEY"
+dart_defines = ["MOSTRO_PUB_KEY=${MORTSOM_MOSTRO_PUBKEY}"]
+package = "foundation.mostro.app"  # application id of the v2 app
+main_activity = ""                # empty: UiAutomator2 resolves the launcher activity
+
+[android]
+avd_image = "system-images;android-35;google_apis;x86_64"
+device_profile = "pixel_6"           # avdmanager device id (see `avdmanager list device -c`)
+api_level = 35
+boot_timeout_secs = 180
+ui_timeout_secs = 30
+snapshot_name = "mortsom-clean"
+avd_name_prefix = "mortsom"       # AVDs are <prefix>-alice and <prefix>-bob
+base_console_port = 5554          # alice 5554/5555, bob 5556/5557
+emulator_ram_mb = 3072
+headless = true
+appium_port = 4723
+base_system_port = 8200           # UiAutomator2 systemPort per actor: 8200, 8201
+
+[relay]
+docker_image = "scsibug/nostr-rs-relay:latest"
+container_name_prefix = "mortsom-relay"
+host_port = 7000                  # first port tried; each run allocates a free one
+container_port = 8080
+
+[mostro]
+mode = "external_local"           # a locally managed Mostro daemon; never restarted by Mortsom
+settings_file = "env:MORTSOM_MOSTRO_SETTINGS_FILE"
+health_timeout_secs = 60
+relays = ["ws://host.docker.internal:7000"]
+
+[wallets]
+# Both actors run on a local Polar network. The apps have no wallet connected
+# at all on this path: Mortsom pays the hold invoice and issues the buyer
+# invoice from these nodes, through the apps' manual controls.
+#
+# Paste `host` exactly as Polar's Connect tab shows it — a missing scheme is
+# read as https:// — and write the credential paths with `~` if you like; a
+# leading `~` is expanded. Both files are checked when the config loads,
+# because a Polar network number (networks/1) changes every time you create
+# one, and a stale path is the failure you will actually hit.
+#
+# mostrod must point at a THIRD node. With two, the harness trades with
+# itself: the hold invoice would be paid by the node that issued it and every
+# value assertion would be meaningless.
+
+[wallets.alice]
+kind = "lnd"
+host = "env:MORTSOM_ALICE_LND_HOST"           # e.g. 127.0.0.1:10001
+macaroon = "env:MORTSOM_ALICE_LND_MACAROON"   # e.g. ~/.polar/networks/1/volumes/lnd/alice/data/chain/bitcoin/regtest/admin.macaroon
+cert = "env:MORTSOM_ALICE_LND_CERT"           # e.g. ~/.polar/networks/1/volumes/lnd/alice/tls.cert
+
+[wallets.bob]
+kind = "lnd"
+host = "env:MORTSOM_BOB_LND_HOST"
+macaroon = "env:MORTSOM_BOB_LND_MACAROON"
+cert = "env:MORTSOM_BOB_LND_CERT"
+
+[run]
+lane = "local"                    # local | ci | canary -- always explicit, never inferred
+amount_sats = 1000
+max_order_sats = 5000
+max_run_spend_sats = 20000
+jobs = 1
+artifacts_dir = "./artifacts"
+cleanup = true
+allow_mainnet = false             # value-moving scenarios also need MORTSOM_MAINNET_CONFIRM
+infra_retries = 1                 # only classified infrastructure failures retry, at most once
+fiat_code = "USD"                 # order drafts
+fiat_amount = 1
+payment_method = "cash"
+state_timeout_secs = 180          # order state must appear on both apps and the relay
+settle_timeout_secs = 600         # payment settlement deadline
+expiration_timeout_secs = 1200   # daemon expiration_seconds (900) plus grace
+quiet_window_secs = 20            # recovery: no repeated protocol action within this window
+background_secs = 15              # recovery: time an app spends in the background
+outage_secs = 20                  # recovery: injected connectivity outage

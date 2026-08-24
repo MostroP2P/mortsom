@@ -309,9 +309,15 @@ async fn trade_actions_drive_the_v2_controls_and_map_v2_states() {
     assert_eq!(state.state, OrderState::Taken);
     assert_eq!(state.raw_label, "waiting-payment");
 
-    let invoice = a.provide_buyer_invoice(&device(&ui), &order).await.unwrap();
+    let invoice = a
+        .provide_buyer_invoice(&device(&ui), &order, None)
+        .await
+        .unwrap();
     assert!(invoice.is_some());
-    let handoff = a.pay_hold_invoice(&device(&ui), &order).await.unwrap();
+    let handoff = a
+        .pay_hold_invoice(&device(&ui), &order, PaymentPath::Nwc)
+        .await
+        .unwrap();
     assert_eq!(handoff.kind, PaymentPath::Nwc);
     assert!(handoff.invoice.is_some());
     ui.label(Ids::ORDER_STATUS, "active");
@@ -357,4 +363,96 @@ async fn loading_status_keeps_the_caller_waiting_and_cancel_paths_work() {
             .unwrap(),
         CancelOutcome::NotFound
     );
+}
+
+/// A run whose wallet is a node Mortsom holds: the app has none connected,
+/// so it shows the hold invoice and waits, and accepts a buyer invoice
+/// typed into its manual form.
+fn app_without_a_wallet() -> FakeUi {
+    let ui = app_with_orders();
+    // No connected wallet: the add-invoice screen opens on the manual form
+    // and the pay screen offers no auto-pay button.
+    ui.on_tap(
+        Ids::TRADE_ADD_INVOICE,
+        &[Ids::INVOICE_TEXT, Ids::INVOICE_SUBMIT],
+    );
+    ui.on_tap(Ids::INVOICE_SUBMIT, &[Ids::ORDER_ADD_FAB]);
+    ui
+}
+
+#[tokio::test]
+async fn the_hold_invoice_is_handed_over_without_the_app_paying_it() {
+    let ui = app_without_a_wallet();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    let order = OrderReference::new("o1");
+
+    let handoff = a
+        .pay_hold_invoice(&device(&ui), &order, PaymentPath::ExternalWallet)
+        .await
+        .unwrap();
+
+    assert_eq!(handoff.kind, PaymentPath::ExternalWallet);
+    // The caller pays it, so it has to come back.
+    assert!(handoff.invoice.is_some());
+    let calls = ui.calls().join("\n");
+    assert!(
+        !calls.contains("tap pay.nwc"),
+        "the app has no wallet to pay with",
+    );
+    // The invoice is a payable instrument until it settles; it never
+    // reaches the call log.
+    assert!(!calls.contains("secretinvoice"), "{calls}");
+}
+
+/// An empty pay screen means there is nothing to hand over. Returning a
+/// handoff with no invoice would have the caller pay nothing and the run
+/// wait for a settlement that cannot arrive.
+#[tokio::test]
+async fn an_empty_pay_screen_is_a_product_failure_not_an_empty_handoff() {
+    let ui = app_without_a_wallet();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    ui.label(Ids::PAY_INVOICE_TEXT, "   ");
+
+    let err = a
+        .pay_hold_invoice(
+            &device(&ui),
+            &OrderReference::new("o1"),
+            PaymentPath::ExternalWallet,
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.category, mortsom_common::FailureCategory::Product);
+    assert!(err.message.contains("nothing to pay"), "{err}");
+}
+
+#[tokio::test]
+async fn a_supplied_buyer_invoice_is_typed_into_the_manual_form() {
+    let ui = app_without_a_wallet();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    let supplied = Secret::new("lnbc1000n1mortsominvoice");
+
+    let returned = a
+        .provide_buyer_invoice(&device(&ui), &OrderReference::new("o1"), Some(&supplied))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        returned.as_ref().map(|s| s.expose()),
+        Some(supplied.expose()),
+        "the caller correlates the payment against the invoice it issued",
+    );
+    let calls = ui.calls().join("\n");
+    assert!(calls.contains(&format!(
+        "type invoice.text ({} chars)",
+        supplied.expose().len()
+    )));
+    assert!(calls.contains("tap invoice.submit"));
+    assert!(!calls.contains("mortsominvoice"), "{calls}");
 }

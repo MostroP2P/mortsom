@@ -644,17 +644,7 @@ async fn run_command(
     .emulator_url();
     let adapter = select_adapter(&config, flutter, seed);
     let env = |name: &str| std::env::var(name).ok();
-    let wallets =
-        |label: &str,
-         uri: &mortsom_common::Secret|
-         -> Result<std::sync::Arc<dyn mortsom_observers::wallet::WalletReader>, String> {
-            mortsom_observers::wallet::NwcReader::new(label, uri, crate::run::WALLET_LOOKUP_TIMEOUT)
-                .map(|r| {
-                    std::sync::Arc::new(r)
-                        as std::sync::Arc<dyn mortsom_observers::wallet::WalletReader>
-                })
-                .map_err(|e| e.to_string())
-        };
+    let wallets = wallet_factory;
     let deps = RunDeps {
         runner: &TokioRunner,
         ui: &ui,
@@ -690,6 +680,77 @@ async fn run_command(
             eprintln!("{e}");
             ExitCode::from(2)
         }
+    }
+}
+
+/// The run's wallet factory.
+///
+/// A free function rather than a closure: the factory is higher-ranked over
+/// the lifetime of what it borrows, and only an `fn` item names that.
+fn wallet_factory<'b>(
+    label: &'b str,
+    wallet: &'b mortsom_environment::WalletConfig,
+) -> futures::future::BoxFuture<'b, Result<crate::run::WalletHandles, String>> {
+    Box::pin(connect_wallet(label, wallet))
+}
+
+/// Connects the wallet behind one actor.
+///
+/// On NWC the app holds the wallet and Mortsom only reads it. On LND the
+/// node is Mortsom's: it reads *and* pays, because the app under test has
+/// no wallet connected at all on that path.
+async fn connect_wallet(
+    label: &str,
+    wallet: &mortsom_environment::WalletConfig,
+) -> Result<crate::run::WalletHandles, String> {
+    use mortsom_environment::WalletConfig;
+    match wallet {
+        WalletConfig::Nwc { uri } => {
+            let reader = mortsom_observers::wallet::NwcReader::new(
+                label,
+                uri,
+                crate::run::WALLET_LOOKUP_TIMEOUT,
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(crate::run::WalletHandles {
+                reader: Arc::new(reader),
+                node: None,
+            })
+        }
+        WalletConfig::Lnd {
+            host,
+            macaroon,
+            cert,
+        } => {
+            let node = mortsom_environment::LndWallet::connect(label, host, cert, macaroon)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(crate::run::WalletHandles {
+                reader: Arc::new(mortsom_observers::wallet::LndReader::new(node.clone())),
+                node: Some(Arc::new(NodeWalletOverLnd(node))),
+            })
+        }
+    }
+}
+
+/// Adapts the environment's LND client to what a scenario asks of a wallet.
+struct NodeWalletOverLnd(mortsom_environment::LndWallet);
+
+#[async_trait::async_trait]
+impl mortsom_scenario_kit::context::NodeWallet for NodeWalletOverLnd {
+    async fn make_invoice(&self, sats: u64, memo: &str) -> Result<mortsom_common::Secret, String> {
+        self.0
+            .make_invoice(sats, memo)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn start_payment(&self, invoice: &mortsom_common::Secret) -> Result<(), String> {
+        self.0
+            .start_payment(invoice)
+            .await
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }
 

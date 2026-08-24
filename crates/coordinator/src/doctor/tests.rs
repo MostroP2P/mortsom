@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use mortsom_common::Secret;
 use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, RelayList, RelayProbe};
 use mortsom_environment::wallet::{WalletProbe, WalletProbeError};
 use nostr_sdk::prelude::PublicKey;
 
 use super::*;
+use mortsom_environment::WalletConfig;
 
 /// Daemon test identity: nsec and its hex pubkey.
 const NSEC: &str = "nsec13as48eum93hkg7plv526r9gjpa0uc52zysqm93pmnkca9e69x6tsdjmdxd";
@@ -170,9 +170,14 @@ impl NetProbes for FakeNet {
     async fn daemon(&self, _relays: &[String], _pubkey: PublicKey) -> DaemonProbe {
         self.daemon.clone()
     }
-    async fn wallet(&self, label: &str, _uri: &Secret) -> Result<WalletProbe, WalletProbeError> {
+    async fn wallet(
+        &self,
+        label: &str,
+        _wallet: &WalletConfig,
+    ) -> Result<WalletProbe, WalletProbeError> {
         if self.wallets_ok {
             Ok(WalletProbe {
+                inbound_sats: None,
                 label: label.into(),
                 alias: Some("testwallet".into()),
                 network: Some("mainnet".into()),

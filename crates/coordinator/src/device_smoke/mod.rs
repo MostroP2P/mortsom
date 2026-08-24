@@ -78,9 +78,7 @@ pub async fn run_device_smoke(
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<DeviceSmokeSummary, String> {
     let run_id = RunId::new();
-    let redactor = Redactor::new()
-        .with_secret(&config.wallets.alice_nwc)
-        .with_secret(&config.wallets.bob_nwc);
+    let redactor = Redactor::new().with_secrets(config.wallets.secrets());
     let artifacts = RunArtifacts::create(
         Path::new(&config.run.artifacts_dir),
         run_id.clone(),

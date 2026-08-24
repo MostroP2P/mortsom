@@ -8,10 +8,12 @@ mod execute;
 mod relay_control;
 mod sink;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use futures::future::BoxFuture;
 use mortsom_android_driver::farm::{DeviceFarm, FarmSpec, TeardownItem};
 use mortsom_android_driver::process::CommandRunner;
 use mortsom_android_driver::sdk::{AndroidSdk, avd_home};
@@ -19,7 +21,8 @@ use mortsom_android_driver::ui::UiDriver;
 use mortsom_app_contract::{AppAdapter, TestEnvironment};
 use mortsom_common::check::{CheckStatus, DoctorReport};
 use mortsom_common::logging::attach_run_log;
-use mortsom_common::{Lane, Redactor, RunId, Secret};
+use mortsom_common::{Lane, Redactor, RunId};
+use mortsom_environment::WalletConfig;
 use mortsom_environment::docker::ContainerRuntime;
 use mortsom_environment::relay::{
     ReadinessProbe, RelayHandle, RelayTeardown, start_relay, teardown_relay,
@@ -28,6 +31,7 @@ use mortsom_observers::relay::{ObserverScope, RelayObserver};
 use mortsom_observers::wallet::{WalletObserver, WalletReader};
 use mortsom_scenario_kit::budget::{Budget, SpendCaps, Totals};
 use mortsom_scenario_kit::cleanup::{CleanupRegistry, CleanupReport};
+use mortsom_scenario_kit::context::NodeWallet;
 use mortsom_scenario_kit::context::{ActorSession, Context, MainnetClearance, RecoveryTiming};
 use mortsom_scenario_kit::outcome::{Outcome, ScenarioResult};
 use mortsom_scenario_kit::recovery::{NoRelayControl, RelayControl};
@@ -65,9 +69,25 @@ pub struct RunOptions {
     pub shutdown_grace: Option<Duration>,
 }
 
-/// Wallet reader factory (real: NWC; tests: fakes).
-pub type WalletReaderFactory<'a> =
-    dyn Fn(&str, &Secret) -> Result<Arc<dyn WalletReader>, String> + Send + Sync + 'a;
+/// What a run holds for one actor's wallet.
+pub struct WalletHandles {
+    /// Read-only lookups, for settlement assertions.
+    pub reader: Arc<dyn WalletReader>,
+    /// A node Mortsom pays with, when the wallet is one it holds.
+    ///
+    /// `None` on the NWC path: there the app has the wallet and pays for
+    /// itself, and Mortsom only watches.
+    pub node: Option<Arc<dyn NodeWallet>>,
+}
+
+/// Wallet factory (real: NWC or a local LND node; tests: fakes).
+///
+/// Async because connecting to a node is: the certificate is read and the
+/// gRPC channel opened before the run can claim the wallet is usable.
+pub type WalletFactory<'a> = dyn for<'b> Fn(&'b str, &'b WalletConfig) -> BoxFuture<'b, Result<WalletHandles, String>>
+    + Send
+    + Sync
+    + 'a;
 
 /// Starts the relay observer for a run (real: connects; tests: detached).
 #[async_trait::async_trait]
@@ -117,7 +137,7 @@ pub struct RunDeps<'a> {
     /// Environment lookup.
     pub env: &'a dyn Fn(&str) -> Option<String>,
     /// Wallet reader factory.
-    pub wallets: &'a WalletReaderFactory<'a>,
+    pub wallets: &'a WalletFactory<'a>,
     /// Relay observer factory.
     pub observer: &'a dyn ObserverFactory,
 }
@@ -170,9 +190,7 @@ pub async fn run_scenarios(
         .map_err(|e| e.to_string())?;
 
     let run_id = RunId::new();
-    let redactor = Redactor::new()
-        .with_secret(&config.wallets.alice_nwc)
-        .with_secret(&config.wallets.bob_nwc);
+    let redactor = Redactor::new().with_secrets(config.wallets.secrets());
     let artifacts = RunArtifacts::create(
         Path::new(&config.run.artifacts_dir),
         run_id.clone(),
@@ -295,6 +313,7 @@ struct World<'a> {
     relay: Option<RelayHandle>,
     observer: Option<Arc<RelayObserver>>,
     wallets: Option<Arc<WalletObserver>>,
+    node_wallets: BTreeMap<String, Arc<dyn NodeWallet>>,
     farm: Option<DeviceFarm>,
 }
 
@@ -320,6 +339,7 @@ impl<'a> World<'a> {
             relay: None,
             observer: None,
             wallets: None,
+            node_wallets: BTreeMap::new(),
             farm: None,
         }
     }
@@ -360,14 +380,20 @@ impl<'a> World<'a> {
         self.observer = Some(observer);
 
         let mut readers = Vec::new();
-        for (label, uri) in [
-            ("alice", &self.config.wallets.alice_nwc),
-            ("bob", &self.config.wallets.bob_nwc),
+        let mut nodes: BTreeMap<String, Arc<dyn NodeWallet>> = BTreeMap::new();
+        for (label, wallet) in [
+            ("alice", &self.config.wallets.alice),
+            ("bob", &self.config.wallets.bob),
         ] {
-            let reader = (self.deps.wallets)(label, uri)
+            let handles = (self.deps.wallets)(label, wallet)
+                .await
                 .map_err(|e| record_fail(summary, "wallet-observer", e))?;
-            readers.push((label.to_owned(), reader));
+            if let Some(node) = handles.node {
+                nodes.insert(label.to_owned(), node);
+            }
+            readers.push((label.to_owned(), handles.reader));
         }
+        self.node_wallets = nodes;
         summary.checks.push(
             "wallet-observer",
             CheckStatus::Pass,
@@ -524,6 +550,7 @@ impl<'a> World<'a> {
             env: self.env(),
             relay: Arc::clone(observer),
             wallets: Arc::clone(wallets),
+            node_wallets: self.node_wallets.clone(),
             relay_control: self.relay_control(),
             budget: Arc::clone(&self.budget),
             cleanup: Arc::clone(&self.cleanup),

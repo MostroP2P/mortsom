@@ -11,6 +11,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use lightning_invoice::Bolt11Invoice;
 use mortsom_common::Secret;
+use mortsom_environment::lnd::{LndPaymentState, LndWallet};
 use nostr_sdk::prelude::{LookupInvoiceRequest, NostrWalletConnectUri, TransactionState};
 use nwc::NostrWalletConnect;
 use serde::{Deserialize, Serialize};
@@ -178,6 +179,43 @@ fn map_state(state: Option<TransactionState>) -> PaymentState {
         Some(TransactionState::Pending) | Some(TransactionState::Accepted) => PaymentState::Pending,
         Some(TransactionState::Failed) | Some(TransactionState::Expired) => PaymentState::Failed,
         None => PaymentState::Unknown,
+    }
+}
+
+/// LND-backed reader.
+///
+/// A node only knows the invoices it issued, so `Ok(None)` here means the
+/// counterparty issued this one — the same distinction `NwcReader` draws
+/// from a `not_found` error.
+pub struct LndReader {
+    wallet: LndWallet,
+}
+
+impl LndReader {
+    /// Wraps a connected node.
+    pub fn new(wallet: LndWallet) -> Self {
+        Self { wallet }
+    }
+}
+
+#[async_trait]
+impl WalletReader for LndReader {
+    async fn lookup(&self, payment_hash: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
+        match self.wallet.lookup(payment_hash).await {
+            // Fees are the payer's, and this reader looks up invoices this
+            // node issued — so nothing was paid out of it.
+            Ok(Some((sats, state))) => Ok(Some((sats, 0, map_lnd_state(state)))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e.to_string()),
+        }
+    }
+}
+
+fn map_lnd_state(state: LndPaymentState) -> PaymentState {
+    match state {
+        LndPaymentState::Settled => PaymentState::Settled,
+        LndPaymentState::Pending => PaymentState::Pending,
+        LndPaymentState::Failed => PaymentState::Failed,
     }
 }
 

@@ -19,6 +19,7 @@ use nostr_sdk::prelude::{EventBuilder, FinalizeEvent, Keys, Kind, PublicKey, Tag
 
 use super::*;
 use crate::safety::{MAINNET_CONFIRM_ENV, MAINNET_CONFIRM_VALUE};
+use mortsom_common::Secret;
 
 const HEX: &str = "8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51";
 const NSEC: &str = "nsec13as48eum93hkg7plv526r9gjpa0uc52zysqm93pmnkca9e69x6tsdjmdxd";
@@ -351,6 +352,7 @@ impl AppAdapter for FakeAdapter {
         &self,
         _: &DeviceContext<'_>,
         order: &OrderReference,
+        _: PaymentPath,
     ) -> Result<PaymentHandoff, AdapterError> {
         if !self.online.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(AdapterError::wallet(
@@ -367,6 +369,7 @@ impl AppAdapter for FakeAdapter {
         &self,
         _: &DeviceContext<'_>,
         _: &OrderReference,
+        _: Option<&Secret>,
     ) -> Result<Option<Secret>, AdapterError> {
         Ok(Some(Secret::new(INVOICE)))
     }
@@ -526,9 +529,17 @@ async fn run(
     let docker = Arc::new(FakeDocker::default());
     let runner = runner();
     let env = env_for(world, confirm);
-    let wallets = |_: &str, _: &Secret| -> Result<Arc<dyn WalletReader>, String> {
-        Ok(Arc::new(SettledReader))
-    };
+    fn wallets<'b>(
+        _: &'b str,
+        _: &'b mortsom_environment::WalletConfig,
+    ) -> futures::future::BoxFuture<'b, Result<crate::run::WalletHandles, String>> {
+        Box::pin(async {
+            Ok(crate::run::WalletHandles {
+                reader: Arc::new(SettledReader),
+                node: None,
+            })
+        })
+    }
     let deps = RunDeps {
         runner: &runner,
         ui: &ui,

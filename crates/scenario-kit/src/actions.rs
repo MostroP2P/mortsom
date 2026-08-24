@@ -294,9 +294,17 @@ pub async fn pay_hold_invoice(
         format!("reserved {} sats for order {}", ctx.amount_sats, order.id),
         None,
     );
+    // With a node of our own the app has no wallet to pay with: it shows
+    // the invoice and waits, and we pay it. Otherwise the app pays.
+    let node = ctx.node_wallet(actor);
+    let path = if node.is_some() {
+        PaymentPath::ExternalWallet
+    } else {
+        PaymentPath::Nwc
+    };
     let handoff = match ctx
         .adapter
-        .pay_hold_invoice(&session.device(ctx.ui_timeout), order)
+        .pay_hold_invoice(&session.device(ctx.ui_timeout), order, path)
         .await
     {
         Ok(handoff) => handoff,
@@ -313,6 +321,12 @@ pub async fn pay_hold_invoice(
     };
     ctx.protect(invoice);
     let hash = payment_hash_of(invoice).map_err(|e| ScenarioError::product(e.to_string()))?;
+    if let Some(node) = node
+        && let Err(e) = node.start_payment(invoice).await
+    {
+        mark_in_flight(ctx, &reservation, Some(hash.clone()));
+        return Err(ScenarioError::environment(e));
+    }
     let step = ctx
         .evidence
         .checkpoint(actor.as_str(), "pay-hold-invoice", session.ui.as_ref())
@@ -382,9 +396,22 @@ pub async fn provide_buyer_invoice(
     order: &OrderReference,
 ) -> Result<Option<String>, ScenarioError> {
     let session = ctx.actor(actor)?;
+    // With a node of our own the app has no wallet to issue from, so the
+    // invoice is ours and the app only has to accept it.
+    let supplied = match ctx.node_wallet(actor) {
+        Some(node) => Some(
+            node.make_invoice(ctx.amount_sats, &format!("mortsom {}", order.id))
+                .await
+                .map_err(ScenarioError::environment)?,
+        ),
+        None => None,
+    };
+    if let Some(invoice) = supplied.as_ref() {
+        ctx.protect(invoice);
+    }
     let invoice = ctx
         .adapter
-        .provide_buyer_invoice(&session.device(ctx.ui_timeout), order)
+        .provide_buyer_invoice(&session.device(ctx.ui_timeout), order, supplied.as_ref())
         .await?;
     let hash = match &invoice {
         Some(secret) => {
@@ -550,8 +577,14 @@ fn short(id: &str) -> String {
 }
 
 /// Whether a payment path may be observed through the wallet at all.
+///
+/// Both paths Mortsom drives are observable, for the same reason: the
+/// wallet that moved the money is one Mortsom can ask. What is not
+/// observable is a payment handed to a wallet on the operator's phone —
+/// that is [`PaymentPath::ExternalWallet`] with no node configured, and the
+/// caller knows which case it is in because it is the one that chose.
 pub fn is_observable(path: PaymentPath) -> bool {
-    matches!(path, PaymentPath::Nwc)
+    matches!(path, PaymentPath::Nwc | PaymentPath::ExternalWallet)
 }
 
 #[cfg(test)]

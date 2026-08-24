@@ -63,6 +63,18 @@ impl Redactor {
         self
     }
 
+    /// Registers several secrets at once.
+    ///
+    /// A wallet backend carries more than one credential — a node has a
+    /// macaroon and a certificate where NWC has a URI — and registering
+    /// them one by one is how one gets forgotten.
+    pub fn with_secrets<'a>(mut self, secrets: impl IntoIterator<Item = &'a Secret>) -> Self {
+        for secret in secrets {
+            self.add_secret(secret);
+        }
+        self
+    }
+
     /// Registers a concrete secret value in place.
     pub fn add_secret(&mut self, secret: &Secret) {
         let value = secret.expose();

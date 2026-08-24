@@ -378,11 +378,11 @@ async fn trade_actions_drive_the_expected_controls_and_never_record_invoices() {
         .await
         .unwrap();
     let handoff = adapter()
-        .pay_hold_invoice(&device(&ui), &order)
+        .pay_hold_invoice(&device(&ui), &order, PaymentPath::Nwc)
         .await
         .unwrap();
     let buyer = adapter()
-        .provide_buyer_invoice(&device(&ui), &order)
+        .provide_buyer_invoice(&device(&ui), &order, None)
         .await
         .unwrap();
     adapter()
@@ -482,11 +482,11 @@ async fn padded_labels_do_not_change_the_invoice_or_the_wallet_state() {
         .unwrap();
 
     let handoff = adapter()
-        .pay_hold_invoice(&device(&ui), &order)
+        .pay_hold_invoice(&device(&ui), &order, PaymentPath::Nwc)
         .await
         .unwrap();
     let buyer = adapter()
-        .provide_buyer_invoice(&device(&ui), &order)
+        .provide_buyer_invoice(&device(&ui), &order, None)
         .await
         .unwrap();
     let connection = adapter()
@@ -537,4 +537,47 @@ async fn a_daemon_the_app_already_lists_is_selected_not_added() {
         !calls.iter().any(|c| c.contains(Ids::COMMUNITY_CUSTOM_NODE)),
         "a listed node must not be added again: {calls:?}"
     );
+}
+
+/// A run whose wallet is a node Mortsom holds: the app has none connected,
+/// so it shows the hold invoice and waits, and takes a buyer invoice typed
+/// into its manual form.
+#[tokio::test]
+async fn a_walletless_app_hands_over_the_hold_invoice_and_takes_ours() {
+    let ui = app_with_orders();
+    ui.on_tap(
+        Ids::TRADE_ADD_INVOICE,
+        &[Ids::INVOICE_TEXT, Ids::INVOICE_SUBMIT],
+    );
+    ui.on_tap(Ids::INVOICE_SUBMIT, &[Ids::ORDER_ADD_FAB]);
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    let order = OrderReference::new("o1");
+    let supplied = Secret::new("lnbc1000n1mortsominvoice");
+
+    let handoff = a
+        .pay_hold_invoice(&device(&ui), &order, PaymentPath::ExternalWallet)
+        .await
+        .unwrap();
+    let returned = a
+        .provide_buyer_invoice(&device(&ui), &order, Some(&supplied))
+        .await
+        .unwrap();
+
+    assert_eq!(handoff.kind, PaymentPath::ExternalWallet);
+    assert!(handoff.invoice.is_some(), "the caller pays it");
+    assert_eq!(
+        returned.as_ref().map(|s| s.expose()),
+        Some(supplied.expose())
+    );
+    let calls = ui.calls().join("\n");
+    assert!(!calls.contains("tap pay.nwc"), "no wallet to pay with");
+    assert!(
+        !calls.contains("tap invoice.nwc.generate"),
+        "no wallet to generate with",
+    );
+    assert!(calls.contains("tap invoice.submit"));
+    // Neither invoice reaches the call log.
+    assert!(!calls.contains("secretinvoice") && !calls.contains("mortsominvoice"));
 }

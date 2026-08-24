@@ -178,10 +178,8 @@ pub fn publish_run(
     if !run_dir.is_dir() {
         return Err(PublishError::MissingRun(run_dir));
     }
-    let redactor = Redactor::new()
-        .with_secret(&config.wallets.alice_nwc)
-        .with_secret(&config.wallets.bob_nwc);
-    let secrets = [&config.wallets.alice_nwc, &config.wallets.bob_nwc];
+    let redactor = Redactor::new().with_secrets(config.wallets.secrets());
+    let secrets = config.wallets.secrets();
     std::fs::create_dir_all(out).map_err(|source| PublishError::Io {
         path: out.to_path_buf(),
         source,
