@@ -118,6 +118,225 @@ async fn typing_focuses_the_field_before_it_types() {
     );
 }
 
+/// A settings page is taller than the phone, and Flutter does not build
+/// what is not visible: a control below the fold is absent from the
+/// accessibility tree until something scrolls to it. `find` already
+/// knows that. A wait that does not would fail on a screen that is
+/// behaving perfectly, and blame the app's automation contract for it.
+#[tokio::test]
+async fn a_wait_finds_a_control_below_the_fold_without_burning_its_deadline() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    mount_below_the_fold(&server, "settings.mostro_node").await;
+
+    let started = tokio::time::Instant::now();
+    s.wait_for("settings.mostro_node", Duration::from_secs(30))
+        .await
+        .expect("a control below the fold is present, not missing");
+
+    // Waiting out the whole deadline first would be correct and useless:
+    // every off-screen control in a run would cost its full timeout.
+    assert!(
+        started.elapsed() < Duration::from_secs(10),
+        "the below-the-fold probe must not wait for the deadline: {:?}",
+        started.elapsed()
+    );
+}
+
+/// The counterpart guarantee: a probe answers about the screen without
+/// changing it. `go_home` asks "is the order book up yet?" on every
+/// pass of its unwind loop, and `dismiss_notice` asks three such
+/// questions per poll. A probe that scrolled would swipe a screen the
+/// caller only meant to look at -- and leave it there.
+#[tokio::test]
+async fn a_probe_never_scrolls_the_screen_it_is_asked_about() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    mount_below_the_fold(&server, "order.add.fab").await;
+
+    assert!(!s.exists("order.add.fab").await.unwrap());
+    assert!(
+        !server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|r| String::from_utf8_lossy(&r.body).contains("UiScrollable")),
+        "a probe must not swipe the screen to answer"
+    );
+}
+
+/// The scrolling probe must not turn a genuinely missing control into a
+/// hang or a false pass: it is searched for, not found, and the wait
+/// still ends in a timeout.
+#[tokio::test]
+async fn a_control_that_is_nowhere_still_times_out() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+        )
+        .mount(&server)
+        .await;
+
+    let err = s
+        .wait_for("nowhere", Duration::from_millis(300))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(
+        err,
+        AppiumError::WaitTimeout {
+            condition: "not found",
+            ..
+        }
+    ));
+    assert!(!s.exists("nowhere").await.unwrap());
+}
+
+/// A scrolling search is not free: up to ten swipes, each a tree dump,
+/// bounded by nothing but the HTTP timeout. A wait that starts one
+/// after its deadline has passed can outlive the bound it advertised by
+/// a minute -- and the callers that pass a short deadline are the ones
+/// that pass it because they need the answer soon.
+#[tokio::test]
+async fn a_wait_never_outlives_its_deadline_by_more_than_the_deadline() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    mount_slow_scroll(&server, Duration::from_secs(20)).await;
+
+    let started = tokio::time::Instant::now();
+    let err = s
+        .wait_for("nowhere", Duration::from_millis(200))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(err, AppiumError::WaitTimeout { .. }), "{err:?}");
+    // The probe may cost the wait at most what the wait itself is worth.
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "a 200ms wait must not hang on an unbounded probe: {:?}",
+        started.elapsed()
+    );
+}
+
+/// A dead session, a broken transport or a malformed response is an
+/// infrastructure failure. Reported as `WaitTimeout` it reads as a
+/// missing automation control instead, and the run blames the app for
+/// the harness.
+#[tokio::test]
+async fn a_driver_failure_during_the_probe_is_not_a_missing_control() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    mount_scroll_failure(&server).await;
+
+    let err = s
+        .wait_for("settings.mostro_node", Duration::from_millis(200))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            &err,
+            AppiumError::WebDriver(WebDriverError::Server { error, .. })
+                if error == "invalid session id"
+        ),
+        "the driver's own failure must surface as itself: {err:?}"
+    );
+}
+
+/// The same guarantee for the plain lookup: `find` falls back to a
+/// scrolling search, and if that search fails for a reason of its own
+/// the caller hears about that reason, not about the element being
+/// off-screen.
+#[tokio::test]
+async fn find_surfaces_a_driver_failure_from_its_scrolling_fallback() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    mount_scroll_failure(&server).await;
+
+    let err = s.find("settings.mostro_node").await.unwrap_err();
+
+    assert!(
+        matches!(
+            &err,
+            AppiumError::WebDriver(WebDriverError::Server { error, .. })
+                if error == "invalid session id"
+        ),
+        "the driver's own failure must surface as itself: {err:?}"
+    );
+}
+
+/// Nothing is on screen and every scrolling search stalls for `delay`.
+async fn mount_slow_scroll(server: &MockServer, delay: Duration) {
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .and(body_string_contains("UiScrollable"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_delay(delay)
+                .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+        )
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+        )
+        .mount(server)
+        .await;
+}
+
+/// Nothing is on screen and the scrolling search fails for a reason
+/// that has nothing to do with the element: the session is gone.
+async fn mount_scroll_failure(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .and(body_string_contains("UiScrollable"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(
+            json!({"value": {"error": "invalid session id", "message": "session deleted"}}),
+        ))
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+        )
+        .mount(server)
+        .await;
+}
+
+/// A control that is off-screen: the plain `resourceId` lookup misses it
+/// and only the scrolling lookup returns it.
+async fn mount_below_the_fold(server: &MockServer, id: &str) {
+    let scrolled = format!("scrollIntoView(new UiSelector().resourceId(\\\"{id}\\\")");
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .and(move |request: &wiremock::Request| {
+            String::from_utf8_lossy(&request.body).contains(scrolled.as_str())
+        })
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
+        )
+        .mount(server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+        )
+        .mount(server)
+        .await;
+}
+
 #[tokio::test]
 async fn primitives_map_to_webdriver_calls() {
     let server = MockServer::start().await;
