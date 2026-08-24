@@ -113,7 +113,7 @@ fn default_mostro_mode() -> MostroMode {
     MostroMode::ExternalLocal
 }
 fn default_health_timeout() -> u64 {
-    60
+    120
 }
 
 impl MostroConfig {
@@ -368,7 +368,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.mode, MostroMode::ExternalLocal);
-        assert_eq!(config.health_timeout_secs, 60);
+        assert_eq!(config.health_timeout_secs, 120);
         assert!(collect(|e| config.validate(e)).is_empty());
     }
 

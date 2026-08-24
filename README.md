@@ -376,9 +376,16 @@ contract, not a harness bug, and it is fixed in the app.
 ### The daemon
 
 **`daemon-uses-run-relay` fails although the daemon is reachable.** The
-daemon's published relay list (kind-10002) does not name the run relay. It is
-usually a stale event from before you added `ws://localhost:7000` to its
-`settings.toml`: restart the daemon so it republishes.
+daemon's published relay list (kind-10002) did not reach the run relay in
+`mostro.health_timeout_secs`. Two causes, in this order:
+
+- **The window is smaller than the daemon's own interval.** The daemon
+  republishes every `publish_relays_interval`, and only after reconnecting to
+  a relay that did not exist a moment ago; a window the same size as that
+  interval is a coin toss. The shipped configs allow 120s against the usual
+  60s interval. Lower the daemon's interval, or raise this.
+- **The list is stale**, from before you added `ws://localhost:7000` to its
+  `settings.toml`: restart the daemon so it republishes.
 
 **`kind-38385 not yet republished`.** The info event goes out on the daemon's
 own interval — `publish_mostro_info_interval`, an hour by default — so a relay

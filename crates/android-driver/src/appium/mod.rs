@@ -29,8 +29,10 @@ pub const SCROLL_PROBE_DELAY: Duration = Duration::from_secs(2);
 /// Longest a single below-the-fold probe may run. A scrolling search is up
 /// to [`SCROLL_SEARCH_SWIPES`] swipes, each one a tree dump, and left alone
 /// it is bounded only by [`HTTP_TIMEOUT`]: a wait would advertise seconds
-/// and cost a minute. A wait spends at most this much on a probe, and never
-/// more than the wait itself is worth.
+/// and cost a minute, and a plain lookup for a control that is not there
+/// would cost one too. A wait spends at most this much on a probe, and
+/// never more than the wait itself is worth; a lookup, which has no
+/// deadline of its own, spends exactly this much.
 pub const SCROLL_PROBE_BUDGET: Duration = Duration::from_secs(10);
 /// Interval between server readiness probes.
 pub const SERVER_POLL: Duration = Duration::from_millis(500);
@@ -73,6 +75,19 @@ pub enum AppiumError {
     /// A background interval exceeded [`MAX_BACKGROUND_SECS`].
     #[error("background of {0}s exceeds the maximum of {MAX_BACKGROUND_SECS}s")]
     BackgroundTooLong(u64),
+    /// A scrolling search did not finish inside the budget it was given.
+    ///
+    /// Distinct from the element being absent on purpose: this search never
+    /// got to answer, so nothing here says anything about the app. It is
+    /// the harness being slow -- a busy software-rendered emulator, an
+    /// Appium that is not keeping up.
+    #[error("scrolling search for `{accessibility_id}` did not finish within {budget:?}")]
+    ProbeUnfinished {
+        /// Accessibility id searched for.
+        accessibility_id: String,
+        /// Budget the search was given.
+        budget: Duration,
+    },
     /// An element did not appear (or disappear) before the deadline.
     #[error("element `{accessibility_id}` {condition} within {timeout:?}")]
     WaitTimeout {
@@ -223,6 +238,22 @@ impl SessionSpec {
     }
 }
 
+/// What a bounded below-the-fold search came back with.
+///
+/// Three states, because two of them are not the same answer and the
+/// callers differ on what to do about it: a search that reached the end is
+/// evidence the control is not there, while a search that ran out of
+/// budget is evidence of nothing at all.
+#[derive(Debug)]
+enum Probe {
+    /// The search scrolled to the element.
+    Found(Element),
+    /// The search finished: nothing to scroll, or the end without it.
+    NotThere,
+    /// The search was cut off before it could answer.
+    OutOfBudget,
+}
+
 /// UiAutomator2 session with domain-neutral primitives.
 #[derive(Debug, Clone)]
 pub struct AppiumSession {
@@ -255,7 +286,17 @@ impl AppiumSession {
 
     /// Finds an element by accessibility id, failing immediately if absent.
     pub async fn find(&self, accessibility_id: &str) -> Result<Element, AppiumError> {
-        match self
+        self.find_within(accessibility_id, SCROLL_PROBE_BUDGET)
+            .await
+    }
+
+    /// [`Self::find`] with an explicit budget for the scrolling fallback.
+    async fn find_within(
+        &self,
+        accessibility_id: &str,
+        budget: Duration,
+    ) -> Result<Element, AppiumError> {
+        let not_visible = match self
             .session
             .find_element(
                 Locator::UiAutomator,
@@ -263,19 +304,27 @@ impl AppiumSession {
             )
             .await
         {
-            Ok(element) => Ok(element),
-            // Not on screen is not the same as not there: scroll for it
-            // before believing the app never rendered it.
-            Err(not_visible) => match self.scroll_to(accessibility_id).await {
-                Ok(element) => Ok(element),
-                // Nothing to scroll, or scrolled to the end without it: the
-                // first failure is the one that describes the situation.
-                Err(e) if e.is_no_such_element() => Err(not_visible.into()),
-                // The search never got to answer: a dead session or a
-                // broken transport is its own failure, not a missing
-                // control, and reporting it as one blames the app.
-                Err(e) => Err(e.into()),
-            },
+            Ok(element) => return Ok(element),
+            Err(not_visible) => not_visible,
+        };
+        // Not on screen is not the same as not there: scroll for it before
+        // believing the app never rendered it. Bounded, because a lookup
+        // has no deadline of its own to spend: without one this costs the
+        // session's whole HTTP timeout every time a control is missing.
+        match self.probe_below_the_fold(accessibility_id, budget).await? {
+            Probe::Found(element) => Ok(element),
+            // Nothing to scroll, or scrolled to the end without it: the
+            // first failure is the one that describes the situation. A
+            // failure of the search's own -- a dead session, a broken
+            // transport -- came back from the probe as itself.
+            Probe::NotThere => Err(not_visible.into()),
+            // A search cut short answered nothing. A lookup has no deadline
+            // to keep trying against, so it says exactly that instead of
+            // repeating a `no such element` the search never confirmed.
+            Probe::OutOfBudget => Err(AppiumError::ProbeUnfinished {
+                accessibility_id: accessibility_id.to_owned(),
+                budget,
+            }),
         }
     }
 
@@ -291,27 +340,26 @@ impl AppiumSession {
             .await
     }
 
-    /// [`Self::scroll_to`] under a deadline of its own, for waits.
+    /// [`Self::scroll_to`] under a deadline of its own.
     ///
-    /// `Ok(None)` is the one thing a wait may keep waiting through: the
-    /// search reached the end without the element, found nothing to scroll,
-    /// or ran out of `budget`. Every other failure is the driver's, not the
-    /// screen's, and travels back to the caller as itself -- a wait that
-    /// reported a dead session as `WaitTimeout` would blame the app for the
-    /// harness.
+    /// Reports what the search did rather than only whether it worked: the
+    /// caller is the one that knows whether being cut off is a failure.
+    /// Every error is the driver's, not the screen's, and travels back as
+    /// itself -- a probe that reported a dead session as an absent element
+    /// would blame the app for the harness.
     async fn probe_below_the_fold(
         &self,
         accessibility_id: &str,
         budget: Duration,
-    ) -> Result<Option<Element>, AppiumError> {
+    ) -> Result<Probe, AppiumError> {
         if budget.is_zero() {
-            return Ok(None);
+            return Ok(Probe::OutOfBudget);
         }
         match tokio::time::timeout(budget, self.scroll_to(accessibility_id)).await {
-            Ok(Ok(element)) => Ok(Some(element)),
-            Ok(Err(e)) if e.is_no_such_element() => Ok(None),
+            Ok(Ok(element)) => Ok(Probe::Found(element)),
+            Ok(Err(e)) if e.is_no_such_element() => Ok(Probe::NotThere),
             Ok(Err(e)) => Err(e.into()),
-            Err(_out_of_budget) => Ok(None),
+            Err(_elapsed) => Ok(Probe::OutOfBudget),
         }
     }
 
@@ -386,7 +434,10 @@ impl AppiumSession {
             let probing_now = !probed && now >= probe_at && !early_budget.is_zero();
             if probing_now {
                 probed = true;
-                if let Some(element) = self
+                // A wait spends probes out of its own deadline, and a short
+                // one routinely cuts them off: being out of budget is not a
+                // failure here, it is a reason to keep polling.
+                if let Probe::Found(element) = self
                     .probe_below_the_fold(accessibility_id, early_budget)
                     .await?
                 {
@@ -398,7 +449,7 @@ impl AppiumSession {
                 // only now; look once more before calling the control
                 // missing, unless this very iteration already did.
                 if !probing_now
-                    && let Some(element) =
+                    && let Probe::Found(element) =
                         self.probe_below_the_fold(accessibility_id, budget).await?
                 {
                     return Ok(element);

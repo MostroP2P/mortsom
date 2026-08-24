@@ -270,6 +270,82 @@ async fn find_surfaces_a_driver_failure_from_its_scrolling_fallback() {
     );
 }
 
+/// `find` falls back to a scrolling search, and that search is ten
+/// swipes over a device that may be busy. Left to the session's HTTP
+/// timeout, one lookup for a control that is simply not there costs a
+/// minute -- and a scenario looks up controls constantly, so the cost
+/// is per call, not per run.
+#[tokio::test]
+async fn a_lookup_bounds_the_scrolling_search_it_falls_back_to() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    mount_slow_scroll(&server, Duration::from_secs(20)).await;
+
+    let started = tokio::time::Instant::now();
+    let err = s
+        .find_within("nowhere", Duration::from_millis(200))
+        .await
+        .unwrap_err();
+
+    // A search cut short never answered the question. Reported as the
+    // plain lookup's `no such element` it answers it anyway, and says
+    // the app never rendered a control the search never got to look for.
+    assert!(
+        matches!(&err, AppiumError::ProbeUnfinished { accessibility_id, .. }
+            if accessibility_id == "nowhere"),
+        "out of budget is not evidence of absence: {err:?}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "the scrolling fallback must be bounded: {:?}",
+        started.elapsed()
+    );
+}
+
+/// The counterpart: a search that did finish and found nothing is an
+/// answer, and the answer is that the control is not there.
+#[tokio::test]
+async fn a_lookup_that_searches_to_the_end_reports_the_control_missing() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .respond_with(
+            ResponseTemplate::new(404)
+                .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+        )
+        .mount(&server)
+        .await;
+
+    let err = s.find("nowhere").await.unwrap_err();
+
+    assert!(
+        matches!(&err, AppiumError::WebDriver(e) if e.is_no_such_element()),
+        "{err:?}"
+    );
+}
+
+/// A wait spends its probes out of its own deadline, and a short one
+/// routinely cuts them off: for a wait, out of budget is not a failure
+/// at all, it is a reason to keep polling. The typed error belongs to
+/// the lookup that has no deadline to keep polling against.
+#[tokio::test]
+async fn a_wait_keeps_polling_through_a_probe_it_cut_short() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    mount_slow_scroll(&server, Duration::from_secs(20)).await;
+
+    let err = s
+        .wait_for("nowhere", Duration::from_millis(200))
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(err, AppiumError::WaitTimeout { .. }),
+        "a cut-short probe must not end the wait as a driver failure: {err:?}"
+    );
+}
+
 /// Nothing is on screen and every scrolling search stalls for `delay`.
 async fn mount_slow_scroll(server: &MockServer, delay: Duration) {
     Mock::given(method("POST"))
