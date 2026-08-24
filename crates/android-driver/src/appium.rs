@@ -29,8 +29,10 @@ pub const SCROLL_PROBE_DELAY: Duration = Duration::from_secs(2);
 /// Longest a single below-the-fold probe may run. A scrolling search is up
 /// to [`SCROLL_SEARCH_SWIPES`] swipes, each one a tree dump, and left alone
 /// it is bounded only by [`HTTP_TIMEOUT`]: a wait would advertise seconds
-/// and cost a minute. A wait spends at most this much on a probe, and never
-/// more than the wait itself is worth.
+/// and cost a minute, and a plain lookup for a control that is not there
+/// would cost one too. A wait spends at most this much on a probe, and
+/// never more than the wait itself is worth; a lookup, which has no
+/// deadline of its own, spends exactly this much.
 pub const SCROLL_PROBE_BUDGET: Duration = Duration::from_secs(10);
 /// Interval between server readiness probes.
 pub const SERVER_POLL: Duration = Duration::from_millis(500);
@@ -255,7 +257,17 @@ impl AppiumSession {
 
     /// Finds an element by accessibility id, failing immediately if absent.
     pub async fn find(&self, accessibility_id: &str) -> Result<Element, AppiumError> {
-        match self
+        self.find_within(accessibility_id, SCROLL_PROBE_BUDGET)
+            .await
+    }
+
+    /// [`Self::find`] with an explicit budget for the scrolling fallback.
+    async fn find_within(
+        &self,
+        accessibility_id: &str,
+        budget: Duration,
+    ) -> Result<Element, AppiumError> {
+        let not_visible = match self
             .session
             .find_element(
                 Locator::UiAutomator,
@@ -263,19 +275,20 @@ impl AppiumSession {
             )
             .await
         {
-            Ok(element) => Ok(element),
-            // Not on screen is not the same as not there: scroll for it
-            // before believing the app never rendered it.
-            Err(not_visible) => match self.scroll_to(accessibility_id).await {
-                Ok(element) => Ok(element),
-                // Nothing to scroll, or scrolled to the end without it: the
-                // first failure is the one that describes the situation.
-                Err(e) if e.is_no_such_element() => Err(not_visible.into()),
-                // The search never got to answer: a dead session or a
-                // broken transport is its own failure, not a missing
-                // control, and reporting it as one blames the app.
-                Err(e) => Err(e.into()),
-            },
+            Ok(element) => return Ok(element),
+            Err(not_visible) => not_visible,
+        };
+        // Not on screen is not the same as not there: scroll for it before
+        // believing the app never rendered it. Bounded, because a lookup
+        // has no deadline of its own to spend: without one this costs the
+        // session's whole HTTP timeout every time a control is missing.
+        match self.probe_below_the_fold(accessibility_id, budget).await? {
+            Some(element) => Ok(element),
+            // Nothing to scroll, scrolled to the end without it, or out of
+            // budget: the first failure is the one that describes the
+            // situation. A failure of the search's own -- a dead session, a
+            // broken transport -- came back from the probe as itself.
+            None => Err(not_visible.into()),
         }
     }
 
@@ -806,6 +819,36 @@ mod tests {
                     if error == "invalid session id"
             ),
             "the driver's own failure must surface as itself: {err:?}"
+        );
+    }
+
+    /// `find` falls back to a scrolling search, and that search is ten
+    /// swipes over a device that may be busy. Left to the session's HTTP
+    /// timeout, one lookup for a control that is simply not there costs a
+    /// minute -- and a scenario looks up controls constantly, so the cost
+    /// is per call, not per run.
+    #[tokio::test]
+    async fn a_lookup_bounds_the_scrolling_search_it_falls_back_to() {
+        let server = MockServer::start().await;
+        let s = session(&server).await;
+        mount_slow_scroll(&server, Duration::from_secs(20)).await;
+
+        let started = tokio::time::Instant::now();
+        let err = s
+            .find_within("nowhere", Duration::from_millis(200))
+            .await
+            .unwrap_err();
+
+        // Out of budget is not an answer about the element: the plain
+        // lookup's own failure is still the one that describes it.
+        assert!(
+            matches!(&err, AppiumError::WebDriver(e) if e.is_no_such_element()),
+            "{err:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the scrolling fallback must be bounded: {:?}",
+            started.elapsed()
         );
     }
 
