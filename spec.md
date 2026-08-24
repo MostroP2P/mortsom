@@ -475,7 +475,7 @@ container_port = 8080
 [mostro]
 mode = "external_local"           # a locally managed Mostro daemon
 settings_file = "env:MORTSOM_MOSTRO_SETTINGS_FILE"
-health_timeout_secs = 60
+health_timeout_secs = 120
 relays = ["ws://host.docker.internal:7000"]
 
 [wallets]
