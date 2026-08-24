@@ -26,6 +26,12 @@ pub const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// swiped while it renders; short enough that an off-screen control costs
 /// a moment rather than its whole deadline.
 pub const SCROLL_PROBE_DELAY: Duration = Duration::from_secs(2);
+/// Longest a single below-the-fold probe may run. A scrolling search is up
+/// to [`SCROLL_SEARCH_SWIPES`] swipes, each one a tree dump, and left alone
+/// it is bounded only by [`HTTP_TIMEOUT`]: a wait would advertise seconds
+/// and cost a minute. A wait spends at most this much on a probe, and never
+/// more than the wait itself is worth.
+pub const SCROLL_PROBE_BUDGET: Duration = Duration::from_secs(10);
 /// Interval between server readiness probes.
 pub const SERVER_POLL: Duration = Duration::from_millis(500);
 /// Appium's own idle timeout for a session, in seconds.
@@ -264,7 +270,11 @@ impl AppiumSession {
                 Ok(element) => Ok(element),
                 // Nothing to scroll, or scrolled to the end without it: the
                 // first failure is the one that describes the situation.
-                Err(_) => Err(not_visible.into()),
+                Err(e) if e.is_no_such_element() => Err(not_visible.into()),
+                // The search never got to answer: a dead session or a
+                // broken transport is its own failure, not a missing
+                // control, and reporting it as one blames the app.
+                Err(e) => Err(e.into()),
             },
         }
     }
@@ -279,6 +289,30 @@ impl AppiumSession {
                 &scroll_into_view_selector(accessibility_id),
             )
             .await
+    }
+
+    /// [`Self::scroll_to`] under a deadline of its own, for waits.
+    ///
+    /// `Ok(None)` is the one thing a wait may keep waiting through: the
+    /// search reached the end without the element, found nothing to scroll,
+    /// or ran out of `budget`. Every other failure is the driver's, not the
+    /// screen's, and travels back to the caller as itself -- a wait that
+    /// reported a dead session as `WaitTimeout` would blame the app for the
+    /// harness.
+    async fn probe_below_the_fold(
+        &self,
+        accessibility_id: &str,
+        budget: Duration,
+    ) -> Result<Option<Element>, AppiumError> {
+        if budget.is_zero() {
+            return Ok(None);
+        }
+        match tokio::time::timeout(budget, self.scroll_to(accessibility_id)).await {
+            Ok(Ok(element)) => Ok(Some(element)),
+            Ok(Err(e)) if e.is_no_such_element() => Ok(None),
+            Ok(Err(e)) => Err(e.into()),
+            Err(_out_of_budget) => Ok(None),
+        }
     }
 
     /// Whether an element with this accessibility id is present right now.
@@ -315,6 +349,11 @@ impl AppiumSession {
     /// after the screen has had time to build, and once more before it
     /// gives up. Off-screen is a fixed property of a laid-out screen, so
     /// two probes settle it; one per poll would only thrash the device.
+    ///
+    /// Each probe is bounded by [`SCROLL_PROBE_BUDGET`], and never by more
+    /// than `timeout` itself: the last one runs after the deadline, so a
+    /// wait can outlive its deadline by at most what the wait was worth,
+    /// rather than by the whole HTTP timeout of ten swipes.
     pub async fn wait_for(
         &self,
         accessibility_id: &str,
@@ -323,6 +362,7 @@ impl AppiumSession {
         let started = tokio::time::Instant::now();
         let deadline = started + timeout;
         let probe_at = started + SCROLL_PROBE_DELAY.min(timeout);
+        let budget = SCROLL_PROBE_BUDGET.min(timeout);
         let mut probed = false;
         loop {
             match self
@@ -338,10 +378,18 @@ impl AppiumSession {
                 Err(e) => return Err(e.into()),
             }
             let now = tokio::time::Instant::now();
-            let probing_now = !probed && now >= probe_at;
+            // Time this probe spends is time the polling loop does not get:
+            // hold it inside the deadline as well as the budget. With none
+            // of the deadline left it does not run at all, and the probe
+            // the deadline branch makes below is the one that looks.
+            let early_budget = budget.min(deadline.saturating_duration_since(now));
+            let probing_now = !probed && now >= probe_at && !early_budget.is_zero();
             if probing_now {
                 probed = true;
-                if let Ok(element) = self.scroll_to(accessibility_id).await {
+                if let Some(element) = self
+                    .probe_below_the_fold(accessibility_id, early_budget)
+                    .await?
+                {
                     return Ok(element);
                 }
             }
@@ -349,7 +397,10 @@ impl AppiumSession {
                 // A screen that finished building late is below the fold
                 // only now; look once more before calling the control
                 // missing, unless this very iteration already did.
-                if !probing_now && let Ok(element) = self.scroll_to(accessibility_id).await {
+                if !probing_now
+                    && let Some(element) =
+                        self.probe_below_the_fold(accessibility_id, budget).await?
+                {
                     return Ok(element);
                 }
                 return Err(AppiumError::WaitTimeout {
@@ -683,6 +734,122 @@ mod tests {
             }
         ));
         assert!(!s.exists("nowhere").await.unwrap());
+    }
+
+    /// A scrolling search is not free: up to ten swipes, each a tree dump,
+    /// bounded by nothing but the HTTP timeout. A wait that starts one
+    /// after its deadline has passed can outlive the bound it advertised by
+    /// a minute -- and the callers that pass a short deadline are the ones
+    /// that pass it because they need the answer soon.
+    #[tokio::test]
+    async fn a_wait_never_outlives_its_deadline_by_more_than_the_deadline() {
+        let server = MockServer::start().await;
+        let s = session(&server).await;
+        mount_slow_scroll(&server, Duration::from_secs(20)).await;
+
+        let started = tokio::time::Instant::now();
+        let err = s
+            .wait_for("nowhere", Duration::from_millis(200))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, AppiumError::WaitTimeout { .. }), "{err:?}");
+        // The probe may cost the wait at most what the wait itself is worth.
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a 200ms wait must not hang on an unbounded probe: {:?}",
+            started.elapsed()
+        );
+    }
+
+    /// A dead session, a broken transport or a malformed response is an
+    /// infrastructure failure. Reported as `WaitTimeout` it reads as a
+    /// missing automation control instead, and the run blames the app for
+    /// the harness.
+    #[tokio::test]
+    async fn a_driver_failure_during_the_probe_is_not_a_missing_control() {
+        let server = MockServer::start().await;
+        let s = session(&server).await;
+        mount_scroll_failure(&server).await;
+
+        let err = s
+            .wait_for("settings.mostro_node", Duration::from_millis(200))
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                &err,
+                AppiumError::WebDriver(WebDriverError::Server { error, .. })
+                    if error == "invalid session id"
+            ),
+            "the driver's own failure must surface as itself: {err:?}"
+        );
+    }
+
+    /// The same guarantee for the plain lookup: `find` falls back to a
+    /// scrolling search, and if that search fails for a reason of its own
+    /// the caller hears about that reason, not about the element being
+    /// off-screen.
+    #[tokio::test]
+    async fn find_surfaces_a_driver_failure_from_its_scrolling_fallback() {
+        let server = MockServer::start().await;
+        let s = session(&server).await;
+        mount_scroll_failure(&server).await;
+
+        let err = s.find("settings.mostro_node").await.unwrap_err();
+
+        assert!(
+            matches!(
+                &err,
+                AppiumError::WebDriver(WebDriverError::Server { error, .. })
+                    if error == "invalid session id"
+            ),
+            "the driver's own failure must surface as itself: {err:?}"
+        );
+    }
+
+    /// Nothing is on screen and every scrolling search stalls for `delay`.
+    async fn mount_slow_scroll(server: &MockServer, delay: Duration) {
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .and(body_string_contains("UiScrollable"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_delay(delay)
+                    .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+            )
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+            )
+            .mount(server)
+            .await;
+    }
+
+    /// Nothing is on screen and the scrolling search fails for a reason
+    /// that has nothing to do with the element: the session is gone.
+    async fn mount_scroll_failure(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .and(body_string_contains("UiScrollable"))
+            .respond_with(ResponseTemplate::new(404).set_body_json(
+                json!({"value": {"error": "invalid session id", "message": "session deleted"}}),
+            ))
+            .mount(server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .respond_with(
+                ResponseTemplate::new(404)
+                    .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
+            )
+            .mount(server)
+            .await;
     }
 
     /// A control that is off-screen: the plain `resourceId` lookup misses it
