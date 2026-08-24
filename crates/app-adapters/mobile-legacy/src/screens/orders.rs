@@ -8,7 +8,7 @@ use mortsom_app_contract::{
 };
 use mortsom_common::Secret;
 
-use super::{expect, label, present, tap, type_into};
+use super::{expect, label, listed, present, tap, type_into};
 use crate::selectors::Ids;
 
 /// Prefix of trade rows in the trades list.
@@ -46,8 +46,13 @@ pub async fn create(
     )
     .await?;
     // The price type toggle starts on market rate; switching to fixed
-    // reveals the sats amount field.
-    if !present(device, Ids::ORDER_CREATE_SATS_AMOUNT).await? {
+    // reveals the sats amount field. Whether that field is already there is
+    // a question about the whole form, not about the part of it the
+    // keyboard has not covered: answered by looking only at what is
+    // visible, a form already on fixed price gets toggled onto market, its
+    // sats field stops taking input, and submit stays disabled for the rest
+    // of the scenario.
+    if !listed(device, Ids::ORDER_CREATE_SATS_AMOUNT).await? {
         tap(device, Ids::ORDER_CREATE_PRICE_TYPE).await?;
     }
     type_into(

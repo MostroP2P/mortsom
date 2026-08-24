@@ -10,7 +10,7 @@ use mortsom_app_contract::{
 use mortsom_common::Secret;
 
 use super::nav::go_home;
-use super::{expect, label, present, tap, type_into};
+use super::{expect, label, listed, present, tap, type_into};
 use crate::selectors::Ids;
 use crate::states::from_v2_label;
 
@@ -51,7 +51,9 @@ pub async fn create(
         &draft.payment_method,
     )
     .await?;
-    if !present(device, Ids::ORDER_CREATE_SATS_AMOUNT).await? {
+    // Whether the form already offers a sats field is a question about the
+    // whole form, not about the part of it the keyboard has not covered.
+    if !listed(device, Ids::ORDER_CREATE_SATS_AMOUNT).await? {
         tap(device, Ids::ORDER_CREATE_PRICE_TYPE).await?;
     }
     type_into(
