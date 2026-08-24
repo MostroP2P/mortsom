@@ -2,7 +2,7 @@
 
 use mortsom_app_contract::{AdapterError, DeviceContext, TestEnvironment};
 
-use super::{expect, label, present, tap, type_into};
+use super::{expect, label, listed, present, tap, type_into};
 use crate::selectors::Ids;
 
 /// Ensures settings point at the daemon under test, choosing it from the
@@ -20,16 +20,43 @@ pub async fn select_node(
     }
     tap(device, Ids::SETTINGS_MOSTRO_NODE).await?;
     let item = Ids::node_item(&env.mostro_pubkey.to_ascii_lowercase());
-    if present(device, &item).await? {
+    // The selector is a list and the app discovers nodes on its own, so the
+    // daemon is usually already in it -- a swipe down, not on the first
+    // screenful. Looking only at what is visible reports it missing and
+    // adds a node the app already has.
+    if listed(device, &item).await? {
         tap(device, &item).await?;
     } else {
-        tap(device, Ids::NODE_ADD_CUSTOM).await?;
-        type_into(device, Ids::NODE_CUSTOM_PUBKEY, &env.mostro_pubkey).await?;
-        type_into(device, Ids::NODE_CUSTOM_NAME, super::onboarding::NODE_NAME).await?;
-        tap(device, Ids::NODE_CUSTOM_CONFIRM).await?;
+        add_custom_node(device, env).await?;
     }
     expect(device, Ids::SETTINGS_MOSTRO_NODE_PUBKEY).await?;
     verify_node(device, env).await
+}
+
+/// Adds the daemon under test through the custom-node dialog.
+///
+/// The app refuses a node it already knows and leaves the dialog open --
+/// the same signal onboarding reads. Left standing, it covers settings and
+/// the next wait times out against it, reporting a control missing from a
+/// screen that was merely hidden. Close it and say what happened instead.
+async fn add_custom_node(
+    device: &DeviceContext<'_>,
+    env: &TestEnvironment,
+) -> Result<(), AdapterError> {
+    tap(device, Ids::NODE_ADD_CUSTOM).await?;
+    type_into(device, Ids::NODE_CUSTOM_PUBKEY, &env.mostro_pubkey).await?;
+    type_into(device, Ids::NODE_CUSTOM_NAME, super::onboarding::NODE_NAME).await?;
+    tap(device, Ids::NODE_CUSTOM_CONFIRM).await?;
+    if !present(device, Ids::NODE_CUSTOM_CONFIRM).await? {
+        return Ok(());
+    }
+    tap(device, Ids::NODE_CUSTOM_CANCEL).await?;
+    Err(AdapterError::contract(format!(
+        "the app already knows node `{}` but does not list it as `{}`, \
+         so it can be neither chosen nor added",
+        env.mostro_pubkey,
+        Ids::node_item(&env.mostro_pubkey.to_ascii_lowercase())
+    )))
 }
 
 /// Verifies the selected node pubkey shown in settings equals the daemon.
@@ -74,7 +101,9 @@ pub async fn ensure_relay(
     env: &TestEnvironment,
 ) -> Result<(), AdapterError> {
     let row = Ids::relay_item(&env.relay_url);
-    if present(device, &row).await? {
+    // The relay list sits at the bottom of a long settings page: what is
+    // visible is not the whole list.
+    if listed(device, &row).await? {
         return Ok(());
     }
     tap(device, Ids::SETTINGS_RELAYS_ADD).await?;

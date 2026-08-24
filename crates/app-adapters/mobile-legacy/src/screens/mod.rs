@@ -62,3 +62,16 @@ pub async fn present(device: &DeviceContext<'_>, id: &str) -> Result<bool, Adapt
         .await
         .map_err(|e| AdapterError::infrastructure(format!("probe `{id}`: {e}")))
 }
+
+/// Whether `id` is anywhere on the current screen, including below the
+/// fold. Ask this about a list -- a node in the selector, a relay row in
+/// settings -- where what is visible is only part of the answer and the
+/// caller acts on it either way. It may scroll to answer, so it is not the
+/// probe to use for "which screen am I on".
+pub async fn listed(device: &DeviceContext<'_>, id: &str) -> Result<bool, AdapterError> {
+    device
+        .ui
+        .exists_anywhere(id)
+        .await
+        .map_err(|e| AdapterError::infrastructure(format!("look for `{id}` in the list: {e}")))
+}

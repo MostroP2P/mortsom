@@ -305,6 +305,23 @@ impl AppiumSession {
         }
     }
 
+    /// Whether `accessibility_id` is on the screen **or reachable by
+    /// scrolling to it**.
+    ///
+    /// This is the question to ask about a list -- "is the daemon in the
+    /// node selector?", "is the relay already listed?" -- where the answer
+    /// is not confined to the visible part and the caller is about to act
+    /// on it either way. It may swipe the screen to answer, which is why
+    /// it is a separate primitive from [`Self::exists`] rather than its
+    /// behaviour.
+    pub async fn exists_anywhere(&self, accessibility_id: &str) -> Result<bool, AppiumError> {
+        match self.find(accessibility_id).await {
+            Ok(_) => Ok(true),
+            Err(AppiumError::WebDriver(e)) if e.is_no_such_element() => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Waits until the element is present, bounded by `timeout`.
     ///
     /// Polling uses the plain lookup: it is cheap and it moves nothing,
