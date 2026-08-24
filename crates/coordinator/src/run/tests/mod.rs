@@ -158,13 +158,19 @@ impl ReadinessProbe for AlwaysReady {
 }
 
 /// UI stack that always answers; the fake adapter ignores it.
-#[derive(Clone, Default)]
 /// The fakes share one connectivity flag with the adapter: an app whose
 /// device has no network cannot reach its wallet, and a double that ignores
-/// that cannot exercise the scenarios which cut it.
-struct FakeUi(Arc<std::sync::atomic::AtomicBool>);
-struct FakeServer(Arc<std::sync::atomic::AtomicBool>);
-struct FakeSession(Arc<std::sync::atomic::AtomicBool>);
+/// that cannot exercise the scenarios which cut it. The second flag is the
+/// driver itself going silent: every request then sits on its own HTTP
+/// timeout, which is how a screenshot can cost a minute.
+#[derive(Clone, Default)]
+struct Flags {
+    online: Arc<std::sync::atomic::AtomicBool>,
+    silent_driver: Arc<std::sync::atomic::AtomicBool>,
+}
+struct FakeUi(Flags);
+struct FakeServer(Flags);
+struct FakeSession(Flags);
 #[async_trait]
 impl UiDriver for FakeUi {
     async fn start_server(
@@ -174,18 +180,32 @@ impl UiDriver for FakeUi {
         _: &Path,
         _: Duration,
     ) -> Result<Box<dyn UiServer>, AppiumError> {
-        Ok(Box::new(FakeServer(Arc::clone(&self.0))))
+        Ok(Box::new(FakeServer(self.0.clone())))
     }
 }
 #[async_trait]
 impl UiServer for FakeServer {
     async fn create_session(&self, _: &SessionSpec) -> Result<Box<dyn UiSession>, AppiumError> {
-        Ok(Box::new(FakeSession(Arc::clone(&self.0))))
+        Ok(Box::new(FakeSession(self.0.clone())))
     }
     async fn stop(&self) -> Result<(), AppiumError> {
         Ok(())
     }
 }
+impl FakeSession {
+    /// A WebDriver request against a driver that stopped answering returns
+    /// only when its own HTTP timeout expires.
+    async fn wait_out_the_http_timeout(&self) {
+        if self
+            .0
+            .silent_driver
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        }
+    }
+}
+
 #[async_trait]
 impl UiSession for FakeSession {
     async fn exists(&self, _: &str) -> Result<bool, AppiumError> {
@@ -213,9 +233,11 @@ impl UiSession for FakeSession {
         Ok(String::new())
     }
     async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
+        self.wait_out_the_http_timeout().await;
         Ok(b"\x89PNG".to_vec())
     }
     async fn page_source(&self) -> Result<String, AppiumError> {
+        self.wait_out_the_http_timeout().await;
         Ok(format!("<hierarchy>{INVOICE}</hierarchy>"))
     }
     async fn background(&self, _: u64) -> Result<(), AppiumError> {
@@ -231,7 +253,9 @@ impl UiSession for FakeSession {
         Ok(())
     }
     async fn set_connectivity(&self, enabled: bool) -> Result<(), AppiumError> {
-        self.0.store(enabled, std::sync::atomic::Ordering::SeqCst);
+        self.0
+            .online
+            .store(enabled, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
     async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
@@ -244,8 +268,9 @@ impl UiSession for FakeSession {
 
 /// A fake app: order state advances with each business action.
 struct FakeAdapter {
-    /// Shared with the fake UI: false once a scenario cut connectivity.
-    online: Arc<std::sync::atomic::AtomicBool>,
+    /// Shared with the fake UI: connectivity, and whether the driver has
+    /// gone silent.
+    flags: Flags,
     orders: Mutex<BTreeMap<String, OrderState>>,
     capabilities: CapabilitySet,
     fail_release: bool,
@@ -256,12 +281,17 @@ struct FakeAdapter {
     created: Mutex<u32>,
     /// Cancel is accepted by the UI but the daemon never closes the order.
     stubborn: bool,
+    /// The driver stops answering at the moment the scenario fails.
+    silence_driver_on_failure: bool,
 }
 
 impl FakeAdapter {
     fn full() -> Self {
         Self {
-            online: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            flags: Flags {
+                online: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                silent_driver: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
             orders: Mutex::new(BTreeMap::new()),
             capabilities: CapabilitySet::new(Capability::ALL),
             fail_release: false,
@@ -269,6 +299,7 @@ impl FakeAdapter {
             coop_pending: Mutex::new(Vec::new()),
             created: Mutex::new(0),
             stubborn: false,
+            silence_driver_on_failure: false,
         }
     }
     fn set(&self, id: &str, state: OrderState) {
@@ -354,7 +385,7 @@ impl AppAdapter for FakeAdapter {
         order: &OrderReference,
         _: PaymentPath,
     ) -> Result<PaymentHandoff, AdapterError> {
-        if !self.online.load(std::sync::atomic::Ordering::SeqCst) {
+        if !self.flags.online.load(std::sync::atomic::Ordering::SeqCst) {
             return Err(AdapterError::wallet(
                 "the wallet cannot be reached while the device is offline",
             ));
@@ -387,6 +418,11 @@ impl AppAdapter for FakeAdapter {
         order: &OrderReference,
     ) -> Result<(), AdapterError> {
         if self.fail_release {
+            if self.silence_driver_on_failure {
+                self.flags
+                    .silent_driver
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
             return Err(AdapterError::infrastructure("appium session died"));
         }
         self.set(&order.id, OrderState::Completed);
@@ -525,7 +561,7 @@ async fn run(
     options: RunOptions,
     confirm: bool,
 ) -> Result<RunSummary, String> {
-    let ui = FakeUi(Arc::clone(&adapter.online));
+    let ui = FakeUi(adapter.flags.clone());
     let docker = Arc::new(FakeDocker::default());
     let runner = runner();
     let env = env_for(world, confirm);
@@ -767,6 +803,86 @@ fn without(dropped: Capability) -> FakeAdapter {
             .filter(|c| *c != dropped),
     );
     adapter
+}
+
+/// The runbook's first instruction for a failed run is to open the actor's
+/// last screen. Every checkpoint in the scenario kit sits on the success
+/// path, so a failing action returned before recording one and left nothing
+/// to open -- on exactly the run where it matters.
+#[tokio::test]
+async fn a_failed_scenario_leaves_the_screen_that_failed() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+
+    let summary = run(&world, Arc::new(adapter), opts(&["happy_sell"]), true)
+        .await
+        .unwrap();
+
+    assert!(!summary.passed);
+    let run_dir = world
+        .dir
+        .path()
+        .join("artifacts")
+        .join(summary.run_id.as_str());
+    for actor in ["alice", "bob"] {
+        let steps = std::fs::read_dir(run_dir.join(actor).join("steps"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        // Step names are sanitized for the filesystem, so the scenario
+        // reads `happy-sell` here.
+        assert!(
+            steps
+                .iter()
+                .any(|f| f.contains("happy-sell-failed") && f.ends_with("screen.png")),
+            "{actor} kept no screen from the failure: {steps:?}"
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|f| f.contains("happy-sell-failed") && f.ends_with("ui.xml")),
+            "{actor} kept no hierarchy from the failure: {steps:?}"
+        );
+    }
+    // And the timeline points at it, because that is what a reader opens
+    // first.
+    let timeline = std::fs::read_to_string(run_dir.join(files::TIMELINE)).unwrap_or_default();
+    assert!(
+        timeline.contains("screen when happy_sell failed"),
+        "{timeline}"
+    );
+}
+
+/// Diagnostics may never postpone cleanup. When the driver is what broke,
+/// each screenshot and hierarchy waits out its own 60-second HTTP timeout,
+/// so capturing two actors one after the other would hold the run -- and
+/// the sats it still has open -- for minutes, and would photograph the
+/// second phone long after the moment it is meant to show.
+#[tokio::test(start_paused = true)]
+async fn a_silent_driver_cannot_hold_the_run_open_while_it_is_photographed() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+    adapter.silence_driver_on_failure = true;
+
+    let started = tokio::time::Instant::now();
+    let summary = run(&world, Arc::new(adapter), opts(&["happy_sell"]), true)
+        .await
+        .unwrap();
+    let spent = started.elapsed();
+
+    assert!(!summary.passed);
+    // Four unbounded requests (a screen and a hierarchy each for Alice and
+    // Bob) would be four minutes; both actors under one deadline is
+    // seconds.
+    assert!(
+        spent < Duration::from_secs(60),
+        "the failure capture held the run for {spent:?}"
+    );
 }
 
 #[tokio::test]

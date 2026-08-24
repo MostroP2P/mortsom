@@ -206,6 +206,14 @@ dump per actor at every step. Read the timeline first; it is written for that.
 look at, and `mortsom cleanup <run-id>` removes what an interrupted run left
 behind.
 
+A scenario that fails adds one more step for **both** actors,
+`<scenario>-failed`: the screen each phone was on at that moment, whatever
+ended the attempt — an assertion, the deadline or a panic. It is the last
+entry in the timeline, and usually the one that explains the run. Both
+phones are photographed at once and under a short deadline, so a driver
+that stopped answering is noted in `run.log` instead of holding the run
+open while cleanup waits.
+
 ## Choosing a wallet backend
 
 Every run so far has cost mainnet sats and a wallet service's latency. That is

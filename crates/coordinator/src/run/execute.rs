@@ -19,6 +19,15 @@ use tracing::{info, warn};
 /// Poll interval while waiting for a cancelled order to show as closed.
 const CLEANUP_POLL: Duration = Duration::from_millis(500);
 
+/// How long the screen-of-the-failure capture may take, per actor.
+///
+/// The scenario has already failed and cleanup is queued behind this. When
+/// the driver is the component that broke, a WebDriver request sits on its
+/// own 60-second HTTP timeout, so an unbounded serial capture could delay
+/// returning real sats by minutes and would photograph the second phone
+/// long after the moment it is supposed to show.
+const FAILURE_CAPTURE_DEADLINE: Duration = Duration::from_secs(15);
+
 /// Runs `def` against `ctx`, retrying once only for a classified
 /// infrastructure failure when `infra_retries` allows it.
 pub async fn execute_scenario(
@@ -95,7 +104,7 @@ pub async fn execute_scenario(
 async fn attempt(def: &ScenarioDef, ctx: &Context) -> Outcome {
     let timeout = Duration::from_secs(def.timeout_secs);
     let body = AssertUnwindSafe((def.run)(ctx)).catch_unwind();
-    match tokio::time::timeout(timeout, body).await {
+    let outcome = match tokio::time::timeout(timeout, body).await {
         Ok(Ok(Ok(()))) => Outcome::Passed,
         Ok(Ok(Err(e))) => Outcome::Failed {
             category: e.category,
@@ -109,6 +118,59 @@ async fn attempt(def: &ScenarioDef, ctx: &Context) -> Outcome {
             category: FailureCategory::Product,
             message: format!("scenario exceeded its {timeout:?} deadline"),
         },
+    };
+    if matches!(outcome, Outcome::Failed { .. }) {
+        capture_failure(def, ctx).await;
+    }
+    outcome
+}
+
+/// Records the screen each actor was on when the scenario failed.
+///
+/// Every checkpoint in the scenario kit sits on the success path: an action
+/// that fails returns before reaching it. So a failed run left only its
+/// bootstrap screenshots, and the runbook's first instruction -- open the
+/// actor's last screen -- had nothing to open, on the one run where it
+/// matters. This is the single place that sees every failure, whether it
+/// was an assertion, the deadline or a panic.
+///
+/// Best effort by design: the recorder logs what it cannot capture rather
+/// than failing, because a dead session is often exactly what went wrong
+/// and must not replace the diagnosis with an error about the diagnosis.
+///
+/// Both actors are captured concurrently and each under
+/// [`FAILURE_CAPTURE_DEADLINE`], so the diagnosis can never postpone the
+/// cleanup that gives real sats back (spec §5).
+async fn capture_failure(def: &ScenarioDef, ctx: &Context) {
+    let name = format!("{}-failed", def.name);
+    let captures = ctx.actors.iter().map(|session| {
+        let name = name.as_str();
+        async move {
+            let step = tokio::time::timeout(
+                FAILURE_CAPTURE_DEADLINE,
+                ctx.evidence
+                    .checkpoint(session.actor.as_str(), name, session.ui.as_ref()),
+            )
+            .await;
+            (session.actor, step)
+        }
+    });
+    // Pushed in actor order once both are done, so the timeline reads the
+    // same whichever phone answered first.
+    for (actor, step) in futures::future::join_all(captures).await {
+        match step {
+            Ok(step) => ctx.timeline.push(
+                TimelineKind::Step,
+                Some(actor.as_str()),
+                format!("screen when {} failed", def.name),
+                Some(step),
+            ),
+            Err(_) => warn!(
+                scenario = def.name,
+                actor = actor.as_str(),
+                "no screen recorded: the failure capture hit its deadline"
+            ),
+        }
     }
 }
 

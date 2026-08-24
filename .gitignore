@@ -5,3 +5,7 @@ mortsom.toml
 .env
 .env.*
 *.profraw
+
+# The threat model is attack-surface analysis the project keeps private.
+# Keep a local copy here if you like; it is never committed.
+docs/threat-model*.md
