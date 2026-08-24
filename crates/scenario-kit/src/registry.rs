@@ -43,6 +43,39 @@ pub fn find(name: &str) -> Option<&'static ScenarioDef> {
     all().into_iter().find(|d| d.name == name)
 }
 
+/// The capabilities a scenario needs from the app on this run's wallet
+/// backend.
+///
+/// A scenario names the journey, not the plumbing: "fund the escrow" is
+/// the same step whether the app pays it through its own connected wallet
+/// or Mortsom pays it from a node it holds and types the buyer invoice
+/// into the app by hand. Which controls that step actually drives is a
+/// property of the run, not of the scenario, so scenarios declare the NWC
+/// path and this resolves it -- rather than making every scenario carry
+/// both and the gate check requirements the run will never exercise.
+///
+/// On a node Mortsom holds the app has no wallet at all: `nwc` and
+/// `hold-invoice-payment` are never reached, and `external-wallet` -- the
+/// manual pay and invoice controls -- is what the run depends on instead.
+pub fn required_on(requires: &[Capability], manual_payments: bool) -> Vec<Capability> {
+    if !manual_payments {
+        return requires.to_vec();
+    }
+    let mut resolved = Vec::with_capacity(requires.len());
+    for capability in requires {
+        let needed = match capability {
+            Capability::Nwc | Capability::HoldInvoicePayment => Capability::ExternalWallet,
+            other => *other,
+        };
+        // Both map onto the same manual controls; asking for them twice
+        // would report one missing capability as two.
+        if !resolved.contains(&needed) {
+            resolved.push(needed);
+        }
+    }
+    resolved
+}
+
 /// Selects scenarios by explicit names and/or a tag. Unknown names are an
 /// error, never silently ignored.
 pub fn select(names: &[String], tag: Option<&str>) -> Result<Vec<&'static ScenarioDef>, String> {
@@ -83,6 +116,59 @@ pub fn validate() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod backend_tests {
+    use super::*;
+
+    const TRADE: &[Capability] = &[
+        Capability::Onboarding,
+        Capability::Nwc,
+        Capability::CreateOrder,
+        Capability::HoldInvoicePayment,
+        Capability::BuyerInvoice,
+    ];
+
+    /// The app's own wallet is what the scenario declared; nothing to
+    /// resolve.
+    #[test]
+    fn on_the_apps_own_wallet_the_requirements_are_what_the_scenario_declared() {
+        assert_eq!(required_on(TRADE, false), TRADE.to_vec());
+    }
+
+    /// On a node Mortsom holds, the run drives the manual controls and
+    /// never touches the app's wallet. Requiring `nwc` would skip a profile
+    /// over a capability the run does not use, and not requiring
+    /// `external-wallet` would start a profile that cannot pay by hand and
+    /// let it fail mid-trade instead of being skipped with a reason.
+    #[test]
+    fn on_a_node_mortsom_holds_the_manual_controls_replace_the_apps_wallet() {
+        let resolved = required_on(TRADE, true);
+
+        assert!(!resolved.contains(&Capability::Nwc));
+        assert!(!resolved.contains(&Capability::HoldInvoicePayment));
+        assert!(resolved.contains(&Capability::ExternalWallet));
+        assert!(resolved.contains(&Capability::Onboarding));
+        assert!(resolved.contains(&Capability::CreateOrder));
+    }
+
+    /// `nwc` and `hold-invoice-payment` resolve to the same controls, and
+    /// one missing capability must be reported once.
+    #[test]
+    fn two_wallet_capabilities_resolve_to_one_requirement() {
+        let resolved = required_on(TRADE, true);
+
+        assert_eq!(
+            resolved
+                .iter()
+                .filter(|c| **c == Capability::ExternalWallet)
+                .count(),
+            1,
+            "{resolved:?}"
+        );
+    }
 }
 
 #[cfg(test)]

@@ -669,6 +669,53 @@ async fn unknown_scenario_and_missing_capability_are_explicit() {
     );
 }
 
+/// What a scenario needs from the app depends on the wallet the run gave
+/// it. On a node Mortsom holds the app is walletless by design: gating on
+/// its NWC support skips a profile over a capability the run never
+/// touches, and not gating on the manual pay and invoice controls starts a
+/// profile that cannot drive them and lets it fail mid-trade instead of
+/// being skipped with a reason.
+#[test]
+fn the_gate_asks_for_the_controls_the_run_will_actually_drive() {
+    mortsom_scenarios::link();
+    let happy = mortsom_scenario_kit::registry::find("happy_sell").unwrap();
+    let without = |dropped: Capability| {
+        let mut adapter = FakeAdapter::full();
+        adapter.capabilities = CapabilitySet::new(
+            FakeAdapter::full()
+                .capabilities
+                .iter()
+                .filter(|c| *c != dropped),
+        );
+        adapter
+    };
+    let reason = |results: &[ScenarioResult]| match &results[0].outcome {
+        Outcome::Skipped { reason } => reason.clone(),
+        other => panic!("expected a skip, got {other:?}"),
+    };
+
+    // The app pays: it must be able to.
+    let no_nwc = without(Capability::Nwc);
+    let (runnable, skipped) = gate_capabilities(&no_nwc, &[happy], false);
+    assert!(runnable.is_empty());
+    assert!(reason(&skipped).contains("nwc"), "{}", reason(&skipped));
+
+    // Mortsom pays: the app's own wallet is never reached.
+    let (runnable, skipped) = gate_capabilities(&no_nwc, &[happy], true);
+    assert_eq!(runnable.len(), 1, "{skipped:?}");
+    assert!(skipped.is_empty());
+
+    // But the controls Mortsom drives by hand must exist.
+    let no_manual = without(Capability::ExternalWallet);
+    let (runnable, skipped) = gate_capabilities(&no_manual, &[happy], true);
+    assert!(runnable.is_empty());
+    assert!(
+        reason(&skipped).contains("external-wallet"),
+        "{}",
+        reason(&skipped)
+    );
+}
+
 #[tokio::test]
 async fn infrastructure_failure_after_payment_is_final_and_cleanup_cancels_open_orders() {
     mortsom_scenarios::link();

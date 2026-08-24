@@ -35,7 +35,7 @@ use mortsom_scenario_kit::context::NodeWallet;
 use mortsom_scenario_kit::context::{ActorSession, Context, MainnetClearance, RecoveryTiming};
 use mortsom_scenario_kit::outcome::{Outcome, ScenarioResult};
 use mortsom_scenario_kit::recovery::{NoRelayControl, RelayControl};
-use mortsom_scenario_kit::registry::{ScenarioDef, select};
+use mortsom_scenario_kit::registry::{ScenarioDef, required_on, select};
 use mortsom_scenario_kit::timeline::{Timeline, TimelineKind};
 use relay_control::LiveRelayControl;
 use serde::{Deserialize, Serialize};
@@ -224,7 +224,11 @@ pub async fn run_scenarios(
         relay_teardown: None,
         passed: false,
     };
-    let (runnable, gated) = gate_capabilities(deps.adapter.as_ref(), &selected);
+    let (runnable, gated) = gate_capabilities(
+        deps.adapter.as_ref(),
+        &selected,
+        config.wallets.drives_manual_payments(),
+    );
     summary.results.extend(gated);
     if runnable.is_empty() {
         return finish(&artifacts, &mut summary).map(|()| summary);
@@ -303,13 +307,17 @@ fn clear_value_moving(
 fn gate_capabilities<'a>(
     adapter: &dyn AppAdapter,
     selected: &[&'a ScenarioDef],
+    manual_payments: bool,
 ) -> (Vec<&'a ScenarioDef>, Vec<ScenarioResult>) {
     let capabilities = adapter.capabilities();
     let profile = adapter.profile().name;
     let mut runnable = Vec::new();
     let mut skipped = Vec::new();
     for def in selected {
-        let missing = capabilities.missing(def.requires);
+        // What a scenario needs depends on the wallet the run gave it: on a
+        // node Mortsom holds, the app pays nothing and the manual controls
+        // are what must exist.
+        let missing = capabilities.missing(&required_on(def.requires, manual_payments));
         if missing.is_empty() {
             runnable.push(*def);
         } else {
