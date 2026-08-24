@@ -125,9 +125,7 @@ pub async fn run_relay_smoke(
     evidence: &dyn EvidenceSource,
 ) -> Result<SmokeSummary, String> {
     let run_id = RunId::new();
-    let redactor = Redactor::new()
-        .with_secret(&config.wallets.alice_nwc)
-        .with_secret(&config.wallets.bob_nwc);
+    let redactor = Redactor::new().with_secrets(config.wallets.secrets());
     let artifacts = RunArtifacts::create(
         std::path::Path::new(&config.run.artifacts_dir),
         run_id.clone(),

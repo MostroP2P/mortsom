@@ -7,7 +7,7 @@ use mortsom_android_driver::process::CommandRunner;
 use mortsom_app_contract::{
     AdapterError, Apk, AppAdapter, AppOrderState, AppProfile, BuildContext, CancelOutcome,
     Capability, CapabilitySet, DeviceContext, Identity, OrderDraft, OrderKind, OrderReference,
-    PaymentHandoff, TestEnvironment, VisibleOrder, WalletConnection,
+    PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };
 use mortsom_common::Secret;
 
@@ -60,6 +60,7 @@ impl AppAdapter for MobileLegacyAdapter {
             Capability::CreateOrder,
             Capability::TakeOrder,
             Capability::HoldInvoicePayment,
+            Capability::ExternalWallet,
             Capability::BuyerInvoice,
             Capability::FiatSent,
             Capability::Release,
@@ -168,16 +169,18 @@ impl AppAdapter for MobileLegacyAdapter {
         &self,
         device: &DeviceContext<'_>,
         order: &OrderReference,
+        path: PaymentPath,
     ) -> Result<PaymentHandoff, AdapterError> {
-        orders::pay_hold_invoice(device, order).await
+        orders::pay_hold_invoice(device, order, path).await
     }
 
     async fn provide_buyer_invoice(
         &self,
         device: &DeviceContext<'_>,
         order: &OrderReference,
+        invoice: Option<&Secret>,
     ) -> Result<Option<Secret>, AdapterError> {
-        orders::provide_buyer_invoice(device, order).await
+        orders::provide_buyer_invoice(device, order, invoice).await
     }
 
     async fn confirm_fiat_sent(

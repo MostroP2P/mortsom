@@ -131,10 +131,29 @@ pub async fn observe(
 pub async fn pay_hold_invoice(
     device: &DeviceContext<'_>,
     order: &OrderReference,
+    path: PaymentPath,
 ) -> Result<PaymentHandoff, AdapterError> {
     open_trade(device, order).await?;
     tap(device, Ids::TRADE_PAY_INVOICE).await?;
-    let invoice = label(device, Ids::PAY_INVOICE_TEXT).await?;
+    let invoice = label(device, Ids::PAY_INVOICE_TEXT)
+        .await?
+        .trim()
+        .to_owned();
+    if path == PaymentPath::ExternalWallet {
+        // Nothing is tapped: the app has no wallet to pay with, and the
+        // caller holds the node that does. The screen stays open until the
+        // daemon sees the payment, which is the app's own signal to move
+        // on — pressing anything here would be inventing one.
+        if invoice.is_empty() {
+            return Err(AdapterError::product(
+                "the pay screen shows no invoice, so there is nothing to pay externally",
+            ));
+        }
+        return Ok(PaymentHandoff {
+            kind: PaymentPath::ExternalWallet,
+            invoice: Some(Secret::new(invoice)),
+        });
+    }
     tap(device, Ids::PAY_NWC).await?;
     expect(device, Ids::ORDER_ADD_FAB).await?;
     Ok(PaymentHandoff {
@@ -156,9 +175,23 @@ pub async fn pay_hold_invoice(
 pub async fn provide_buyer_invoice(
     device: &DeviceContext<'_>,
     order: &OrderReference,
+    supplied: Option<&Secret>,
 ) -> Result<Option<Secret>, AdapterError> {
     open_trade(device, order).await?;
     tap(device, Ids::TRADE_ADD_INVOICE).await?;
+    if let Some(invoice) = supplied {
+        // The caller issued this one on a node it holds. With no wallet
+        // connected the app opens the manual form directly; `invoice.manual`
+        // only exists on the path where a connected wallet failed, so it is
+        // tapped when it is there and skipped when it is not.
+        if present(device, Ids::INVOICE_MANUAL).await? {
+            tap(device, Ids::INVOICE_MANUAL).await?;
+        }
+        type_into(device, Ids::INVOICE_TEXT, invoice.expose()).await?;
+        tap(device, Ids::INVOICE_SUBMIT).await?;
+        expect(device, Ids::ORDER_ADD_FAB).await?;
+        return Ok(Some(invoice.clone()));
+    }
     if present(device, Ids::INVOICE_MANUAL).await? || present(device, Ids::INVOICE_TEXT).await? {
         return Err(AdapterError::product(
             "the app fell back to the manual invoice form: the connected wallet did not generate one",

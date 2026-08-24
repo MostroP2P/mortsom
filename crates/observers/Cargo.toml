@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+mortsom-environment = { path = "../environment" }
 mortsom-common = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

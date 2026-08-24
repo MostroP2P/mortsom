@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+fedimint-tonic-lnd = { workspace = true }
 mortsom-common = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

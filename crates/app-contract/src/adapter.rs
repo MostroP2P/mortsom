@@ -13,7 +13,7 @@ use crate::capabilities::CapabilitySet;
 use crate::error::AdapterError;
 use crate::types::{
     Apk, AppOrderState, AppProfile, BuildContext, CancelOutcome, Identity, OrderDraft,
-    OrderReference, PaymentHandoff, TestEnvironment, VisibleOrder, WalletConnection,
+    OrderReference, PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };
 
 /// A device as seen by an adapter: one actor, one UI session, one deadline
@@ -77,18 +77,31 @@ pub trait AppAdapter: Send + Sync {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<(), AdapterError>;
-    /// Pays the hold invoice through the app's wallet path.
+    /// Hands off the hold invoice along `path`.
+    ///
+    /// On [`PaymentPath::Nwc`] the app pays it with its connected wallet and
+    /// the returned invoice is only for hash correlation. On
+    /// [`PaymentPath::ExternalWallet`] the app is left waiting on the pay
+    /// screen and the returned invoice is the thing the caller must pay —
+    /// which is how a run drives a node Mortsom holds rather than a wallet
+    /// the app holds.
     async fn pay_hold_invoice(
         &self,
         device: &DeviceContext<'_>,
         order: &OrderReference,
+        path: PaymentPath,
     ) -> Result<PaymentHandoff, AdapterError>;
-    /// Submits the buyer invoice through the app's wallet path and returns
-    /// the invoice (protected) when the app exposed it, for hash correlation.
+    /// Submits the buyer invoice and returns it (protected) when the app
+    /// exposed it, for hash correlation.
+    ///
+    /// `None` submits through the app's connected wallet. `Some(invoice)`
+    /// types one the caller issued into the app's manual form, for a run
+    /// whose wallet is a node Mortsom holds.
     async fn provide_buyer_invoice(
         &self,
         device: &DeviceContext<'_>,
         order: &OrderReference,
+        invoice: Option<&Secret>,
     ) -> Result<Option<Secret>, AdapterError>;
     /// Reports fiat sent.
     async fn confirm_fiat_sent(

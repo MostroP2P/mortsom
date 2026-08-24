@@ -12,7 +12,7 @@ use mortsom_android_driver::ui::UiSession;
 use mortsom_app_contract::{
     AdapterError, Apk, AppAdapter, AppOrderState, AppProfile, BuildContext, CancelOutcome,
     CapabilitySet, DeviceContext, Identity, OrderDraft, OrderReference, OrderState, PaymentHandoff,
-    TestEnvironment, VisibleOrder, WalletConnection,
+    PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };
 use mortsom_common::{Lane, Secret};
 use mortsom_observers::relay::{ObserverScope, RelayObserver};
@@ -90,6 +90,7 @@ impl AppAdapter for StateAdapter {
         &self,
         _: &DeviceContext<'_>,
         _: &OrderReference,
+        _: PaymentPath,
     ) -> Result<PaymentHandoff, AdapterError> {
         Err(AdapterError::infrastructure("no"))
     }
@@ -97,6 +98,7 @@ impl AppAdapter for StateAdapter {
         &self,
         _: &DeviceContext<'_>,
         _: &OrderReference,
+        _: Option<&Secret>,
     ) -> Result<Option<Secret>, AdapterError> {
         Ok(None)
     }
@@ -221,6 +223,7 @@ pub fn context(adapter: Arc<dyn AppAdapter>) -> Context {
 /// Same as [`context`] with an explicit relay control.
 pub fn context_with(adapter: Arc<dyn AppAdapter>, relay_control: Arc<dyn RelayControl>) -> Context {
     Context {
+        node_wallets: std::collections::BTreeMap::new(),
         adapter,
         actors: vec![
             ActorSession {
@@ -251,6 +254,7 @@ pub fn context_with(adapter: Arc<dyn AppAdapter>, relay_control: Arc<dyn RelayCo
         cleanup: Arc::new(CleanupRegistry::default()),
         timeline: Arc::new(Timeline::default()),
         evidence: Arc::new(NullSink),
+        pending_holds: Mutex::new(std::collections::BTreeMap::new()),
         mainnet: None,
         amount_sats: 5,
         fiat_code: "USD".into(),

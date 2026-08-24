@@ -98,8 +98,9 @@ The next run starts with `mortsom doctor`; a clean host shows no
 
 ## 7. Secret rotation
 
-Secrets are only ever `env:` references (`MORTSOM_ALICE_NWC`,
-`MORTSOM_BOB_NWC`, `MORTSOM_MOSTRO_SETTINGS_FILE`, `MORTSOM_MAINNET_CONFIRM`).
+Secrets are only ever `env:` references: the wallet credentials each backend
+needs (`MORTSOM_*_NWC` for NWC, or the host, macaroon and certificate of an
+LND node), plus `MORTSOM_MOSTRO_SETTINGS_FILE` and `MORTSOM_MAINNET_CONFIRM`.
 
 1. Create the new NWC connection in the wallet; keep the old one until the
    first run with the new one passes `doctor`.

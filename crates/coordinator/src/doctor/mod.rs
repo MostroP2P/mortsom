@@ -86,15 +86,8 @@ pub async fn run_doctor(
         max_order_sats: config.run.max_order_sats,
         max_run_spend_sats: config.run.max_run_spend_sats,
     };
-    net::check_wallet(
-        net,
-        "alice",
-        &config.wallets.alice_nwc,
-        liquidity,
-        &mut report,
-    )
-    .await;
-    net::check_wallet(net, "bob", &config.wallets.bob_nwc, liquidity, &mut report).await;
+    net::check_wallet(net, "alice", &config.wallets.alice, liquidity, &mut report).await;
+    net::check_wallet(net, "bob", &config.wallets.bob, liquidity, &mut report).await;
     report
 }
 

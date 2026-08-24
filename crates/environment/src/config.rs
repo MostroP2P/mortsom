@@ -4,6 +4,8 @@ use std::str::FromStr;
 
 use mortsom_common::Secret;
 use nostr_sdk::prelude::{NostrWalletConnectUri, RelayUrl};
+
+use crate::lnd_target;
 use serde::{Deserialize, Serialize};
 
 /// `[relay]` section: the run-owned `nostr-rs-relay` container.
@@ -136,29 +138,114 @@ impl MostroConfig {
     }
 }
 
-/// Wallet integration used by both actors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WalletMode {
-    /// Nostr Wallet Connect configured through the app's settings UI.
-    Nwc,
+/// Wallet backend for one actor, discriminated by `kind`.
+///
+/// The two backends are alternatives, never a combination: an actor has
+/// exactly one wallet. `deny_unknown_fields` is what makes that a rule
+/// rather than a convention — without it, leaving a `uri` behind while
+/// moving an actor to `kind = "lnd"` parses happily and ignores it, so the
+/// config says one thing and the run does another.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
+pub enum WalletConfig {
+    /// Nostr Wallet Connect, configured into the app through its settings
+    /// UI. The app itself pays and issues invoices; Mortsom only observes.
+    Nwc {
+        /// The actor's NWC URI (secret; `env:` reference in TOML).
+        uri: Secret,
+    },
+    /// Direct access to an LND node over gRPC, the way any Lightning client
+    /// connects: endpoint, TLS certificate and macaroon.
+    ///
+    /// This is how a local [Polar](https://lightningpolar.com/) network is
+    /// driven. The app has no wallet connected on this path, so Mortsom
+    /// pays the hold invoice and issues the buyer invoice itself, through
+    /// the app's manual controls — which is what makes a whole trade settle
+    /// in a fraction of a second, on regtest, with worthless sats.
+    Lnd {
+        /// gRPC endpoint. A missing scheme is read as `https://`, so
+        /// Polar's own `127.0.0.1:10001` can be pasted as shown.
+        host: String,
+        /// Path to the macaroon granting Mortsom its permissions.
+        /// A leading `~` is expanded.
+        macaroon: Secret,
+        /// Path to the node's TLS certificate. A leading `~` is expanded.
+        cert: Secret,
+    },
+}
+
+impl WalletConfig {
+    /// Short name of the backend, for reports and evidence.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Nwc { .. } => "nwc",
+            Self::Lnd { .. } => "lnd",
+        }
+    }
+
+    /// Whether Mortsom drives the app's manual invoice and payment controls
+    /// rather than its connected wallet.
+    pub fn drives_manual_payments(&self) -> bool {
+        matches!(self, Self::Lnd { .. })
+    }
+
+    /// Appends every problem with this wallet to `errors`. Never includes a
+    /// URI, a macaroon or a certificate in a message.
+    pub fn validate(&self, key: &str, errors: &mut Vec<String>) {
+        match self {
+            Self::Nwc { uri } => validate_nwc(&format!("{key}.uri"), uri, errors),
+            Self::Lnd {
+                host,
+                macaroon,
+                cert,
+            } => {
+                if host.trim().is_empty() {
+                    errors.push(format!("{key}.host is empty (unresolved secret)"));
+                } else if !lnd_target::host_has_a_port(host) {
+                    // LND's gRPC port is never the default, so a host
+                    // without one connects somewhere else rather than
+                    // failing honestly.
+                    errors.push(format!(
+                        "{key}.host ({host:?}) has no port; LND's gRPC port is never the default"
+                    ));
+                }
+                for (field, value) in [("macaroon", macaroon), ("cert", cert)] {
+                    validate_credential_file(&format!("{key}.{field}"), value, errors);
+                }
+            }
+        }
+    }
+}
+
+/// A credential path must exist at load time.
+///
+/// The network number in a Polar path (`networks/1`) changes with every
+/// network created, so a stale path is *the* failure mode — and it would
+/// otherwise surface as an opaque gRPC error mid-run. The message names the
+/// path with the `~` already expanded, which is the path that was looked
+/// for.
+fn validate_credential_file(key: &str, value: &Secret, errors: &mut Vec<String>) {
+    if value.is_empty() {
+        errors.push(format!("{key} is empty (unresolved secret)"));
+        return;
+    }
+    let path = lnd_target::credential_path(value.expose());
+    if !path.exists() {
+        errors.push(format!("{key} file not found: {}", path.display()));
+    }
 }
 
 /// `[wallets]` section: dedicated, funded test wallets. Never personal ones.
+///
+/// Each actor names its own backend, so a run can mix them — useful when
+/// only one side of a trade needs the controls direct node access gives.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WalletsConfig {
-    /// Wallet integration.
-    #[serde(default = "default_wallet_mode")]
-    pub mode: WalletMode,
-    /// Alice's NWC URI (secret; `env:` reference in TOML).
-    pub alice_nwc: Secret,
-    /// Bob's NWC URI (secret; `env:` reference in TOML).
-    pub bob_nwc: Secret,
-}
-
-fn default_wallet_mode() -> WalletMode {
-    WalletMode::Nwc
+    /// Alice's wallet.
+    pub alice: WalletConfig,
+    /// Bob's wallet.
+    pub bob: WalletConfig,
 }
 
 /// Configuration keys whose raw TOML value must be an `env:` reference: the
@@ -166,21 +253,66 @@ fn default_wallet_mode() -> WalletMode {
 /// secret environment reference"). This applies to every layer, including
 /// the gitignored local overlay: secrets only ever come from the environment.
 pub const ENV_ONLY_KEYS: &[&str] = &[
-    "wallets.alice_nwc",
-    "wallets.bob_nwc",
+    "wallets.alice.uri",
+    "wallets.alice.macaroon",
+    "wallets.alice.cert",
+    "wallets.bob.uri",
+    "wallets.bob.macaroon",
+    "wallets.bob.cert",
     "mostro.settings_file",
 ];
 
 impl WalletsConfig {
     /// Appends every problem with this section to `errors`. Never includes a
-    /// URI in a message.
+    /// URI, a macaroon or a certificate in a message.
     pub fn validate(&self, errors: &mut Vec<String>) {
-        validate_nwc("wallets.alice_nwc", &self.alice_nwc, errors);
-        validate_nwc("wallets.bob_nwc", &self.bob_nwc, errors);
-        if !self.alice_nwc.is_empty() && self.alice_nwc == self.bob_nwc {
-            errors
-                .push("wallets.alice_nwc and wallets.bob_nwc must be different wallets".to_owned());
+        self.alice.validate("wallets.alice", errors);
+        self.bob.validate("wallets.bob", errors);
+        if self.alice == self.bob && !is_unresolved(&self.alice) {
+            // One wallet for both actors would have each side of a trade
+            // paying itself, and every value assertion would be meaningless.
+            errors.push("wallets.alice and wallets.bob must be different wallets".to_owned());
         }
+    }
+
+    /// Whether either actor is driven through the app's manual controls.
+    pub fn drives_manual_payments(&self) -> bool {
+        self.alice.drives_manual_payments() || self.bob.drives_manual_payments()
+    }
+
+    /// The wallet for `label` (`alice` or `bob`).
+    pub fn for_label(&self, label: &str) -> Option<&WalletConfig> {
+        match label {
+            "alice" => Some(&self.alice),
+            "bob" => Some(&self.bob),
+            _ => None,
+        }
+    }
+
+    /// Every credential in this section, labelled, so redactors and
+    /// evidence sinks can be told about all of them in one place. A backend
+    /// added without being listed here would leak into artifacts.
+    pub fn secrets(&self) -> Vec<&Secret> {
+        let mut out = Vec::new();
+        for wallet in [&self.alice, &self.bob] {
+            match wallet {
+                WalletConfig::Nwc { uri } => out.push(uri),
+                WalletConfig::Lnd { macaroon, cert, .. } => {
+                    out.push(macaroon);
+                    out.push(cert);
+                }
+            }
+        }
+        out
+    }
+}
+
+/// An unresolved wallet is empty on both sides and already reported as
+/// such; calling it a duplicate on top would be noise.
+fn is_unresolved(wallet: &WalletConfig) -> bool {
+    match wallet {
+        WalletConfig::Nwc { uri } => uri.is_empty(),
+        WalletConfig::Lnd { host, .. } => host.trim().is_empty(),
     }
 }
 
@@ -276,12 +408,31 @@ mod tests {
         assert!(result.is_err());
     }
 
+    fn nwc(uri: &str) -> WalletConfig {
+        WalletConfig::Nwc {
+            uri: Secret::new(uri),
+        }
+    }
+
+    /// An LND wallet whose credential files exist, so only the field under
+    /// test is what fails.
+    fn lnd_with(host: &str, dir: &std::path::Path) -> WalletConfig {
+        let cert = dir.join("tls.cert");
+        let macaroon = dir.join("admin.macaroon");
+        std::fs::write(&cert, b"cert").unwrap();
+        std::fs::write(&macaroon, b"macaroon").unwrap();
+        WalletConfig::Lnd {
+            host: host.to_owned(),
+            macaroon: Secret::new(macaroon.display().to_string()),
+            cert: Secret::new(cert.display().to_string()),
+        }
+    }
+
     #[test]
     fn wallets_accept_two_distinct_valid_uris() {
         let config = WalletsConfig {
-            mode: WalletMode::Nwc,
-            alice_nwc: Secret::new(ALICE),
-            bob_nwc: Secret::new(BOB),
+            alice: nwc(ALICE),
+            bob: nwc(BOB),
         };
 
         assert!(collect(|e| config.validate(e)).is_empty());
@@ -290,9 +441,8 @@ mod tests {
     #[test]
     fn wallets_reject_identical_uris_without_leaking_them() {
         let config = WalletsConfig {
-            mode: WalletMode::Nwc,
-            alice_nwc: Secret::new(ALICE),
-            bob_nwc: Secret::new(ALICE),
+            alice: nwc(ALICE),
+            bob: nwc(ALICE),
         };
 
         let errors = collect(|e| config.validate(e));
@@ -305,9 +455,8 @@ mod tests {
     #[test]
     fn wallets_report_empty_and_invalid_uris() {
         let config = WalletsConfig {
-            mode: WalletMode::Nwc,
-            alice_nwc: Secret::new(""),
-            bob_nwc: Secret::new("https://example.com"),
+            alice: nwc(""),
+            bob: nwc("https://example.com"),
         };
 
         let errors = collect(|e| config.validate(e));
@@ -320,12 +469,92 @@ mod tests {
     #[test]
     fn wallets_debug_output_is_redacted() {
         let config = WalletsConfig {
-            mode: WalletMode::Nwc,
-            alice_nwc: Secret::new(ALICE),
-            bob_nwc: Secret::new(BOB),
+            alice: nwc(ALICE),
+            bob: nwc(BOB),
         };
 
         assert!(!format!("{config:?}").contains("secret="));
+    }
+
+    /// The two backends are alternatives. Leaving a `uri` behind while
+    /// moving an actor to a node must fail, or the config claims one
+    /// backend while the run uses another.
+    #[test]
+    fn a_wallet_cannot_name_both_backends() {
+        let result: Result<WalletConfig, _> = toml::from_str(
+            "kind = \"lnd\"\nhost = \"127.0.0.1:10001\"\nmacaroon = \"m\"\ncert = \"c\"\nuri = \"nostr+walletconnect://x\"",
+        );
+
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("unknown field `uri`"), "{message}");
+    }
+
+    #[test]
+    fn a_polar_style_lnd_wallet_is_accepted_as_displayed() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = WalletsConfig {
+            alice: nwc(ALICE),
+            // Exactly what Polar's Connect tab shows: no scheme.
+            bob: lnd_with("127.0.0.1:10001", dir.path()),
+        };
+
+        assert!(collect(|e| config.validate(e)).is_empty());
+        assert!(config.drives_manual_payments());
+        assert_eq!(config.bob.kind(), "lnd");
+    }
+
+    /// LND's gRPC port is never the default, so a host without one connects
+    /// somewhere else instead of failing honestly.
+    #[test]
+    fn an_lnd_host_without_a_port_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = WalletsConfig {
+            alice: nwc(ALICE),
+            bob: lnd_with("127.0.0.1", dir.path()),
+        };
+
+        let errors = collect(|e| config.validate(e));
+
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("no port"), "{errors:?}");
+    }
+
+    /// A Polar network number changes with every network created, so a
+    /// stale credential path is the usual failure — and it must be named at
+    /// load time, not as an opaque gRPC error mid-run.
+    #[test]
+    fn a_missing_credential_file_is_named_at_load_time() {
+        let config = WalletsConfig {
+            alice: nwc(ALICE),
+            bob: WalletConfig::Lnd {
+                host: "127.0.0.1:10001".to_owned(),
+                macaroon: Secret::new("/nonexistent/polar/admin.macaroon"),
+                cert: Secret::new("/nonexistent/polar/tls.cert"),
+            },
+        };
+
+        let errors = collect(|e| config.validate(e));
+
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert!(errors.iter().any(|e| e.contains("wallets.bob.macaroon")
+            && e.contains("/nonexistent/polar/admin.macaroon")));
+        assert!(
+            errors.iter().any(
+                |e| e.contains("wallets.bob.cert") && e.contains("/nonexistent/polar/tls.cert")
+            )
+        );
+    }
+
+    /// An NWC actor pays through the app's own wallet, so nothing is driven
+    /// manually and the app's NWC controls stay the ones under test.
+    #[test]
+    fn two_nwc_wallets_drive_no_manual_payments() {
+        let config = WalletsConfig {
+            alice: nwc(ALICE),
+            bob: nwc(BOB),
+        };
+
+        assert!(!config.drives_manual_payments());
     }
     /// Docker refuses a container name that does not start with a letter or
     /// a digit, and it refuses it at `docker run`, long after the operator

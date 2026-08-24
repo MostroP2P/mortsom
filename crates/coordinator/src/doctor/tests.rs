@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use mortsom_common::Secret;
 use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, RelayList, RelayProbe};
 use mortsom_environment::wallet::{WalletProbe, WalletProbeError};
 use nostr_sdk::prelude::PublicKey;
 
 use super::*;
+use mortsom_environment::WalletConfig;
 
 /// Daemon test identity: nsec and its hex pubkey.
 const NSEC: &str = "nsec13as48eum93hkg7plv526r9gjpa0uc52zysqm93pmnkca9e69x6tsdjmdxd";
@@ -122,6 +122,7 @@ struct FakeNet {
     daemon: DaemonProbe,
     wallets_ok: bool,
     balance_sats: u64,
+    inbound_sats: Option<u64>,
 }
 
 impl FakeNet {
@@ -158,6 +159,7 @@ impl FakeNet {
             },
             wallets_ok: true,
             balance_sats: 25_000,
+            inbound_sats: None,
         }
     }
 }
@@ -170,9 +172,14 @@ impl NetProbes for FakeNet {
     async fn daemon(&self, _relays: &[String], _pubkey: PublicKey) -> DaemonProbe {
         self.daemon.clone()
     }
-    async fn wallet(&self, label: &str, _uri: &Secret) -> Result<WalletProbe, WalletProbeError> {
+    async fn wallet(
+        &self,
+        label: &str,
+        _wallet: &WalletConfig,
+    ) -> Result<WalletProbe, WalletProbeError> {
         if self.wallets_ok {
             Ok(WalletProbe {
+                inbound_sats: self.inbound_sats,
                 label: label.into(),
                 alias: Some("testwallet".into()),
                 network: Some("mainnet".into()),
@@ -594,6 +601,32 @@ async fn wallet_liquidity_below_the_run_cap_fails_the_preflight() {
     let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
     assert_eq!(status_of(&report, "wallet bob").status, CheckStatus::Fail);
     assert!(!report.is_healthy());
+}
+
+/// An LND node with ample outbound but too little inbound passes every
+/// balance check and then cannot receive the buyer payout: the doctor must
+/// fail it before any sats move.
+#[tokio::test]
+async fn wallet_inbound_liquidity_below_the_run_cap_fails_the_preflight() {
+    let dir = example_config();
+    let mut host = FakeHost::full();
+    with_settings(&mut host, &dir);
+    let path = dir.path().join("mortsom.toml");
+
+    // Example caps: max_order_sats = 5000, max_run_spend_sats = 20000.
+    let mut net = FakeNet::healthy();
+    net.inbound_sats = Some(1_000);
+    let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
+    assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Fail);
+    assert!(
+        status_of(&report, "wallet alice")
+            .detail
+            .contains("inbound liquidity below the run cap (20000 sats)")
+    );
+
+    net.inbound_sats = Some(25_000);
+    let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
+    assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Pass);
 }
 
 /// The info event is republished on the daemon's own long interval (an hour

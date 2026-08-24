@@ -194,7 +194,10 @@ mod tests {
             config.mobile.dart_defines,
             vec![format!("MOSTRO_PUB_KEY={HEX}")]
         );
-        assert_eq!(config.wallets.alice_nwc.expose(), ALICE);
+        assert!(matches!(
+            &config.wallets.alice,
+            mortsom_environment::WalletConfig::Nwc { uri } if uri.expose() == ALICE
+        ));
         assert!(!config.run.allow_mainnet);
     }
 
@@ -222,7 +225,7 @@ mod tests {
 
         let err = Config::from_toml_str(&text, lookup).unwrap_err();
 
-        assert!(matches!(err, ConfigError::SecretInToml { ref key } if key == "wallets.bob_nwc"));
+        assert!(matches!(err, ConfigError::SecretInToml { ref key } if key == "wallets.bob.uri"));
         assert!(!err.to_string().contains("secret="));
     }
 
@@ -300,7 +303,10 @@ mod tests {
 
         assert_eq!(diagnosis.missing_env.len(), 3);
         let config = diagnosis.config.expect("config parses with placeholders");
-        assert!(config.wallets.alice_nwc.is_empty());
+        assert!(matches!(
+            &config.wallets.alice,
+            mortsom_environment::WalletConfig::Nwc { uri } if uri.is_empty()
+        ));
         assert!(
             diagnosis
                 .problems
@@ -323,7 +329,7 @@ mod tests {
         let base = dir.path().join("mortsom.toml");
         std::fs::write(
             &base,
-            "[wallets]\nalice_nwc = \"nostr+walletconnect://x\"\n",
+            "[wallets.alice]\nkind = \"nwc\"\nuri = \"nostr+walletconnect://x\"\n",
         )
         .unwrap();
 
@@ -334,7 +340,7 @@ mod tests {
             diagnosis
                 .problems
                 .iter()
-                .any(|p| p.contains("wallets.alice_nwc"))
+                .any(|p| p.contains("wallets.alice.uri"))
         );
         assert!(
             diagnosis

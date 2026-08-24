@@ -44,9 +44,19 @@ health_timeout_secs = 60
 relays = ["ws://host.docker.internal:7000"]
 
 [wallets]
-mode = "nwc"
-alice_nwc = "env:MORTSOM_ALICE_NWC"
-bob_nwc = "env:MORTSOM_BOB_NWC"
+# Each actor names its own backend. `nwc` is the app's own wallet, configured
+# through its settings UI; `lnd` is a node Mortsom holds, which is how a local
+# Polar network is driven (see config/polar.example.toml and the README).
+# The two are alternatives: naming a field from the other kind is an error,
+# not a line that is quietly ignored.
+
+[wallets.alice]
+kind = "nwc"
+uri = "env:MORTSOM_ALICE_NWC"
+
+[wallets.bob]
+kind = "nwc"
+uri = "env:MORTSOM_BOB_NWC"
 
 [run]
 lane = "ci"

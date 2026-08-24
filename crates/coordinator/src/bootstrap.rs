@@ -1,7 +1,7 @@
 //! Per-actor session bootstrap shared by `app setup` and the scenario
-//! runner: launch clean, onboard, configure node and relay, connect NWC,
-//! prove the identity survives a restart. Each step records evidence and a
-//! check.
+//! runner: launch clean, onboard, configure node and relay, connect the
+//! wallet if the app has one, prove the identity survives a restart. Each
+//! step records evidence and a check.
 
 use std::time::Duration;
 
@@ -10,8 +10,8 @@ use mortsom_android_driver::farm::Device;
 use mortsom_app_contract::{
     AppAdapter, DeviceContext, Identity, TestEnvironment, WalletConnection,
 };
-use mortsom_common::Secret;
 use mortsom_common::check::{CheckStatus, DoctorReport};
+use mortsom_environment::WalletConfig;
 use serde::{Deserialize, Serialize};
 
 use crate::artifacts::RunArtifacts;
@@ -29,6 +29,16 @@ pub struct ActorSetup {
     pub identity_after_restart: Option<Identity>,
     /// Wallet connection (redacted).
     pub wallet: Option<WalletConnection>,
+    /// Whether the app is expected to show a connected wallet. False on
+    /// the LND path: the node is Mortsom's and the app is deliberately
+    /// walletless, so `wallet` stays `None` on a successful bootstrap.
+    #[serde(default = "default_wallet_expected")]
+    pub wallet_expected: bool,
+}
+
+/// Summaries written before this field existed were all NWC runs.
+fn default_wallet_expected() -> bool {
+    true
 }
 
 /// Runs the per-actor journey: launch, onboard, node and relay, NWC, restart.
@@ -48,11 +58,16 @@ pub async fn bootstrap_actor(
         ui: device.session.as_ref(),
         ui_timeout: Duration::from_secs(config.android.ui_timeout_secs),
     };
+    let wallet = match device.actor {
+        Actor::Alice => &config.wallets.alice,
+        Actor::Bob => &config.wallets.bob,
+    };
     let mut outcome = ActorSetup {
         actor: actor.to_owned(),
         identity: None,
         identity_after_restart: None,
         wallet: None,
+        wallet_expected: matches!(wallet, WalletConfig::Nwc { .. }),
     };
     let mut step = ActorStep {
         actor,
@@ -78,18 +93,28 @@ pub async fn bootstrap_actor(
     {
         return outcome;
     }
-    let uri: &Secret = match device.actor {
-        Actor::Alice => &config.wallets.alice_nwc,
-        Actor::Bob => &config.wallets.bob_nwc,
-    };
-    if let Ok(wallet) = step
-        .run("nwc", adapter.configure_nwc(&ctx, actor, uri))
-        .await
-    {
-        if !wallet.connected {
-            step.fail("nwc-connected", "app does not show a connected wallet");
+    // Only an NWC actor has a wallet to configure into the app. On the LND
+    // path the node is Mortsom's, the app stays deliberately walletless,
+    // and asking it to show a connected wallet would fail a build that is
+    // behaving exactly as intended.
+    match wallet {
+        WalletConfig::Nwc { uri } => {
+            if let Ok(wallet) = step
+                .run("nwc", adapter.configure_nwc(&ctx, actor, uri))
+                .await
+            {
+                if !wallet.connected {
+                    step.fail("nwc-connected", "app does not show a connected wallet");
+                }
+                outcome.wallet = Some(wallet);
+            }
         }
-        outcome.wallet = Some(wallet);
+        WalletConfig::Lnd { .. } => {
+            step.skip(
+                "nwc",
+                "wallet is an LND node held by Mortsom; the app has none by design",
+            );
+        }
     }
     if let Ok(after) = step.run("restart", relaunch_and_read(adapter, &ctx)).await {
         let same = outcome.identity.as_ref() == Some(&after);
@@ -144,6 +169,11 @@ impl ActorStep<'_> {
                 Err(())
             }
         }
+    }
+
+    fn skip(&mut self, name: &str, detail: &str) {
+        self.checks
+            .push(format!("{} {name}", self.actor), CheckStatus::Skip, detail);
     }
 
     fn fail(&mut self, name: &str, detail: &str) {

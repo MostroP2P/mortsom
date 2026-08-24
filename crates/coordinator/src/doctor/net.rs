@@ -4,10 +4,11 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mortsom_common::Secret;
+use mortsom_environment::WalletConfig;
 use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, INFO_STALE_AFTER, probe_daemon};
+use mortsom_environment::lnd::LndWallet;
 use mortsom_environment::relay_url::same_relay;
-use mortsom_environment::wallet::{WalletProbe, WalletProbeError, probe_nwc};
+use mortsom_environment::wallet::{WalletProbe, WalletProbeError, probe_lnd, probe_nwc};
 use nostr_sdk::prelude::PublicKey;
 
 use mortsom_common::check::{CheckStatus, DoctorReport};
@@ -35,8 +36,12 @@ pub trait NetProbes: Send + Sync {
     async fn local_port(&self, port: u16) -> PortState;
     /// Connects to the daemon relays and fetches its info event.
     async fn daemon(&self, relays: &[String], pubkey: PublicKey) -> DaemonProbe;
-    /// Probes a wallet with read-only calls.
-    async fn wallet(&self, label: &str, uri: &Secret) -> Result<WalletProbe, WalletProbeError>;
+    /// Probes a wallet with read-only calls, whichever backend it is.
+    async fn wallet(
+        &self,
+        label: &str,
+        wallet: &WalletConfig,
+    ) -> Result<WalletProbe, WalletProbeError>;
 }
 
 /// The real network.
@@ -81,8 +86,45 @@ impl NetProbes for RealNet {
         probe_daemon(relays, pubkey, self.daemon_timeout).await
     }
 
-    async fn wallet(&self, label: &str, uri: &Secret) -> Result<WalletProbe, WalletProbeError> {
-        probe_nwc(label, uri, WALLET_TIMEOUT).await
+    async fn wallet(
+        &self,
+        label: &str,
+        wallet: &WalletConfig,
+    ) -> Result<WalletProbe, WalletProbeError> {
+        match wallet {
+            WalletConfig::Nwc { uri } => probe_nwc(label, uri, WALLET_TIMEOUT).await,
+            WalletConfig::Lnd {
+                host,
+                macaroon,
+                cert,
+            } => {
+                let node = LndWallet::connect(label, host, cert, macaroon)
+                    .await
+                    .map_err(|e| WalletProbeError::Backend(e.to_string()))?;
+                probe_lnd(&node).await
+            }
+        }
+    }
+}
+
+/// Names the first credential a wallet is missing, so the check is skipped
+/// with a reason rather than failing against an empty value.
+fn unresolved_credential(wallet: &WalletConfig) -> Option<&'static str> {
+    match wallet {
+        WalletConfig::Nwc { uri } => uri.is_empty().then_some("secret not resolved"),
+        WalletConfig::Lnd {
+            host,
+            macaroon,
+            cert,
+        } => {
+            if host.trim().is_empty() {
+                Some("host not resolved")
+            } else if macaroon.is_empty() || cert.is_empty() {
+                Some("credential paths not resolved")
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -300,22 +342,32 @@ fn now_unix() -> u64 {
 pub async fn check_wallet(
     net: &dyn NetProbes,
     label: &str,
-    uri: &Secret,
+    wallet: &WalletConfig,
     caps: Liquidity,
     report: &mut DoctorReport,
 ) {
     let name = format!("wallet {label}");
-    if uri.is_empty() {
-        report.push(name, CheckStatus::Skip, "secret not resolved");
+    if let Some(unresolved) = unresolved_credential(wallet) {
+        report.push(name, CheckStatus::Skip, unresolved);
         return;
     }
-    match net.wallet(label, uri).await {
+    match net.wallet(label, wallet).await {
         Ok(probe) => {
+            // Inbound liquidity is reported where the backend knows it: on
+            // a freshly created Polar network a node with none cannot be
+            // paid, which is the usual reason a trade dies halfway through.
+            let liquidity = match probe.inbound_sats {
+                Some(inbound) => format!(
+                    "{} sats outbound / {inbound} sats inbound",
+                    probe.balance_sats
+                ),
+                None => format!("{} sats", probe.balance_sats),
+            };
             let detail = format!(
-                "reachable; alias {}, network {}, {} sats, methods [{}]",
+                "reachable; {} backend, alias {}, network {}, {liquidity}, methods [{}]",
+                wallet.kind(),
                 probe.alias.as_deref().unwrap_or("-"),
                 probe.network.as_deref().unwrap_or("-"),
-                probe.balance_sats,
                 probe.methods.join(", ")
             );
             // Pre-flight liquidity (spec §5): a wallet that cannot cover
@@ -326,6 +378,16 @@ pub async fn check_wallet(
                     CheckStatus::Fail,
                     format!(
                         "{detail}; below the run cap ({floor} sats): top up the dedicated wallet, do not lower the cap"
+                    ),
+                )
+            } else if probe.inbound_sats.is_some_and(|inbound| inbound < floor) {
+                // A node with outbound but no inbound passes every balance
+                // check and then cannot receive the buyer payout: the trade
+                // dies after the sats already moved. Fail it here instead.
+                (
+                    CheckStatus::Fail,
+                    format!(
+                        "{detail}; inbound liquidity below the run cap ({floor} sats): the node cannot receive the payout, open or rebalance a channel towards it"
                     ),
                 )
             } else {
