@@ -14,6 +14,12 @@ use crate::process::CommandRunner;
 pub trait UiSession: Send + Sync {
     /// Whether an element with this accessibility id exists now.
     async fn exists(&self, accessibility_id: &str) -> Result<bool, AppiumError>;
+    /// Whether the element is on the screen or reachable by scrolling to
+    /// it. Ask this about a list; it may swipe the screen to answer.
+    /// Defaults to [`Self::exists`] for sessions with nothing to scroll.
+    async fn exists_anywhere(&self, accessibility_id: &str) -> Result<bool, AppiumError> {
+        self.exists(accessibility_id).await
+    }
     /// Waits for an element to appear.
     async fn wait_for(&self, accessibility_id: &str, timeout: Duration) -> Result<(), AppiumError>;
     /// Waits for an element to disappear.
@@ -53,6 +59,9 @@ pub trait UiSession: Send + Sync {
 impl UiSession for AppiumSession {
     async fn exists(&self, id: &str) -> Result<bool, AppiumError> {
         AppiumSession::exists(self, id).await
+    }
+    async fn exists_anywhere(&self, id: &str) -> Result<bool, AppiumError> {
+        AppiumSession::exists_anywhere(self, id).await
     }
     async fn wait_for(&self, id: &str, timeout: Duration) -> Result<(), AppiumError> {
         AppiumSession::wait_for(self, id, timeout).await.map(|_| ())
@@ -190,6 +199,8 @@ pub mod tests_support {
         on_tap_hide: Mutex<BTreeMap<String, Vec<String>>>,
         /// Label changes triggered by a tap.
         on_tap_relabel: Mutex<BTreeMap<String, (String, String)>>,
+        /// Elements rendered below the fold: only a scrolling look finds them.
+        below: Mutex<Vec<String>>,
     }
 
     impl ScriptedUi {
@@ -234,6 +245,20 @@ pub mod tests_support {
         pub fn has(&self, id: &str) -> bool {
             self.present.lock().unwrap().iter().any(|p| p == id)
         }
+
+        /// Marks `ids` as rendered but off-screen: a plain probe does not
+        /// see them, while a wait and a list probe both scroll and do.
+        pub fn below_the_fold(&self, ids: &[&str]) {
+            self.below
+                .lock()
+                .unwrap()
+                .extend(ids.iter().map(|s| (*s).to_owned()));
+        }
+
+        /// Whether `id` is anywhere on the current screen, fold or no fold.
+        pub fn has_anywhere(&self, id: &str) -> bool {
+            self.has(id) || self.below.lock().unwrap().iter().any(|p| p == id)
+        }
     }
 
     #[async_trait]
@@ -241,8 +266,12 @@ pub mod tests_support {
         async fn exists(&self, id: &str) -> Result<bool, AppiumError> {
             Ok(self.has(id))
         }
+        async fn exists_anywhere(&self, id: &str) -> Result<bool, AppiumError> {
+            Ok(self.has_anywhere(id))
+        }
         async fn wait_for(&self, id: &str, _: Duration) -> Result<(), AppiumError> {
-            if self.has(id) {
+            // A wait scrolls before it gives up, so it sees below the fold.
+            if self.has_anywhere(id) {
                 Ok(())
             } else {
                 Err(AppiumError::WaitTimeout {

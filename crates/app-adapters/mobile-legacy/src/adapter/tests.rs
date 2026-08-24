@@ -192,6 +192,96 @@ async fn node_mismatch_is_a_product_failure_and_seeded_relay_skips_the_dialog() 
     assert!(!ui.calls().contains(&"tap settings.relays.add".to_owned()));
 }
 
+/// The node selector is a list, and the app discovers Mostro nodes on its
+/// own: the daemon under test is usually already in it, a swipe down. A
+/// probe that only sees the visible part of that list reports it missing
+/// and the adapter adds a node the app already has.
+#[tokio::test]
+async fn a_node_below_the_fold_in_the_selector_is_chosen_rather_than_added_again() {
+    let ui = fresh_app();
+    let item = Ids::node_item(&PUBKEY.to_ascii_lowercase());
+    ui.label(Ids::SETTINGS_MOSTRO_NODE_PUBKEY, "someone-else");
+    ui.below_the_fold(&[item.as_str()]);
+    ui.on_tap_relabel(item.as_str(), Ids::SETTINGS_MOSTRO_NODE_PUBKEY, PUBKEY);
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+
+    adapter()
+        .configure_node_and_relay(&device(&ui), &env())
+        .await
+        .unwrap();
+
+    let calls = ui.calls();
+    assert!(calls.contains(&format!("tap {item}")), "{calls:?}");
+    assert!(
+        !calls.contains(&format!("tap {}", Ids::NODE_ADD_CUSTOM)),
+        "the daemon is listed; adding it again is the branch this avoids: {calls:?}"
+    );
+}
+
+/// The relay list lives at the bottom of a long settings page. Not seeing
+/// the row that is already there opens the add dialog over the screen the
+/// rest of the journey needs.
+#[tokio::test]
+async fn a_relay_row_below_the_fold_is_not_added_a_second_time() {
+    let ui = fresh_app();
+    ui.below_the_fold(&[RELAY_ROW]);
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+
+    adapter()
+        .configure_node_and_relay(&device(&ui), &env())
+        .await
+        .unwrap();
+
+    assert!(
+        !ui.calls().contains(&"tap settings.relays.add".to_owned()),
+        "{:?}",
+        ui.calls()
+    );
+}
+
+/// The app refuses a node it already knows and leaves the dialog open.
+/// Onboarding already reads that as "listed after all"; settings did not,
+/// and left the dialog standing for the next wait to time out against --
+/// reporting a missing `settings.mostro_node.pubkey` on a screen that was
+/// simply covered.
+#[tokio::test]
+async fn a_node_the_app_refuses_to_add_is_named_and_its_dialog_closed() {
+    let ui = fresh_app();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    // Settings point elsewhere, the selector offers only the add control,
+    // and confirming no longer closes the dialog: the app knows this node
+    // already and refuses to add it a second time.
+    ui.label(Ids::SETTINGS_MOSTRO_NODE_PUBKEY, "someone-else");
+    ui.on_tap(Ids::SETTINGS_MOSTRO_NODE, &[Ids::NODE_ADD_CUSTOM]);
+    ui.on_tap(
+        Ids::NODE_ADD_CUSTOM,
+        &[
+            Ids::NODE_CUSTOM_PUBKEY,
+            Ids::NODE_CUSTOM_NAME,
+            Ids::NODE_CUSTOM_CONFIRM,
+            Ids::NODE_CUSTOM_CANCEL,
+        ],
+    );
+    ui.on_tap_hide(Ids::NODE_CUSTOM_CONFIRM, &[]);
+
+    let err = adapter()
+        .configure_node_and_relay(&device(&ui), &env())
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        err.category,
+        mortsom_common::FailureCategory::AutomationContract
+    );
+    assert!(err.message.contains("already knows"), "{}", err.message);
+    assert!(
+        ui.calls()
+            .contains(&format!("tap {}", Ids::NODE_CUSTOM_CANCEL)),
+        "the dialog must not be left over the screen: {:?}",
+        ui.calls()
+    );
+}
+
 #[tokio::test]
 async fn nwc_setup_types_the_uri_without_recording_it_and_reads_connected() {
     let ui = fresh_app();

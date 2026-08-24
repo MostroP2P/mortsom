@@ -2,7 +2,7 @@
 
 use mortsom_app_contract::{AdapterError, DeviceContext, TestEnvironment};
 
-use super::{expect, label, present, tap, type_into};
+use super::{expect, label, listed, tap, type_into};
 use crate::selectors::Ids;
 
 /// Selects the daemon under test in the node selector unless it is already
@@ -35,7 +35,8 @@ pub async fn ensure_relay(
 ) -> Result<(), AdapterError> {
     tap(device, Ids::SETTINGS_RELAYS).await?;
     let row = Ids::relay_item(&env.relay_url);
-    if present(device, &row).await? {
+    // The relays screen is a list: what is visible is not all of it.
+    if listed(device, &row).await? {
         return Ok(());
     }
     tap(device, Ids::SETTINGS_RELAYS_ADD).await?;
