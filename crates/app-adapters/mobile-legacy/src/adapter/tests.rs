@@ -282,6 +282,30 @@ async fn a_node_the_app_refuses_to_add_is_named_and_its_dialog_closed() {
     );
 }
 
+/// The order form is taller than the phone and the numeric keyboard covers
+/// its lower half. "Is there already a sats field?" asked of the visible
+/// part alone answers no about a form that has one -- and the toggle that
+/// was meant to reveal the field instead switches the form onto market
+/// price, where the field takes no input and submit never enables.
+#[tokio::test]
+async fn a_sats_field_below_the_fold_does_not_flip_the_price_type() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.below_the_fold(&[Ids::ORDER_CREATE_SATS_AMOUNT]);
+
+    adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+
+    assert!(
+        !ui.calls()
+            .contains(&format!("tap {}", Ids::ORDER_CREATE_PRICE_TYPE)),
+        "the form already offers a sats field: {:?}",
+        ui.calls()
+    );
+}
+
 #[tokio::test]
 async fn nwc_setup_types_the_uri_without_recording_it_and_reads_connected() {
     let ui = fresh_app();
