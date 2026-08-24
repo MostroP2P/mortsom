@@ -269,14 +269,33 @@ impl AppiumSession {
         }
     }
 
-    /// Scrolls the first scrollable container until the element comes into
-    /// view, and returns it. Fails when there is nothing to scroll or the
-    /// search reaches the end without finding it.
+    /// Scrolls the first scrollable container looking for
+    /// `accessibility_id`, then returns the element **as the plain lookup
+    /// sees it**.
+    ///
+    /// The scrolling selector cannot answer the question on its own.
+    /// UiAutomator's `scrollIntoView` evaluates to the `UiScrollable` it
+    /// was called on, so Appium replies `200` with the scrollable container
+    /// -- even when the search swiped to the end and found nothing. Read as
+    /// a lookup that is a control the app never rendered, and clicking the
+    /// answer taps the middle of the list: a run drove the order form, was
+    /// told a confirm button the screen does not have was there, tapped a
+    /// field in the middle of the form instead, and then reported the order
+    /// that was never created as a product bug.
+    ///
+    /// So the scrolling call is used for the scrolling, and the plain
+    /// lookup decides.
     async fn scroll_to(&self, accessibility_id: &str) -> Result<Element, WebDriverError> {
         self.session
             .find_element(
                 Locator::UiAutomator,
                 &scroll_into_view_selector(accessibility_id),
+            )
+            .await?;
+        self.session
+            .find_element(
+                Locator::UiAutomator,
+                &resource_id_selector(accessibility_id),
             )
             .await
     }
@@ -533,6 +552,9 @@ impl AppiumSession {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use super::*;
     use crate::process::tests_support::FakeRunner;
     use wiremock::matchers::{body_partial_json, body_string_contains, method, path};
@@ -685,20 +707,94 @@ mod tests {
         assert!(!s.exists("nowhere").await.unwrap());
     }
 
-    /// A control that is off-screen: the plain `resourceId` lookup misses it
-    /// and only the scrolling lookup returns it.
+    /// UiAutomator's `scrollIntoView` evaluates to the `UiScrollable` it
+    /// was called on, so Appium answers `200` with the scrollable container
+    /// whether or not the search found anything. A control the app never
+    /// rendered is reported as present, and clicking the answer taps the
+    /// middle of the list.
+    #[tokio::test]
+    async fn a_scroll_that_found_nothing_is_not_a_control() {
+        let server = MockServer::start().await;
+        let s = session(&server).await;
+        mount_scroll_answering_with_the_list(&server).await;
+        mount_nothing_else(&server).await;
+
+        assert!(s.find("order.confirm.home").await.is_err());
+        assert!(matches!(
+            s.wait_for("order.confirm.home", Duration::from_millis(300))
+                .await
+                .unwrap_err(),
+            AppiumError::WaitTimeout { .. }
+        ));
+        assert!(s.tap("order.confirm.home").await.is_err());
+
+        // The list is not the button. Tapping it presses whatever sits in
+        // the middle of the screen.
+        assert!(
+            !server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .iter()
+                .any(|r| r.url.path().ends_with("/click")),
+            "nothing may be clicked for a control that is not there"
+        );
+    }
+
+    /// A control that is off-screen: the plain lookup misses it until
+    /// something scrolls to it, and then finds it where it now is.
     async fn mount_below_the_fold(server: &MockServer, id: &str) {
-        let scrolled = format!("scrollIntoView(new UiSelector().resourceId(\\\"{id}\\\")");
+        let scrolled = Arc::new(AtomicBool::new(false));
+        let flag = scrolled.clone();
+        let scroll_for_id = format!("scrollIntoView(new UiSelector().resourceId(\\\"{id}\\\")");
         Mock::given(method("POST"))
             .and(path("/session/s1/element"))
             .and(move |request: &wiremock::Request| {
-                String::from_utf8_lossy(&request.body).contains(scrolled.as_str())
+                let hit = String::from_utf8_lossy(&request.body).contains(scroll_for_id.as_str());
+                if hit {
+                    flag.store(true, Ordering::SeqCst);
+                }
+                hit
+            })
+            // As the real driver answers: the container, not the target.
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"value": {ELEMENT_KEY: "the-list"}})),
+            )
+            .mount(server)
+            .await;
+        let plain = format!("\"new UiSelector().resourceId(\\\"{id}\\\")\"");
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .and(move |request: &wiremock::Request| {
+                String::from_utf8_lossy(&request.body).contains(plain.as_str())
+                    && scrolled.load(Ordering::SeqCst)
             })
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
             )
             .mount(server)
             .await;
+        mount_nothing_else(server).await;
+    }
+
+    /// Every scrolling call answers with the scrollable container, exactly
+    /// as UiAutomator2 does.
+    async fn mount_scroll_answering_with_the_list(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .and(|request: &wiremock::Request| {
+                String::from_utf8_lossy(&request.body).contains("UiScrollable")
+            })
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"value": {ELEMENT_KEY: "the-list"}})),
+            )
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_nothing_else(server: &MockServer) {
         Mock::given(method("POST"))
             .and(path("/session/s1/element"))
             .respond_with(
