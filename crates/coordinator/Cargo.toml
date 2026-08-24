@@ -42,6 +42,8 @@ inventory = { workspace = true }
 
 [dev-dependencies]
 mortsom-android-driver = { workspace = true, features = ["testing"] }
+# `start_paused`: a test may assert a deadline without waiting for it.
+tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }

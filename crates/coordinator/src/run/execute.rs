@@ -19,6 +19,15 @@ use tracing::{info, warn};
 /// Poll interval while waiting for a cancelled order to show as closed.
 const CLEANUP_POLL: Duration = Duration::from_millis(500);
 
+/// How long the screen-of-the-failure capture may take, per actor.
+///
+/// The scenario has already failed and cleanup is queued behind this. When
+/// the driver is the component that broke, a WebDriver request sits on its
+/// own 60-second HTTP timeout, so an unbounded serial capture could delay
+/// returning real sats by minutes and would photograph the second phone
+/// long after the moment it is supposed to show.
+const FAILURE_CAPTURE_DEADLINE: Duration = Duration::from_secs(15);
+
 /// Runs `def` against `ctx`, retrying once only for a classified
 /// infrastructure failure when `infra_retries` allows it.
 pub async fn execute_scenario(
@@ -128,22 +137,40 @@ async fn attempt(def: &ScenarioDef, ctx: &Context) -> Outcome {
 /// Best effort by design: the recorder logs what it cannot capture rather
 /// than failing, because a dead session is often exactly what went wrong
 /// and must not replace the diagnosis with an error about the diagnosis.
+///
+/// Both actors are captured concurrently and each under
+/// [`FAILURE_CAPTURE_DEADLINE`], so the diagnosis can never postpone the
+/// cleanup that gives real sats back (spec §5).
 async fn capture_failure(def: &ScenarioDef, ctx: &Context) {
-    for session in &ctx.actors {
-        let step = ctx
-            .evidence
-            .checkpoint(
-                session.actor.as_str(),
-                &format!("{}-failed", def.name),
-                session.ui.as_ref(),
+    let name = format!("{}-failed", def.name);
+    let captures = ctx.actors.iter().map(|session| {
+        let name = name.as_str();
+        async move {
+            let step = tokio::time::timeout(
+                FAILURE_CAPTURE_DEADLINE,
+                ctx.evidence
+                    .checkpoint(session.actor.as_str(), name, session.ui.as_ref()),
             )
             .await;
-        ctx.timeline.push(
-            TimelineKind::Step,
-            Some(session.actor.as_str()),
-            format!("screen when {} failed", def.name),
-            Some(step),
-        );
+            (session.actor, step)
+        }
+    });
+    // Pushed in actor order once both are done, so the timeline reads the
+    // same whichever phone answered first.
+    for (actor, step) in futures::future::join_all(captures).await {
+        match step {
+            Ok(step) => ctx.timeline.push(
+                TimelineKind::Step,
+                Some(actor.as_str()),
+                format!("screen when {} failed", def.name),
+                Some(step),
+            ),
+            Err(_) => warn!(
+                scenario = def.name,
+                actor = actor.as_str(),
+                "no screen recorded: the failure capture hit its deadline"
+            ),
+        }
     }
 }
 
