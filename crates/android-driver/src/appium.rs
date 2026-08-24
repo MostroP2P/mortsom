@@ -346,11 +346,22 @@ impl AppiumSession {
         Ok(self.session.click(&element).await?)
     }
 
-    /// Clears then types into an element found by accessibility id. The text
-    /// may be a secret (NWC URI, mnemonic) and is never logged.
+    /// Focuses, clears, then types into an element found by accessibility
+    /// id. The text may be a secret (NWC URI, mnemonic) and is never logged.
+    ///
+    /// The tap is not decoration. Appium's set-text reaches Flutter as
+    /// `SemanticsAction.setText`, which a field without input focus ignores
+    /// -- while still answering `200`, so the driver believes it typed. The
+    /// one field in the app that took text this way was the one declared
+    /// `autofocus: true`; every field in the order form is left unfocused,
+    /// stayed empty through a whole form fill, and the run reported the
+    /// order the app never accepted as a product bug. A field takes text
+    /// through the keyboard, and the keyboard goes to whatever has focus:
+    /// tapping it first is what a user does.
     #[tracing::instrument(skip(self, text), fields(id = accessibility_id))]
     pub async fn type_text(&self, accessibility_id: &str, text: &str) -> Result<(), AppiumError> {
         let element = self.find(accessibility_id).await?;
+        self.session.click(&element).await?;
         self.session.clear(&element).await?;
         Ok(self.session.send_keys(&element, text).await?)
     }
@@ -560,6 +571,51 @@ mod tests {
             .mount(server)
             .await;
         AppiumSession::create(&server.uri(), &spec()).await.unwrap()
+    }
+
+    /// A field that never took focus ignores set-text and answers success
+    /// anyway, so the form fills with nothing and the app is blamed for
+    /// refusing it.
+    #[tokio::test]
+    async fn typing_focuses_the_field_before_it_types() {
+        let server = MockServer::start().await;
+        let s = session(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/session/s1/element"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
+            )
+            .mount(&server)
+            .await;
+        for endpoint in ["click", "clear", "value"] {
+            Mock::given(method("POST"))
+                .and(path(format!("/session/s1/element/e1/{endpoint}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": null})))
+                .mount(&server)
+                .await;
+        }
+
+        s.type_text("order.create.sats_amount", "1000")
+            .await
+            .unwrap();
+
+        let calls: Vec<String> = server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .map(|r| r.url.path().to_owned())
+            .filter(|p| p.starts_with("/session/s1/element/e1/"))
+            .collect();
+        assert_eq!(
+            calls,
+            vec![
+                "/session/s1/element/e1/click",
+                "/session/s1/element/e1/clear",
+                "/session/s1/element/e1/value",
+            ],
+            "focus, then clear, then type"
+        );
     }
 
     #[tokio::test]
