@@ -26,6 +26,14 @@ pub const POLL_INTERVAL: Duration = Duration::from_millis(250);
 /// swiped while it renders; short enough that an off-screen control costs
 /// a moment rather than its whole deadline.
 pub const SCROLL_PROBE_DELAY: Duration = Duration::from_secs(2);
+/// Longest a single below-the-fold probe may run. A scrolling search is up
+/// to [`SCROLL_SEARCH_SWIPES`] swipes, each one a tree dump, and left alone
+/// it is bounded only by [`HTTP_TIMEOUT`]: a wait would advertise seconds
+/// and cost a minute, and a plain lookup for a control that is not there
+/// would cost one too. A wait spends at most this much on a probe, and
+/// never more than the wait itself is worth; a lookup, which has no
+/// deadline of its own, spends exactly this much.
+pub const SCROLL_PROBE_BUDGET: Duration = Duration::from_secs(10);
 /// Interval between server readiness probes.
 pub const SERVER_POLL: Duration = Duration::from_millis(500);
 /// Appium's own idle timeout for a session, in seconds.
@@ -67,6 +75,19 @@ pub enum AppiumError {
     /// A background interval exceeded [`MAX_BACKGROUND_SECS`].
     #[error("background of {0}s exceeds the maximum of {MAX_BACKGROUND_SECS}s")]
     BackgroundTooLong(u64),
+    /// A scrolling search did not finish inside the budget it was given.
+    ///
+    /// Distinct from the element being absent on purpose: this search never
+    /// got to answer, so nothing here says anything about the app. It is
+    /// the harness being slow -- a busy software-rendered emulator, an
+    /// Appium that is not keeping up.
+    #[error("scrolling search for `{accessibility_id}` did not finish within {budget:?}")]
+    ProbeUnfinished {
+        /// Accessibility id searched for.
+        accessibility_id: String,
+        /// Budget the search was given.
+        budget: Duration,
+    },
     /// An element did not appear (or disappear) before the deadline.
     #[error("element `{accessibility_id}` {condition} within {timeout:?}")]
     WaitTimeout {
@@ -217,6 +238,22 @@ impl SessionSpec {
     }
 }
 
+/// What a bounded below-the-fold search came back with.
+///
+/// Three states, because two of them are not the same answer and the
+/// callers differ on what to do about it: a search that reached the end is
+/// evidence the control is not there, while a search that ran out of
+/// budget is evidence of nothing at all.
+#[derive(Debug)]
+enum Probe {
+    /// The search scrolled to the element.
+    Found(Element),
+    /// The search finished: nothing to scroll, or the end without it.
+    NotThere,
+    /// The search was cut off before it could answer.
+    OutOfBudget,
+}
+
 /// UiAutomator2 session with domain-neutral primitives.
 #[derive(Debug, Clone)]
 pub struct AppiumSession {
@@ -249,7 +286,17 @@ impl AppiumSession {
 
     /// Finds an element by accessibility id, failing immediately if absent.
     pub async fn find(&self, accessibility_id: &str) -> Result<Element, AppiumError> {
-        match self
+        self.find_within(accessibility_id, SCROLL_PROBE_BUDGET)
+            .await
+    }
+
+    /// [`Self::find`] with an explicit budget for the scrolling fallback.
+    async fn find_within(
+        &self,
+        accessibility_id: &str,
+        budget: Duration,
+    ) -> Result<Element, AppiumError> {
+        let not_visible = match self
             .session
             .find_element(
                 Locator::UiAutomator,
@@ -257,28 +304,82 @@ impl AppiumSession {
             )
             .await
         {
-            Ok(element) => Ok(element),
-            // Not on screen is not the same as not there: scroll for it
-            // before believing the app never rendered it.
-            Err(not_visible) => match self.scroll_to(accessibility_id).await {
-                Ok(element) => Ok(element),
-                // Nothing to scroll, or scrolled to the end without it: the
-                // first failure is the one that describes the situation.
-                Err(_) => Err(not_visible.into()),
-            },
+            Ok(element) => return Ok(element),
+            Err(not_visible) => not_visible,
+        };
+        // Not on screen is not the same as not there: scroll for it before
+        // believing the app never rendered it. Bounded, because a lookup
+        // has no deadline of its own to spend: without one this costs the
+        // session's whole HTTP timeout every time a control is missing.
+        match self.probe_below_the_fold(accessibility_id, budget).await? {
+            Probe::Found(element) => Ok(element),
+            // Nothing to scroll, or scrolled to the end without it: the
+            // first failure is the one that describes the situation. A
+            // failure of the search's own -- a dead session, a broken
+            // transport -- came back from the probe as itself.
+            Probe::NotThere => Err(not_visible.into()),
+            // A search cut short answered nothing. A lookup has no deadline
+            // to keep trying against, so it says exactly that instead of
+            // repeating a `no such element` the search never confirmed.
+            Probe::OutOfBudget => Err(AppiumError::ProbeUnfinished {
+                accessibility_id: accessibility_id.to_owned(),
+                budget,
+            }),
         }
     }
 
-    /// Scrolls the first scrollable container until the element comes into
-    /// view, and returns it. Fails when there is nothing to scroll or the
-    /// search reaches the end without finding it.
+    /// Scrolls the first scrollable container looking for
+    /// `accessibility_id`, then returns the element **as the plain lookup
+    /// sees it**.
+    ///
+    /// The scrolling selector cannot answer the question on its own.
+    /// UiAutomator's `scrollIntoView` evaluates to the `UiScrollable` it
+    /// was called on, so Appium replies `200` with the scrollable container
+    /// -- even when the search swiped to the end and found nothing. Read as
+    /// a lookup that is a control the app never rendered, and clicking the
+    /// answer taps the middle of the list: a run drove the order form, was
+    /// told a confirm button the screen does not have was there, tapped a
+    /// field in the middle of the form instead, and then reported the order
+    /// that was never created as a product bug.
+    ///
+    /// So the scrolling call is used for the scrolling, and the plain
+    /// lookup decides.
     async fn scroll_to(&self, accessibility_id: &str) -> Result<Element, WebDriverError> {
         self.session
             .find_element(
                 Locator::UiAutomator,
                 &scroll_into_view_selector(accessibility_id),
             )
+            .await?;
+        self.session
+            .find_element(
+                Locator::UiAutomator,
+                &resource_id_selector(accessibility_id),
+            )
             .await
+    }
+
+    /// [`Self::scroll_to`] under a deadline of its own.
+    ///
+    /// Reports what the search did rather than only whether it worked: the
+    /// caller is the one that knows whether being cut off is a failure.
+    /// Every error is the driver's, not the screen's, and travels back as
+    /// itself -- a probe that reported a dead session as an absent element
+    /// would blame the app for the harness.
+    async fn probe_below_the_fold(
+        &self,
+        accessibility_id: &str,
+        budget: Duration,
+    ) -> Result<Probe, AppiumError> {
+        if budget.is_zero() {
+            return Ok(Probe::OutOfBudget);
+        }
+        match tokio::time::timeout(budget, self.scroll_to(accessibility_id)).await {
+            Ok(Ok(element)) => Ok(Probe::Found(element)),
+            Ok(Err(e)) if e.is_no_such_element() => Ok(Probe::NotThere),
+            Ok(Err(e)) => Err(e.into()),
+            Err(_elapsed) => Ok(Probe::OutOfBudget),
+        }
     }
 
     /// Whether an element with this accessibility id is present right now.
@@ -332,6 +433,11 @@ impl AppiumSession {
     /// after the screen has had time to build, and once more before it
     /// gives up. Off-screen is a fixed property of a laid-out screen, so
     /// two probes settle it; one per poll would only thrash the device.
+    ///
+    /// Each probe is bounded by [`SCROLL_PROBE_BUDGET`], and never by more
+    /// than `timeout` itself: the last one runs after the deadline, so a
+    /// wait can outlive its deadline by at most what the wait was worth,
+    /// rather than by the whole HTTP timeout of ten swipes.
     pub async fn wait_for(
         &self,
         accessibility_id: &str,
@@ -340,6 +446,7 @@ impl AppiumSession {
         let started = tokio::time::Instant::now();
         let deadline = started + timeout;
         let probe_at = started + SCROLL_PROBE_DELAY.min(timeout);
+        let budget = SCROLL_PROBE_BUDGET.min(timeout);
         let mut probed = false;
         loop {
             match self
@@ -355,10 +462,21 @@ impl AppiumSession {
                 Err(e) => return Err(e.into()),
             }
             let now = tokio::time::Instant::now();
-            let probing_now = !probed && now >= probe_at;
+            // Time this probe spends is time the polling loop does not get:
+            // hold it inside the deadline as well as the budget. With none
+            // of the deadline left it does not run at all, and the probe
+            // the deadline branch makes below is the one that looks.
+            let early_budget = budget.min(deadline.saturating_duration_since(now));
+            let probing_now = !probed && now >= probe_at && !early_budget.is_zero();
             if probing_now {
                 probed = true;
-                if let Ok(element) = self.scroll_to(accessibility_id).await {
+                // A wait spends probes out of its own deadline, and a short
+                // one routinely cuts them off: being out of budget is not a
+                // failure here, it is a reason to keep polling.
+                if let Probe::Found(element) = self
+                    .probe_below_the_fold(accessibility_id, early_budget)
+                    .await?
+                {
                     return Ok(element);
                 }
             }
@@ -366,7 +484,10 @@ impl AppiumSession {
                 // A screen that finished building late is below the fold
                 // only now; look once more before calling the control
                 // missing, unless this very iteration already did.
-                if !probing_now && let Ok(element) = self.scroll_to(accessibility_id).await {
+                if !probing_now
+                    && let Probe::Found(element) =
+                        self.probe_below_the_fold(accessibility_id, budget).await?
+                {
                     return Ok(element);
                 }
                 return Err(AppiumError::WaitTimeout {
@@ -407,11 +528,22 @@ impl AppiumSession {
         Ok(self.session.click(&element).await?)
     }
 
-    /// Clears then types into an element found by accessibility id. The text
-    /// may be a secret (NWC URI, mnemonic) and is never logged.
+    /// Focuses, clears, then types into an element found by accessibility
+    /// id. The text may be a secret (NWC URI, mnemonic) and is never logged.
+    ///
+    /// The tap is not decoration. Appium's set-text reaches Flutter as
+    /// `SemanticsAction.setText`, which a field without input focus ignores
+    /// -- while still answering `200`, so the driver believes it typed. The
+    /// one field in the app that took text this way was the one declared
+    /// `autofocus: true`; every field in the order form is left unfocused,
+    /// stayed empty through a whole form fill, and the run reported the
+    /// order the app never accepted as a product bug. A field takes text
+    /// through the keyboard, and the keyboard goes to whatever has focus:
+    /// tapping it first is what a user does.
     #[tracing::instrument(skip(self, text), fields(id = accessibility_id))]
     pub async fn type_text(&self, accessibility_id: &str, text: &str) -> Result<(), AppiumError> {
         let element = self.find(accessibility_id).await?;
+        self.session.click(&element).await?;
         self.session.clear(&element).await?;
         Ok(self.session.send_keys(&element, text).await?)
     }
@@ -548,370 +680,4 @@ impl AppiumSession {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-    use crate::process::tests_support::FakeRunner;
-    use wiremock::matchers::{body_partial_json, body_string_contains, method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-
-    const ELEMENT_KEY: &str = "element-6066-11e4-a52e-4f735466cecf";
-
-    fn spec() -> SessionSpec {
-        SessionSpec {
-            udid: "emulator-5554".into(),
-            system_port: 8200,
-            app_package: "network.mostro.app".into(),
-            app_activity: None,
-        }
-    }
-
-    #[test]
-    fn a_scrolling_lookup_searches_for_the_same_id() {
-        let selector = scroll_into_view_selector("settings.mostro_node");
-        assert!(selector.contains("UiScrollable"), "{selector}");
-        assert!(selector.contains("scrollable(true)"), "{selector}");
-        assert!(
-            selector.contains("resourceId(\"settings.mostro_node\")"),
-            "{selector}"
-        );
-        assert!(
-            scroll_into_view_selector("a\"b").contains("a\\\"b"),
-            "quotes are escaped in the scrolling selector too"
-        );
-    }
-
-    #[test]
-    fn resource_id_selector_escapes_quotes() {
-        assert_eq!(
-            resource_id_selector("order.status"),
-            "new UiSelector().resourceId(\"order.status\")"
-        );
-        assert_eq!(
-            resource_id_selector("a\"b"),
-            "new UiSelector().resourceId(\"a\\\"b\")"
-        );
-    }
-
-    #[test]
-    fn capabilities_pin_uiautomator2_and_device() {
-        let caps = spec().capabilities();
-        assert_eq!(caps["platformName"], "Android");
-        assert_eq!(caps["appium:automationName"], "UiAutomator2");
-        assert_eq!(caps["appium:udid"], "emulator-5554");
-        assert_eq!(caps["appium:systemPort"], 8200);
-        assert_eq!(caps["appium:noReset"], true);
-        assert_eq!(caps["appium:autoLaunch"], false);
-        assert_eq!(caps["appium:adbExecTimeout"], ADB_EXEC_TIMEOUT_MS);
-        assert!(caps.get("appium:appActivity").is_none());
-        let mut with_activity = spec();
-        with_activity.app_activity = Some(".MainActivity".into());
-        assert_eq!(
-            with_activity.capabilities()["appium:appActivity"],
-            ".MainActivity"
-        );
-    }
-
-    async fn session(server: &MockServer) -> AppiumSession {
-        Mock::given(method("POST"))
-            .and(path("/session"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({"value": {"sessionId": "s1"}})),
-            )
-            .mount(server)
-            .await;
-        AppiumSession::create(&server.uri(), &spec()).await.unwrap()
-    }
-
-    /// A settings page is taller than the phone, and Flutter does not build
-    /// what is not visible: a control below the fold is absent from the
-    /// accessibility tree until something scrolls to it. `find` already
-    /// knows that. A wait that does not would fail on a screen that is
-    /// behaving perfectly, and blame the app's automation contract for it.
-    #[tokio::test]
-    async fn a_wait_finds_a_control_below_the_fold_without_burning_its_deadline() {
-        let server = MockServer::start().await;
-        let s = session(&server).await;
-        mount_below_the_fold(&server, "settings.mostro_node").await;
-
-        let started = tokio::time::Instant::now();
-        s.wait_for("settings.mostro_node", Duration::from_secs(30))
-            .await
-            .expect("a control below the fold is present, not missing");
-
-        // Waiting out the whole deadline first would be correct and useless:
-        // every off-screen control in a run would cost its full timeout.
-        assert!(
-            started.elapsed() < Duration::from_secs(10),
-            "the below-the-fold probe must not wait for the deadline: {:?}",
-            started.elapsed()
-        );
-    }
-
-    /// The counterpart guarantee: a probe answers about the screen without
-    /// changing it. `go_home` asks "is the order book up yet?" on every
-    /// pass of its unwind loop, and `dismiss_notice` asks three such
-    /// questions per poll. A probe that scrolled would swipe a screen the
-    /// caller only meant to look at -- and leave it there.
-    #[tokio::test]
-    async fn a_probe_never_scrolls_the_screen_it_is_asked_about() {
-        let server = MockServer::start().await;
-        let s = session(&server).await;
-        mount_below_the_fold(&server, "order.add.fab").await;
-
-        assert!(!s.exists("order.add.fab").await.unwrap());
-        assert!(
-            !server
-                .received_requests()
-                .await
-                .unwrap_or_default()
-                .iter()
-                .any(|r| String::from_utf8_lossy(&r.body).contains("UiScrollable")),
-            "a probe must not swipe the screen to answer"
-        );
-    }
-
-    /// The scrolling probe must not turn a genuinely missing control into a
-    /// hang or a false pass: it is searched for, not found, and the wait
-    /// still ends in a timeout.
-    #[tokio::test]
-    async fn a_control_that_is_nowhere_still_times_out() {
-        let server = MockServer::start().await;
-        let s = session(&server).await;
-        Mock::given(method("POST"))
-            .and(path("/session/s1/element"))
-            .respond_with(
-                ResponseTemplate::new(404)
-                    .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
-            )
-            .mount(&server)
-            .await;
-
-        let err = s
-            .wait_for("nowhere", Duration::from_millis(300))
-            .await
-            .unwrap_err();
-
-        assert!(matches!(
-            err,
-            AppiumError::WaitTimeout {
-                condition: "not found",
-                ..
-            }
-        ));
-        assert!(!s.exists("nowhere").await.unwrap());
-    }
-
-    /// A control that is off-screen: the plain `resourceId` lookup misses it
-    /// and only the scrolling lookup returns it.
-    async fn mount_below_the_fold(server: &MockServer, id: &str) {
-        let scrolled = format!("scrollIntoView(new UiSelector().resourceId(\\\"{id}\\\")");
-        Mock::given(method("POST"))
-            .and(path("/session/s1/element"))
-            .and(move |request: &wiremock::Request| {
-                String::from_utf8_lossy(&request.body).contains(scrolled.as_str())
-            })
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
-            )
-            .mount(server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/session/s1/element"))
-            .respond_with(
-                ResponseTemplate::new(404)
-                    .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
-            )
-            .mount(server)
-            .await;
-    }
-
-    #[tokio::test]
-    async fn primitives_map_to_webdriver_calls() {
-        let server = MockServer::start().await;
-        let s = session(&server).await;
-        Mock::given(method("POST"))
-            .and(path("/session/s1/element"))
-            .and(body_string_contains("-android uiautomator"))
-            .and(body_string_contains("resourceId(\\\"order.status\\\")"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/session/s1/element"))
-            .and(body_string_contains("resourceId(\\\"missing\\\")"))
-            .respond_with(
-                ResponseTemplate::new(404)
-                    .set_body_json(json!({"value": {"error": "no such element", "message": ""}})),
-            )
-            .mount(&server)
-            .await;
-        for endpoint in ["click", "clear", "value"] {
-            Mock::given(method("POST"))
-                .and(path(format!("/session/s1/element/e1/{endpoint}")))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": null})))
-                .mount(&server)
-                .await;
-        }
-        Mock::given(method("GET"))
-            .and(path("/session/s1/element/e1/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": "Pending"})))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/session/s1/element/e1/attribute/content-desc"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": "pending"})))
-            .mount(&server)
-            .await;
-        for (script, args) in [
-            (
-                "mobile: setConnectivity",
-                json!({"wifi": false, "data": false}),
-            ),
-            ("mobile: backgroundApp", json!({"seconds": 1})),
-            (
-                "mobile: terminateApp",
-                json!({"appId": "network.mostro.app"}),
-            ),
-            (
-                "mobile: activateApp",
-                json!({"appId": "network.mostro.app"}),
-            ),
-            ("mobile: clearApp", json!({"appId": "network.mostro.app"})),
-        ] {
-            Mock::given(method("POST"))
-                .and(path("/session/s1/execute/sync"))
-                .and(body_partial_json(json!({"script": script, "args": [args]})))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": null})))
-                .expect(1)
-                .mount(&server)
-                .await;
-        }
-        Mock::given(method("DELETE"))
-            .and(path("/session/s1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": null})))
-            .mount(&server)
-            .await;
-
-        s.tap("order.status").await.unwrap();
-        s.type_text("order.status", "1000").await.unwrap();
-        assert_eq!(s.text_of("order.status").await.unwrap(), "Pending");
-        assert_eq!(s.label_of("order.status").await.unwrap(), "pending");
-        assert!(s.exists("order.status").await.unwrap());
-        assert!(!s.exists("missing").await.unwrap());
-        s.wait_for("order.status", Duration::from_secs(1))
-            .await
-            .unwrap();
-        s.wait_gone("missing", Duration::from_secs(1))
-            .await
-            .unwrap();
-        Mock::given(method("POST"))
-            .and(path("/session/s1/orientation"))
-            .and(body_partial_json(json!({"orientation": "LANDSCAPE"})))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": null})))
-            .expect(1)
-            .mount(&server)
-            .await;
-        s.set_connectivity(false).await.unwrap();
-        s.set_orientation(true).await.unwrap();
-        s.background(1).await.unwrap();
-        assert!(matches!(
-            s.background(MAX_BACKGROUND_SECS + 1).await.unwrap_err(),
-            AppiumError::BackgroundTooLong(_)
-        ));
-        s.relaunch().await.unwrap();
-        s.clear_app().await.unwrap();
-        // Clearing revokes what the install granted; the harness grants it
-        // back or the next launch opens on a permission dialog.
-        assert!(
-            server
-                .received_requests()
-                .await
-                .unwrap_or_default()
-                .iter()
-                .any(|r| String::from_utf8_lossy(&r.body).contains("changePermissions")),
-            "clearing the app must re-grant its runtime permissions"
-        );
-        s.end().await.unwrap();
-
-        let err = s
-            .wait_for("missing", Duration::from_millis(300))
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            AppiumError::WaitTimeout {
-                condition: "not found",
-                ..
-            }
-        ));
-        let err = s
-            .wait_gone("order.status", Duration::from_millis(300))
-            .await
-            .unwrap_err();
-        assert!(matches!(
-            err,
-            AppiumError::WaitTimeout {
-                condition: "still present",
-                ..
-            }
-        ));
-        assert_eq!(s.raw().id(), "s1");
-    }
-
-    #[tokio::test]
-    async fn server_start_fails_when_status_never_ready() {
-        let dir = tempfile::tempdir().unwrap();
-        let runner = FakeRunner::default();
-
-        let err = AppiumServer::start(
-            &runner,
-            Path::new("/bin/appium"),
-            1,
-            dir.path(),
-            Duration::from_millis(600),
-        )
-        .await
-        .unwrap_err();
-
-        assert!(matches!(err, AppiumError::NotReady { .. }));
-        assert!(runner.spawned()[0].contains("--port 1"));
-    }
-
-    #[tokio::test]
-    async fn external_server_reports_url_and_stops() {
-        let runner = FakeRunner::default();
-        let child = runner.spawn(&Command::new("x", &[]), None).await.unwrap();
-        let server = AppiumServer::external(4723, child);
-        assert_eq!(server.base_url(), "http://127.0.0.1:4723");
-        server.stop().await.unwrap();
-    }
-    /// Selectable text (an identity, an invoice) carries no accessibility
-    /// description, and reading only that reports the screen as empty.
-    #[tokio::test]
-    async fn a_label_falls_back_to_the_element_text() {
-        let server = MockServer::start().await;
-        let s = session(&server).await;
-        Mock::given(method("POST"))
-            .and(path("/session/s1/element"))
-            .respond_with(
-                ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
-            )
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/session/s1/element/e1/attribute/content-desc"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": ""})))
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/session/s1/element/e1/attribute/text"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": "npub1alice"})))
-            .mount(&server)
-            .await;
-
-        assert_eq!(s.label_of("keys.public_key").await.unwrap(), "npub1alice");
-    }
-}
+mod tests;
