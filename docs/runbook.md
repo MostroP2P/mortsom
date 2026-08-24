@@ -45,7 +45,9 @@ never a pass.
 
 1. `timeline.md` shows the exact step, the state each app displayed and the
    relay/wallet evidence around it; the `<actor>/steps/` screenshots and UI
-   hierarchies are named after those steps.
+   hierarchies are named after those steps. The last of them is
+   `<scenario>-failed`, recorded for both actors when the attempt ended:
+   start there, then read backwards through the timeline.
 2. A recovery scenario failing with `unexpected protocol message` means the
    app repeated an action after a restart/background: report it with the
    `relay-events.jsonl` sequence numbers.
