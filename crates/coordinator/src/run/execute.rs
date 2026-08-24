@@ -95,7 +95,7 @@ pub async fn execute_scenario(
 async fn attempt(def: &ScenarioDef, ctx: &Context) -> Outcome {
     let timeout = Duration::from_secs(def.timeout_secs);
     let body = AssertUnwindSafe((def.run)(ctx)).catch_unwind();
-    match tokio::time::timeout(timeout, body).await {
+    let outcome = match tokio::time::timeout(timeout, body).await {
         Ok(Ok(Ok(()))) => Outcome::Passed,
         Ok(Ok(Err(e))) => Outcome::Failed {
             category: e.category,
@@ -109,6 +109,41 @@ async fn attempt(def: &ScenarioDef, ctx: &Context) -> Outcome {
             category: FailureCategory::Product,
             message: format!("scenario exceeded its {timeout:?} deadline"),
         },
+    };
+    if matches!(outcome, Outcome::Failed { .. }) {
+        capture_failure(def, ctx).await;
+    }
+    outcome
+}
+
+/// Records the screen each actor was on when the scenario failed.
+///
+/// Every checkpoint in the scenario kit sits on the success path: an action
+/// that fails returns before reaching it. So a failed run left only its
+/// bootstrap screenshots, and the runbook's first instruction -- open the
+/// actor's last screen -- had nothing to open, on the one run where it
+/// matters. This is the single place that sees every failure, whether it
+/// was an assertion, the deadline or a panic.
+///
+/// Best effort by design: the recorder logs what it cannot capture rather
+/// than failing, because a dead session is often exactly what went wrong
+/// and must not replace the diagnosis with an error about the diagnosis.
+async fn capture_failure(def: &ScenarioDef, ctx: &Context) {
+    for session in &ctx.actors {
+        let step = ctx
+            .evidence
+            .checkpoint(
+                session.actor.as_str(),
+                &format!("{}-failed", def.name),
+                session.ui.as_ref(),
+            )
+            .await;
+        ctx.timeline.push(
+            TimelineKind::Step,
+            Some(session.actor.as_str()),
+            format!("screen when {} failed", def.name),
+            Some(step),
+        );
     }
 }
 

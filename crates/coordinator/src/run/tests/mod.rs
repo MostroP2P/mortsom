@@ -769,6 +769,57 @@ fn without(dropped: Capability) -> FakeAdapter {
     adapter
 }
 
+/// The runbook's first instruction for a failed run is to open the actor's
+/// last screen. Every checkpoint in the scenario kit sits on the success
+/// path, so a failing action returned before recording one and left nothing
+/// to open -- on exactly the run where it matters.
+#[tokio::test]
+async fn a_failed_scenario_leaves_the_screen_that_failed() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+
+    let summary = run(&world, Arc::new(adapter), opts(&["happy_sell"]), true)
+        .await
+        .unwrap();
+
+    assert!(!summary.passed);
+    let run_dir = world
+        .dir
+        .path()
+        .join("artifacts")
+        .join(summary.run_id.as_str());
+    for actor in ["alice", "bob"] {
+        let steps = std::fs::read_dir(run_dir.join(actor).join("steps"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        // Step names are sanitized for the filesystem, so the scenario
+        // reads `happy-sell` here.
+        assert!(
+            steps
+                .iter()
+                .any(|f| f.contains("happy-sell-failed") && f.ends_with("screen.png")),
+            "{actor} kept no screen from the failure: {steps:?}"
+        );
+        assert!(
+            steps
+                .iter()
+                .any(|f| f.contains("happy-sell-failed") && f.ends_with("ui.xml")),
+            "{actor} kept no hierarchy from the failure: {steps:?}"
+        );
+    }
+    // And the timeline points at it, because that is what a reader opens
+    // first.
+    let timeline = std::fs::read_to_string(run_dir.join(files::TIMELINE)).unwrap_or_default();
+    assert!(
+        timeline.contains("screen when happy_sell failed"),
+        "{timeline}"
+    );
+}
+
 #[tokio::test]
 async fn infrastructure_failure_after_payment_is_final_and_cleanup_cancels_open_orders() {
     mortsom_scenarios::link();
