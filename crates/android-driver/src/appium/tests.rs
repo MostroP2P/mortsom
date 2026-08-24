@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use super::*;
 use crate::process::tests_support::FakeRunner;
 use wiremock::matchers::{body_partial_json, body_string_contains, method, path};
@@ -389,20 +392,58 @@ async fn mount_scroll_failure(server: &MockServer) {
         .await;
 }
 
-/// A control that is off-screen: the plain `resourceId` lookup misses it
-/// and only the scrolling lookup returns it.
+/// A control that is off-screen: the plain lookup misses it until
+/// something scrolls to it, and then finds it where it now is.
 async fn mount_below_the_fold(server: &MockServer, id: &str) {
-    let scrolled = format!("scrollIntoView(new UiSelector().resourceId(\\\"{id}\\\")");
+    let scrolled = Arc::new(AtomicBool::new(false));
+    let flag = scrolled.clone();
+    let scroll_for_id = format!("scrollIntoView(new UiSelector().resourceId(\\\"{id}\\\")");
     Mock::given(method("POST"))
         .and(path("/session/s1/element"))
         .and(move |request: &wiremock::Request| {
-            String::from_utf8_lossy(&request.body).contains(scrolled.as_str())
+            let hit = String::from_utf8_lossy(&request.body).contains(scroll_for_id.as_str());
+            if hit {
+                flag.store(true, Ordering::SeqCst);
+            }
+            hit
+        })
+        // As the real driver answers: the container, not the target.
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "the-list"}})),
+        )
+        .mount(server)
+        .await;
+    let plain = format!("\"new UiSelector().resourceId(\\\"{id}\\\")\"");
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .and(move |request: &wiremock::Request| {
+            String::from_utf8_lossy(&request.body).contains(plain.as_str())
+                && scrolled.load(Ordering::SeqCst)
         })
         .respond_with(
             ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
         )
         .mount(server)
         .await;
+    mount_nothing_else(server).await;
+}
+
+/// Every scrolling call answers with the scrollable container, exactly
+/// as UiAutomator2 does.
+async fn mount_scroll_answering_with_the_list(server: &MockServer) {
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .and(|request: &wiremock::Request| {
+            String::from_utf8_lossy(&request.body).contains("UiScrollable")
+        })
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "the-list"}})),
+        )
+        .mount(server)
+        .await;
+}
+
+async fn mount_nothing_else(server: &MockServer) {
     Mock::given(method("POST"))
         .and(path("/session/s1/element"))
         .respond_with(
@@ -411,6 +452,93 @@ async fn mount_below_the_fold(server: &MockServer, id: &str) {
         )
         .mount(server)
         .await;
+}
+
+/// UiAutomator's `scrollIntoView` evaluates to the `UiScrollable` it
+/// was called on, so Appium answers `200` with the scrollable container
+/// whether or not the search found anything. A control the app never
+/// rendered is reported as present, and clicking the answer taps the
+/// middle of the list.
+#[tokio::test]
+async fn a_scroll_that_found_nothing_is_not_a_control() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    mount_scroll_answering_with_the_list(&server).await;
+    mount_nothing_else(&server).await;
+
+    assert!(s.find("order.confirm.home").await.is_err());
+    assert!(matches!(
+        s.wait_for("order.confirm.home", Duration::from_millis(300))
+            .await
+            .unwrap_err(),
+        AppiumError::WaitTimeout { .. }
+    ));
+    assert!(s.tap("order.confirm.home").await.is_err());
+
+    // The list is not the button. Tapping it presses whatever sits in
+    // the middle of the screen.
+    assert!(
+        !server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .any(|r| r.url.path().ends_with("/click")),
+        "nothing may be clicked for a control that is not there"
+    );
+}
+
+/// The scrolling call is only half of the search: the plain lookup
+/// that follows it is the half that decides. A driver failure there is
+/// still the driver's, and reporting it as `no such element` would say
+/// the app never rendered a control nobody ever managed to look for.
+#[tokio::test]
+async fn a_failure_in_the_deciding_lookup_is_not_a_missing_control() {
+    let server = MockServer::start().await;
+    let s = session(&server).await;
+    let scrolled = Arc::new(AtomicBool::new(false));
+    let flag = scrolled.clone();
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .and(move |request: &wiremock::Request| {
+            let hit = String::from_utf8_lossy(&request.body).contains("UiScrollable");
+            if hit {
+                flag.store(true, Ordering::SeqCst);
+            }
+            hit
+        })
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "the-list"}})),
+        )
+        .mount(&server)
+        .await;
+    // The scroll works; only the lookup that reads its result fails, so
+    // the failure can come from nowhere but the deciding half.
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .and(move |_: &wiremock::Request| scrolled.load(Ordering::SeqCst))
+        .respond_with(ResponseTemplate::new(404).set_body_json(
+            json!({"value": {"error": "invalid session id", "message": "session deleted"}}),
+        ))
+        .mount(&server)
+        .await;
+    mount_nothing_else(&server).await;
+
+    for err in [
+        s.find("settings.mostro_node").await.unwrap_err(),
+        s.wait_for("settings.mostro_node", Duration::from_millis(200))
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(
+            matches!(
+                &err,
+                AppiumError::WebDriver(WebDriverError::Server { error, .. })
+                    if error == "invalid session id"
+            ),
+            "the driver's own failure must surface as itself: {err:?}"
+        );
+    }
 }
 
 #[tokio::test]

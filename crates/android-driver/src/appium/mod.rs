@@ -328,14 +328,33 @@ impl AppiumSession {
         }
     }
 
-    /// Scrolls the first scrollable container until the element comes into
-    /// view, and returns it. Fails when there is nothing to scroll or the
-    /// search reaches the end without finding it.
+    /// Scrolls the first scrollable container looking for
+    /// `accessibility_id`, then returns the element **as the plain lookup
+    /// sees it**.
+    ///
+    /// The scrolling selector cannot answer the question on its own.
+    /// UiAutomator's `scrollIntoView` evaluates to the `UiScrollable` it
+    /// was called on, so Appium replies `200` with the scrollable container
+    /// -- even when the search swiped to the end and found nothing. Read as
+    /// a lookup that is a control the app never rendered, and clicking the
+    /// answer taps the middle of the list: a run drove the order form, was
+    /// told a confirm button the screen does not have was there, tapped a
+    /// field in the middle of the form instead, and then reported the order
+    /// that was never created as a product bug.
+    ///
+    /// So the scrolling call is used for the scrolling, and the plain
+    /// lookup decides.
     async fn scroll_to(&self, accessibility_id: &str) -> Result<Element, WebDriverError> {
         self.session
             .find_element(
                 Locator::UiAutomator,
                 &scroll_into_view_selector(accessibility_id),
+            )
+            .await?;
+        self.session
+            .find_element(
+                Locator::UiAutomator,
+                &resource_id_selector(accessibility_id),
             )
             .await
     }
