@@ -573,6 +573,53 @@ async fn a_wait_polls_through_a_transient_transport_failure() {
         .expect("a transport blip mid-wait is not an answer about the app");
 }
 
+/// The scrolling probe talks to the same driver the plain lookup does, so a
+/// blip can land on it just as easily. It must not end the wait either: the
+/// probe is one of two extra looks the wait takes, not its verdict, and a
+/// wait that aborts on it is back to the failure this whole change is about.
+#[tokio::test]
+async fn a_wait_polls_through_a_transport_failure_on_the_scrolling_probe() {
+    let server = MockServer::start().await;
+    let raw = Session::attach(&server.uri(), "s1", Duration::from_millis(100)).unwrap();
+    let s = AppiumSession::from_session(raw, "network.mostro.app");
+
+    // The probe never gets an answer; the plain lookup answers throughout,
+    // so the failure can come from nowhere but the probe.
+    let probed = Arc::new(AtomicBool::new(false));
+    let flag = probed.clone();
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .and(move |request: &wiremock::Request| {
+            let hit = String::from_utf8_lossy(&request.body).contains("UiScrollable");
+            if hit {
+                flag.store(true, Ordering::SeqCst);
+            }
+            hit
+        })
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"value": {ELEMENT_KEY: "the-list"}}))
+                .set_delay(Duration::from_millis(400)),
+        )
+        .mount(&server)
+        .await;
+    // The screen finishes building while the probe is still hanging: the
+    // control the wait was after is on it, in plain sight.
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .and(move |_: &wiremock::Request| probed.load(Ordering::SeqCst))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
+        )
+        .mount(&server)
+        .await;
+    mount_nothing_else(&server).await;
+
+    s.wait_for("appbar.drawer", SCROLL_PROBE_DELAY + Duration::from_secs(2))
+        .await
+        .expect("a probe that never got an answer is not an answer about the app");
+}
+
 /// When every poll went unanswered, the wait must not claim the element was
 /// missing: nothing ever looked at the screen.
 #[tokio::test]

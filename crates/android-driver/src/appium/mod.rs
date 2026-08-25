@@ -479,12 +479,22 @@ impl AppiumSession {
                 probed = true;
                 // A wait spends probes out of its own deadline, and a short
                 // one routinely cuts them off: being out of budget is not a
-                // failure here, it is a reason to keep polling.
-                if let Probe::Found(element) = self
+                // failure here, it is a reason to keep polling. Neither is a
+                // probe that never got an answer -- the scrolling search
+                // talks to the same driver the plain lookup does, and a
+                // transport failure in either is the wait's to poll through.
+                match self
                     .probe_below_the_fold(accessibility_id, early_budget)
-                    .await?
+                    .await
                 {
-                    return Ok(element);
+                    Ok(Probe::Found(element)) => return Ok(element),
+                    // The tree answered: whatever went unanswered before it
+                    // is stale, and the control really is absent so far.
+                    Ok(Probe::NotThere) => unanswered = None,
+                    // Cut off before it could answer: it settles nothing.
+                    Ok(Probe::OutOfBudget) => {}
+                    Err(AppiumError::WebDriver(e)) if e.is_transport() => unanswered = Some(e),
+                    Err(e) => return Err(e),
                 }
             }
             if tokio::time::Instant::now() >= deadline {
@@ -496,7 +506,10 @@ impl AppiumSession {
                         Ok(Probe::Found(element)) => return Ok(element),
                         // The tree answered: whatever went unanswered before
                         // it is stale, and the control really is absent.
-                        Ok(_) => unanswered = None,
+                        Ok(Probe::NotThere) => unanswered = None,
+                        // Cut off before it could answer: it settles nothing
+                        // either way, so an unanswered poll stays unanswered.
+                        Ok(Probe::OutOfBudget) => {}
                         Err(AppiumError::WebDriver(e)) if e.is_transport() => unanswered = Some(e),
                         Err(e) => return Err(e),
                     }
