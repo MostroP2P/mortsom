@@ -141,6 +141,9 @@ async fn an_app_that_shows_nothing_is_reported_once_not_waited_for_twice() {
             .contains("neither the walkthrough nor the order book"),
         "the report should name what the app failed to show: {}",
         error.message
+    );
+}
+
 /// The last field of the order form is a number, so typing into it leaves
 /// the numeric keyboard up -- over the bottom of the form, where submit
 /// lives. A keyboard is not something the driver can look underneath: it
