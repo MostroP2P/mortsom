@@ -42,6 +42,36 @@ fn scope_filters_grow_with_orders_and_actors() {
     assert_eq!(scope.filters().len(), 6);
 }
 
+/// An order id joins the scope only once the order exists, which is after
+/// the daemon has already published its `pending` state. Asking that filter
+/// for live delivery only means the relay never sends the state that is
+/// already there, and the run waits out its whole state timeout for an
+/// event that was published before it subscribed -- which is what a Polar
+/// run reported as `no relay event shows order ... as pending`, with the
+/// daemon log showing it published exactly that, seven minutes earlier.
+#[test]
+fn the_order_filter_asks_for_the_state_the_daemon_already_published() {
+    let daemon = Keys::generate();
+    let mut scope = ObserverScope::daemon_only(daemon.public_key());
+    scope.add_order("run-order");
+
+    let order_filter = scope
+        .filters()
+        .into_iter()
+        .find(|f| {
+            f.generic_tags
+                .values()
+                .any(|v| v.iter().any(|t| *t == "run-order"))
+        })
+        .expect("a filter carries the order id");
+
+    assert_ne!(
+        order_filter.limit,
+        Some(0),
+        "live-only delivery cannot see the state published before we subscribed"
+    );
+}
+
 #[test]
 fn scope_matches_only_run_evidence() {
     let daemon = Keys::generate();

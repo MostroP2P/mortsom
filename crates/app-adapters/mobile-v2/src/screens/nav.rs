@@ -2,7 +2,7 @@
 
 use mortsom_app_contract::{AdapterError, DeviceContext};
 
-use super::{expect, present, tap};
+use super::{expect, present, tap, tap_until};
 use crate::selectors::Ids;
 
 /// Deepest stack `go_home` unwinds (dialog over detail over list over book).
@@ -11,7 +11,7 @@ const MAX_BACK_STEPS: usize = 4;
 /// Drawer → account (key management).
 pub async fn go_to_account(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
     go_home(device).await?;
-    tap(device, Ids::APPBAR_DRAWER).await?;
+    tap_until(device, Ids::APPBAR_DRAWER, Ids::DRAWER_ACCOUNT).await?;
     tap(device, Ids::DRAWER_ACCOUNT).await?;
     expect(device, Ids::KEYS_PUBLIC_KEY).await
 }
@@ -19,7 +19,7 @@ pub async fn go_to_account(device: &DeviceContext<'_>) -> Result<(), AdapterErro
 /// Drawer → settings.
 pub async fn go_to_settings(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
     go_home(device).await?;
-    tap(device, Ids::APPBAR_DRAWER).await?;
+    tap_until(device, Ids::APPBAR_DRAWER, Ids::DRAWER_SETTINGS).await?;
     tap(device, Ids::DRAWER_SETTINGS).await?;
     expect(device, Ids::SETTINGS_MOSTRO_NODE).await
 }

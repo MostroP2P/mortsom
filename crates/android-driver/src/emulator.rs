@@ -149,6 +149,10 @@ pub fn emulator_command(
         "-no-audio",
         "-gpu",
         "swiftshader_indirect",
+        // The emulated WiFi stack (netsim) is where a guest doing real
+        // network work has been seen taking the whole VM down with it.
+        "-feature",
+        "-Wifi",
         "-netdelay",
         "none",
         "-netspeed",

@@ -175,6 +175,113 @@ async fn the_keyboard_is_put_away_before_the_order_is_submitted() {
     );
 }
 
+/// A tap that lands while the app is rebuilding a screen is swallowed: the
+/// control is there, the driver hits it, and nothing happens. Waiting
+/// longer cannot help -- nobody is going to act on it. Submit is the tap
+/// this bites, because the keyboard closing just above it moves the button
+/// as it is pressed; a real Polar run left the order form on screen with
+/// every field filled and `order.confirm.home` never arriving.
+#[tokio::test]
+async fn a_swallowed_submit_is_tapped_again() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.swallows_taps(Ids::ORDER_CREATE_SUBMIT, 1);
+
+    let order = adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+
+    assert_eq!(order.id.as_deref(), Some("o1"), "the order was submitted");
+}
+
+/// Submit is not a button that may be pressed twice: the first press
+/// publishes a real order on mainnet, and a second one publishes another
+/// that `new_trade_id` never sees and cleanup never cancels. Publishing
+/// waits on the network, so the confirmation can take longer than the UI
+/// budget while the first order is already out there -- and the app's own
+/// evidence that it took the tap is that the form it submitted is gone.
+#[tokio::test]
+async fn a_submit_the_app_took_is_not_sent_twice() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    // The form is replaced the moment the app takes the submit, but the
+    // confirmation only draws once the network answers -- later than the
+    // wait for it.
+    ui.on_tap_hide(Ids::ORDER_CREATE_SUBMIT, &[Ids::ORDER_CREATE_SUBMIT]);
+    ui.appears_after(Ids::ORDER_CONFIRM_HOME, 6);
+
+    let order = adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+
+    assert_eq!(order.id.as_deref(), Some("o1"), "the order was submitted");
+    let submits = ui
+        .calls()
+        .iter()
+        .filter(|c| *c == "tap order.create.submit")
+        .count();
+    assert_eq!(
+        submits,
+        1,
+        "the order was submitted more than once: {:?}",
+        ui.calls()
+    );
+}
+
+/// The other shape of the same danger: the app keeps the form on screen
+/// while it publishes and greys submit out. The button is still drawn, so
+/// looking for it says nothing -- only that it no longer accepts a press
+/// separates a form still waiting on the network from one nobody
+/// submitted.
+#[tokio::test]
+async fn a_submit_still_working_is_waited_for_not_pressed_again() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.disables(&[Ids::ORDER_CREATE_SUBMIT]);
+    ui.appears_after(Ids::ORDER_CONFIRM_HOME, 6);
+
+    let order = adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+
+    assert_eq!(order.id.as_deref(), Some("o1"), "the order was submitted");
+    let submits = ui
+        .calls()
+        .iter()
+        .filter(|c| *c == "tap order.create.submit")
+        .count();
+    assert_eq!(
+        submits,
+        1,
+        "a submit the app was still working on was pressed again: {:?}",
+        ui.calls()
+    );
+}
+
+/// The same swallowed tap on the drawer: after a relaunch the app is still
+/// settling, the hamburger is on screen, and the tap opens nothing. A real
+/// run reported `drawer.account did not appear` with the order book -- and
+/// the closed drawer -- in the screenshot beside it.
+#[tokio::test]
+async fn a_swallowed_drawer_tap_is_tapped_again() {
+    let ui = app_with_orders();
+    // The drawer closes behind you when you pick a destination, so its
+    // items are only on screen while it is open.
+    ui.on_tap_hide(
+        Ids::DRAWER_ACCOUNT,
+        &[Ids::DRAWER_ACCOUNT, Ids::DRAWER_SETTINGS],
+    );
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.swallows_taps(Ids::APPBAR_DRAWER, 1);
+
+    let identity = adapter().displayed_identity(&device(&ui)).await.unwrap();
+
+    assert_eq!(identity.public_key, "npub1alice");
+}
+
 #[tokio::test]
 async fn onboarding_skips_the_walkthrough_and_reads_the_generated_identity() {
     let ui = fresh_app();
