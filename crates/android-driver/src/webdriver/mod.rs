@@ -59,6 +59,15 @@ impl WebDriverError {
     pub fn is_no_such_element(&self) -> bool {
         matches!(self, WebDriverError::Server { error, .. } if error == "no such element")
     }
+
+    /// True for a request that never got an answer.
+    ///
+    /// A transport failure says nothing about the app: the screen was never
+    /// read. Inside a bounded wait it is a reason to poll again, not the
+    /// wait's verdict.
+    pub fn is_transport(&self) -> bool {
+        matches!(self, WebDriverError::Transport(_))
+    }
 }
 
 /// A raw WebDriver session.

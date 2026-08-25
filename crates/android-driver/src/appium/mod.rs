@@ -448,6 +448,12 @@ impl AppiumSession {
         let probe_at = started + SCROLL_PROBE_DELAY.min(timeout);
         let budget = SCROLL_PROBE_BUDGET.min(timeout);
         let mut probed = false;
+        // The last poll that went unanswered, cleared as soon as one is.
+        // A transport failure is not the screen answering `absent`, so the
+        // wait polls through it -- and if the deadline arrives with the
+        // question still unanswered, it reports that rather than blaming
+        // the app for a control it never got to look for.
+        let mut unanswered: Option<WebDriverError>;
         loop {
             match self
                 .session
@@ -458,7 +464,8 @@ impl AppiumSession {
                 .await
             {
                 Ok(element) => return Ok(element),
-                Err(e) if e.is_no_such_element() => {}
+                Err(e) if e.is_no_such_element() => unanswered = None,
+                Err(e) if e.is_transport() => unanswered = Some(e),
                 Err(e) => return Err(e.into()),
             }
             let now = tokio::time::Instant::now();
@@ -472,23 +479,43 @@ impl AppiumSession {
                 probed = true;
                 // A wait spends probes out of its own deadline, and a short
                 // one routinely cuts them off: being out of budget is not a
-                // failure here, it is a reason to keep polling.
-                if let Probe::Found(element) = self
+                // failure here, it is a reason to keep polling. Neither is a
+                // probe that never got an answer -- the scrolling search
+                // talks to the same driver the plain lookup does, and a
+                // transport failure in either is the wait's to poll through.
+                match self
                     .probe_below_the_fold(accessibility_id, early_budget)
-                    .await?
+                    .await
                 {
-                    return Ok(element);
+                    Ok(Probe::Found(element)) => return Ok(element),
+                    // The tree answered: whatever went unanswered before it
+                    // is stale, and the control really is absent so far.
+                    Ok(Probe::NotThere) => unanswered = None,
+                    // Cut off before it could answer: it settles nothing.
+                    Ok(Probe::OutOfBudget) => {}
+                    Err(AppiumError::WebDriver(e)) if e.is_transport() => unanswered = Some(e),
+                    Err(e) => return Err(e),
                 }
             }
             if tokio::time::Instant::now() >= deadline {
                 // A screen that finished building late is below the fold
                 // only now; look once more before calling the control
                 // missing, unless this very iteration already did.
-                if !probing_now
-                    && let Probe::Found(element) =
-                        self.probe_below_the_fold(accessibility_id, budget).await?
-                {
-                    return Ok(element);
+                if !probing_now {
+                    match self.probe_below_the_fold(accessibility_id, budget).await {
+                        Ok(Probe::Found(element)) => return Ok(element),
+                        // The tree answered: whatever went unanswered before
+                        // it is stale, and the control really is absent.
+                        Ok(Probe::NotThere) => unanswered = None,
+                        // Cut off before it could answer: it settles nothing
+                        // either way, so an unanswered poll stays unanswered.
+                        Ok(Probe::OutOfBudget) => {}
+                        Err(AppiumError::WebDriver(e)) if e.is_transport() => unanswered = Some(e),
+                        Err(e) => return Err(e),
+                    }
+                }
+                if let Some(e) = unanswered {
+                    return Err(e.into());
                 }
                 return Err(AppiumError::WaitTimeout {
                     accessibility_id: accessibility_id.to_owned(),
@@ -507,11 +534,18 @@ impl AppiumSession {
         timeout: Duration,
     ) -> Result<(), AppiumError> {
         let deadline = tokio::time::Instant::now() + timeout;
+        let mut unanswered: Option<WebDriverError>;
         loop {
-            if !self.exists(accessibility_id).await? {
-                return Ok(());
+            match self.exists(accessibility_id).await {
+                Ok(false) => return Ok(()),
+                Ok(true) => unanswered = None,
+                Err(AppiumError::WebDriver(e)) if e.is_transport() => unanswered = Some(e),
+                Err(e) => return Err(e),
             }
             if tokio::time::Instant::now() >= deadline {
+                if let Some(e) = unanswered {
+                    return Err(e.into());
+                }
                 return Err(AppiumError::WaitTimeout {
                     accessibility_id: accessibility_id.to_owned(),
                     condition: "still present",

@@ -2,6 +2,8 @@
 //! state appears and, when appropriate, its external consequence is
 //! observed. Every action records evidence and a timeline entry.
 
+use std::fmt;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use mortsom_android_driver::avd::Actor;
@@ -88,6 +90,7 @@ pub async fn wait_app_state(
 ) -> Result<String, ScenarioError> {
     let session = ctx.actor(actor)?;
     let device = session.device(ctx.ui_timeout);
+    let last: Mutex<LastSeen> = Mutex::new(LastSeen::default());
     let found = wait_until(ctx.state_timeout, STATE_POLL, || async {
         match ctx.adapter.observe_order(&device, order).await {
             Ok(state) if state.state == expected => Some(Ok(state.raw_label)),
@@ -97,8 +100,21 @@ pub async fn wait_app_state(
                 "order {} reached terminal `{}` while waiting for {expected}",
                 order.id, state.raw_label
             )))),
-            Ok(_) => None,
-            Err(_) => None,
+            Ok(state) => {
+                last.lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .read(state.raw_label);
+                None
+            }
+            // An observation that failed is not the app showing the wrong
+            // state: it is kept beside the last status the app did render,
+            // so the deadline can say which of the two it ended on.
+            Err(e) => {
+                last.lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .failed(e.to_string());
+                None
+            }
         }
     })
     .await;
@@ -129,9 +145,12 @@ pub async fn wait_app_state(
                     session.ui.as_ref(),
                 )
                 .await;
-            Err(ScenarioError::product(format!(
-                "order {} did not reach {expected} on {actor} within {:?}",
-                order.id, ctx.state_timeout
+            Err(ScenarioError::product(state_timeout_message(
+                order,
+                &expected.to_string(),
+                actor,
+                ctx.state_timeout,
+                &last.lock().unwrap_or_else(|p| p.into_inner()),
             )))
         }
     }
@@ -181,6 +200,66 @@ pub async fn wait_app_state_in(
             names(accepted)
         ))),
     }
+}
+
+/// What the observations of an order said before the deadline.
+///
+/// A wait that ends without its state has to say which of the two happened:
+/// the app showed something else, or the app was never read at all. They
+/// point at opposite halves of the system, and a message that omits it
+/// blames the product for what may be a broken navigation.
+///
+/// The two are kept apart rather than overwriting each other, because an
+/// intermittent failure produces both: a read that fails does not unsee the
+/// status an earlier one read, and a wait that ends that way is neither
+/// story on its own. A successful read does clear the failure -- a blip the
+/// next poll answered is not what the deadline is about.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LastSeen {
+    /// The last raw status label the app rendered, if it was ever read.
+    status: Option<String>,
+    /// Why the most recent observation failed, if it was the last word.
+    failure: Option<String>,
+}
+
+impl LastSeen {
+    /// Records a status the app rendered; the failures before it are stale.
+    fn read(&mut self, raw: String) {
+        self.status = Some(raw);
+        self.failure = None;
+    }
+
+    /// Records an observation that failed, keeping any status already read.
+    fn failed(&mut self, why: String) {
+        self.failure = Some(why);
+    }
+}
+
+impl fmt::Display for LastSeen {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match (&self.status, &self.failure) {
+            (Some(raw), None) => write!(f, "last showed `{raw}`"),
+            (Some(raw), Some(why)) => {
+                write!(f, "last showed `{raw}`, and then could not be read: {why}")
+            }
+            (None, Some(why)) => write!(f, "was never read: {why}"),
+            (None, None) => write!(f, "was never read"),
+        }
+    }
+}
+
+/// The message a state wait leaves when its deadline passes.
+fn state_timeout_message(
+    order: &OrderReference,
+    expected: &str,
+    actor: Actor,
+    timeout: Duration,
+    last: &LastSeen,
+) -> String {
+    format!(
+        "order {} did not reach {expected} on {actor} within {timeout:?}; the app {last}",
+        order.id
+    )
 }
 
 fn names(states: &[OrderState]) -> String {
@@ -828,12 +907,106 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("did not reach taken"));
+        assert!(
+            err.message.contains("last showed `pending`"),
+            "the deadline must name what the app actually showed: {err}"
+        );
 
         *adapter.0.lock().unwrap() = OrderState::Taken;
         let raw = wait_app_state(&ctx, Actor::Alice, &order, OrderState::Taken)
             .await
             .unwrap();
         assert_eq!(raw, "taken");
+    }
+
+    /// A wait that ends without its state has to distinguish the app showing
+    /// something else from the app never being read: the first is the
+    /// product, the second is the harness, and a message that says neither
+    /// sends the reader to the wrong half of the system.
+    #[test]
+    fn a_state_deadline_says_what_the_last_observation_was() {
+        let order = OrderReference::new("o1");
+        let timeout = Duration::from_secs(180);
+
+        let mut seen = LastSeen::default();
+        seen.read("waiting-payment".into());
+        let showed = state_timeout_message(&order, "pending", Actor::Alice, timeout, &seen);
+        assert!(showed.contains("last showed `waiting-payment`"), "{showed}");
+
+        let mut seen = LastSeen::default();
+        seen.failed("trades.item.o1 not found".into());
+        let blind = state_timeout_message(&order, "pending", Actor::Alice, timeout, &seen);
+        assert!(
+            blind.contains("was never read: trades.item.o1 not found"),
+            "{blind}"
+        );
+        assert!(
+            !blind.contains("last showed"),
+            "an unread app is not a state the app showed: {blind}"
+        );
+
+        let never = state_timeout_message(
+            &order,
+            "pending",
+            Actor::Alice,
+            timeout,
+            &LastSeen::default(),
+        );
+        assert!(never.contains("the app was never read"), "{never}");
+    }
+
+    /// A read that fails after a successful one does not unsee it. Calling
+    /// such a wait blind sends the reader after a navigation bug that never
+    /// happened -- the app was read, repeatedly, and showed the wrong state;
+    /// only the last poll went unanswered. The deadline owes both halves.
+    #[test]
+    fn a_failed_read_does_not_erase_the_status_the_app_did_show() {
+        let order = OrderReference::new("o1");
+        let timeout = Duration::from_secs(180);
+
+        let mut seen = LastSeen::default();
+        seen.read("waiting-payment".into());
+        seen.failed("webdriver transport error".into());
+
+        let both = state_timeout_message(&order, "pending", Actor::Alice, timeout, &seen);
+        assert!(
+            both.contains("last showed `waiting-payment`"),
+            "a status read before the failure is still what the app showed: {both}"
+        );
+        assert!(
+            both.contains("could not be read: webdriver transport error"),
+            "the read that failed last is why the wait has nothing newer: {both}"
+        );
+        assert!(
+            !both.contains("was never read:"),
+            "an app read many times was not never read: {both}"
+        );
+    }
+
+    /// The other direction: a blip the next poll answered is not what the
+    /// deadline is about, so a successful read clears the failure before it.
+    #[test]
+    fn a_read_that_succeeds_clears_the_failure_before_it() {
+        let order = OrderReference::new("o1");
+        let mut seen = LastSeen::default();
+        seen.failed("webdriver transport error".into());
+        seen.read("waiting-payment".into());
+
+        let msg = state_timeout_message(
+            &order,
+            "pending",
+            Actor::Alice,
+            Duration::from_secs(180),
+            &seen,
+        );
+        assert_eq!(
+            msg,
+            format!(
+                "order o1 did not reach pending on alice within {:?}; the app last showed `waiting-payment`",
+                Duration::from_secs(180)
+            ),
+            "a failure the next poll answered has no place in the verdict: {msg}"
+        );
     }
 
     #[tokio::test]
