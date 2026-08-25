@@ -215,6 +215,8 @@ pub mod tests_support {
         keyboard_up: Mutex<bool>,
         /// Taps that land while the app settles and do nothing, per id.
         swallowed: Mutex<BTreeMap<String, u32>>,
+        /// Controls the app has greyed out while it works.
+        disabled: Mutex<Vec<String>>,
     }
 
     impl ScriptedUi {
@@ -301,6 +303,20 @@ pub mod tests_support {
         /// always acts on a tap cannot express this.
         pub fn swallows_taps(&self, id: &str, taps: u32) {
             self.swallowed.lock().unwrap().insert(id.into(), taps);
+        }
+
+        /// Greys `ids` out: on screen, but not accepting a press.
+        ///
+        /// A form that has been submitted and is waiting on the network
+        /// looks like this -- the button is still drawn, and pressing it
+        /// again does nothing the app would honour. A double that answers
+        /// every control as enabled cannot tell that apart from a form
+        /// that was never submitted at all.
+        pub fn disables(&self, ids: &[&str]) {
+            self.disabled
+                .lock()
+                .unwrap()
+                .extend(ids.iter().map(|s| (*s).to_owned()));
         }
 
         /// Whether this tap is swallowed, counting it if so.
@@ -416,8 +432,8 @@ pub mod tests_support {
         async fn text_of(&self, _: &str) -> Result<String, AppiumError> {
             Ok(String::new())
         }
-        async fn is_enabled(&self, _: &str) -> Result<bool, AppiumError> {
-            Ok(true)
+        async fn is_enabled(&self, id: &str) -> Result<bool, AppiumError> {
+            Ok(!self.disabled.lock().unwrap().iter().any(|d| d == id))
         }
         async fn label_of(&self, id: &str) -> Result<String, AppiumError> {
             Ok(self

@@ -101,16 +101,29 @@ pub async fn tap_until(
     control: &str,
     expected: &str,
 ) -> Result<(), AdapterError> {
-    tap_until_within(device, control, expected, TAP_PATIENCE).await
+    for _ in 0..TAP_ATTEMPTS {
+        tap(device, control).await?;
+        if appears_within(device, expected, TAP_PATIENCE).await? {
+            return Ok(());
+        }
+    }
+    Err(AdapterError::contract(format!(
+        "`{expected}` did not appear after tapping `{control}` {TAP_ATTEMPTS} times"
+    )))
 }
 
-/// [`tap_until`] with an explicit patience.
+/// [`tap_until`] for a control that must never act twice: it asks again
+/// only while `control` is still there to be pressed.
 ///
-/// A control that only has to draw answers in a moment. One that sends the
-/// order and waits on the network does not, and repeating that tap on a
-/// three-second hunch asks the app to submit twice -- so the patience
-/// belongs to the caller, who knows which kind of button it is.
-pub async fn tap_until_within(
+/// Submit is that kind of button. The first press publishes a real order
+/// on mainnet, and a second one publishes another that the run never sees
+/// in the trades list and never cancels in cleanup. Publishing also waits
+/// on the network, so a confirmation that has not drawn is not evidence of
+/// anything -- while a control still sitting on screen, still enabled, is
+/// the app saying it acted on nothing. That is the only thing worth
+/// re-tapping on; once the app has taken the tap, waiting is all that is
+/// left, and `expected` is waited for over the whole UI budget.
+pub async fn tap_unless_taken(
     device: &DeviceContext<'_>,
     control: &str,
     expected: &str,
@@ -121,10 +134,27 @@ pub async fn tap_until_within(
         if appears_within(device, expected, patience).await? {
             return Ok(());
         }
+        if !dropped(device, control).await? {
+            return expect(device, expected).await;
+        }
     }
     Err(AdapterError::contract(format!(
         "`{expected}` did not appear after tapping `{control}` {TAP_ATTEMPTS} times"
     )))
+}
+
+/// Whether `control` looks like it was never acted on: still on screen and
+/// still accepting a press. An app that took the tap has either left the
+/// screen behind or disabled the control while it works.
+async fn dropped(device: &DeviceContext<'_>, control: &str) -> Result<bool, AdapterError> {
+    if !present(device, control).await? {
+        return Ok(false);
+    }
+    device
+        .ui
+        .is_enabled(control)
+        .await
+        .map_err(|e| AdapterError::infrastructure(format!("probe `{control}` enabled: {e}")))
 }
 
 /// Whether `id` shows up within `patience`.

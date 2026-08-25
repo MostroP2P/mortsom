@@ -10,7 +10,7 @@ use mortsom_app_contract::{
 use mortsom_common::Secret;
 
 use super::nav::go_home;
-use super::{dismiss_keyboard, expect, label, listed, present, tap, tap_until_within, type_into};
+use super::{dismiss_keyboard, expect, label, listed, present, tap, tap_unless_taken, type_into};
 use crate::selectors::Ids;
 use crate::states::from_v2_label;
 
@@ -68,9 +68,11 @@ pub async fn create(
     // The keyboard closing moves the button as it is pressed, so the first
     // press is the one the app is most likely to drop.
     // Submit publishes the order and waits on the network before the
-    // confirmation draws, so it is given the whole UI budget to answer
-    // before the tap is repeated: asking again too early submits twice.
-    tap_until_within(
+    // confirmation draws, so it is given the whole UI budget to answer --
+    // and asked again only if the form is still there, unsubmitted. A
+    // second press the app did act on publishes a second live order that
+    // `new_trade_id` never returns and cleanup never cancels.
+    tap_unless_taken(
         device,
         Ids::ORDER_CREATE_SUBMIT,
         Ids::ORDER_CONFIRM_HOME,
