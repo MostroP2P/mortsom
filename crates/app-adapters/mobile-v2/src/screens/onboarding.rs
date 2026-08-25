@@ -26,9 +26,17 @@ pub async fn complete(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
     .await?
     {
         Some(id) if id != Ids::ORDER_ADD_FAB => tap(device, id).await?,
-        // The book is already up, or nothing came: `expect` below turns the
-        // second case into the automation-contract failure it is.
-        _ => {}
+        // The book is already up: the launch had no walkthrough.
+        Some(_) => {}
+        // Nothing came. That wait already spent the UI timeout, so waiting
+        // for the book again would only double how long a stuck app takes
+        // to report -- and delay the evidence and the cleanup behind it.
+        None => {
+            return Err(AdapterError::contract(format!(
+                "`{}` did not appear: the app showed neither the walkthrough nor the order book",
+                Ids::ORDER_ADD_FAB
+            )));
+        }
     }
     expect(device, Ids::ORDER_ADD_FAB).await?;
     // The marker may render just after the order book, so wait for it

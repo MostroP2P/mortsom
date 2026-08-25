@@ -119,6 +119,31 @@ async fn a_walkthrough_that_is_still_drawing_is_waited_for_not_missed() {
     );
 }
 
+/// An app stuck on its splash screen shows none of the screens onboarding
+/// waits for. That wait has already spent the UI timeout by the time it
+/// gives up, so reaching for the order book again would double how long a
+/// stuck actor takes to report -- and every actor's bootstrap is
+/// sequential, with the failure evidence and the cleanup queued behind it.
+#[tokio::test]
+async fn an_app_that_shows_nothing_is_reported_once_not_waited_for_twice() {
+    // A launch that draws neither the walkthrough nor the book.
+    let ui = FakeUi::default();
+
+    let error = adapter().onboard(&device(&ui), &env()).await.unwrap_err();
+
+    assert_eq!(
+        error.category,
+        mortsom_common::FailureCategory::AutomationContract
+    );
+    assert!(
+        error
+            .message
+            .contains("neither the walkthrough nor the order book"),
+        "the report should name what the app failed to show: {}",
+        error.message
+    );
+}
+
 #[tokio::test]
 async fn onboarding_skips_the_walkthrough_and_reads_the_generated_identity() {
     let ui = fresh_app();
