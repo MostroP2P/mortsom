@@ -64,7 +64,7 @@ pub async fn create(
     .await?;
     // The sats field is numeric, so the keyboard is still up over the
     // bottom of the form -- submit included.
-    dismiss_keyboard(device).await?;
+    dismiss_keyboard(device).await;
     tap(device, Ids::ORDER_CREATE_SUBMIT).await?;
     tap(device, Ids::ORDER_CONFIRM_HOME).await?;
     let id = new_trade_id(device, &known_before).await?;

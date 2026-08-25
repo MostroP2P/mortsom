@@ -350,6 +350,16 @@ pub mod tests_support {
             }
         }
         async fn tap(&self, id: &str) -> Result<(), AppiumError> {
+            // A control the keyboard covers cannot be tapped: it is not on
+            // the screen to be hit. A double that let it through would pass
+            // a flow the real driver cannot perform.
+            if self.covered(id) {
+                return Err(AppiumError::WaitTimeout {
+                    accessibility_id: id.into(),
+                    condition: "under the keyboard",
+                    timeout: Duration::ZERO,
+                });
+            }
             self.calls.lock().unwrap().push(format!("tap {id}"));
             if let Some(appear) = self.on_tap.lock().unwrap().get(id).cloned() {
                 self.present.lock().unwrap().extend(appear);
