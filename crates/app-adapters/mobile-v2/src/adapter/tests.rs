@@ -97,6 +97,28 @@ fn fresh_app() -> FakeUi {
     ui
 }
 
+/// The walkthrough's first frame is not up the instant the session opens:
+/// a cold start draws it a moment later. Asking once and moving on read an
+/// app that was still starting as an app with no walkthrough, and then
+/// waited out the whole UI timeout on the slide the order book never
+/// replaces -- which is what a real run reported as `order.add.fab did not
+/// appear`, with the skip button sitting in the hierarchy beside it.
+#[tokio::test]
+async fn a_walkthrough_that_is_still_drawing_is_waited_for_not_missed() {
+    let ui = fresh_app();
+    ui.appears_after(Ids::WALKTHROUGH_SKIP, 2);
+
+    let identity = adapter().onboard(&device(&ui), &env()).await.unwrap();
+
+    assert_eq!(identity.public_key, "npub1alice");
+    assert_eq!(
+        ui.calls().first().map(String::as_str),
+        Some("tap onboarding.walkthrough.skip"),
+        "the walkthrough was skipped, not waited out: {:?}",
+        ui.calls()
+    );
+}
+
 #[tokio::test]
 async fn onboarding_skips_the_walkthrough_and_reads_the_generated_identity() {
     let ui = fresh_app();
