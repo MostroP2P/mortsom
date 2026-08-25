@@ -47,9 +47,17 @@ impl ObserverScope {
         }
     }
 
-    /// Relay filters for the current scope. `limit(0)` asks the relay for
-    /// live delivery only; nostr-rs-relay honours it and the observer never
-    /// needs history because it subscribes before any run action.
+    /// Relay filters for the current scope.
+    ///
+    /// `limit(0)` asks the relay for live delivery only. That is right for
+    /// the standing filters, which are in place before any run action, and
+    /// wrong for the order filter: an order id joins the scope only once
+    /// the order exists, by which time the daemon has already published it
+    /// as `pending`. Asking for live delivery there means the relay never
+    /// sends the state that is already stored, and the run waits out its
+    /// whole state timeout for an event that arrived before it subscribed.
+    /// The order event is replaceable, so what comes back is the state the
+    /// order is actually in.
     pub fn filters(&self) -> Vec<Filter> {
         let mut filters = vec![
             Filter::new()
@@ -77,8 +85,7 @@ impl ObserverScope {
                         Kind::Custom(NOSTR_ORDER_EVENT_KIND),
                         Kind::Custom(NOSTR_DISPUTE_EVENT_KIND),
                     ])
-                    .identifiers(self.order_ids.clone())
-                    .limit(0),
+                    .identifiers(self.order_ids.clone()),
             );
         }
         if !self.actor_pubkeys.is_empty() {
