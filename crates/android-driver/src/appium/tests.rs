@@ -541,6 +541,65 @@ async fn a_failure_in_the_deciding_lookup_is_not_a_missing_control() {
     }
 }
 
+/// A request that never got an answer is not the element being absent and
+/// it is not the wait's verdict either: the poll keeps going until the
+/// deadline. A blip while the app is being reactivated used to end the wait
+/// -- and the run -- as an automation-contract failure.
+#[tokio::test]
+async fn a_wait_polls_through_a_transient_transport_failure() {
+    let server = MockServer::start().await;
+    let raw = Session::attach(&server.uri(), "s1", Duration::from_millis(100)).unwrap();
+    let s = AppiumSession::from_session(raw, "network.mostro.app");
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"value": {ELEMENT_KEY: "e1"}}))
+                .set_delay(Duration::from_millis(400)),
+        )
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"value": {ELEMENT_KEY: "e1"}})),
+        )
+        .mount(&server)
+        .await;
+
+    s.wait_for("appbar.drawer", Duration::from_secs(5))
+        .await
+        .expect("a transport blip mid-wait is not an answer about the app");
+}
+
+/// When every poll went unanswered, the wait must not claim the element was
+/// missing: nothing ever looked at the screen.
+#[tokio::test]
+async fn a_wait_that_never_got_an_answer_reports_the_transport_failure() {
+    let server = MockServer::start().await;
+    let raw = Session::attach(&server.uri(), "s1", Duration::from_millis(100)).unwrap();
+    let s = AppiumSession::from_session(raw, "network.mostro.app");
+    Mock::given(method("POST"))
+        .and(path("/session/s1/element"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"value": {ELEMENT_KEY: "e1"}}))
+                .set_delay(Duration::from_millis(400)),
+        )
+        .mount(&server)
+        .await;
+
+    let err = s
+        .wait_for("appbar.drawer", Duration::from_millis(300))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, AppiumError::WebDriver(e) if e.is_transport()),
+        "an unanswered wait says so, it does not report the element absent: {err:?}"
+    );
+}
+
 #[tokio::test]
 async fn primitives_map_to_webdriver_calls() {
     let server = MockServer::start().await;
