@@ -635,6 +635,18 @@ impl AppiumSession {
         Ok(())
     }
 
+    /// Puts the soft keyboard away (`mobile: hideKeyboard`).
+    ///
+    /// A keyboard is not an overlay the app can be found underneath: it
+    /// shrinks the viewport, and the app's semantics stop at what is left,
+    /// so a control it covers is absent rather than off-screen.
+    pub async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+        self.session
+            .execute("mobile: hideKeyboard", vec![json!({})])
+            .await?;
+        Ok(())
+    }
+
     /// Rotates the device (`POST /orientation`).
     pub async fn set_orientation(&self, landscape: bool) -> Result<(), AppiumError> {
         let orientation = if landscape { "LANDSCAPE" } else { "PORTRAIT" };

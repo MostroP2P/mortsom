@@ -144,6 +144,37 @@ async fn an_app_that_shows_nothing_is_reported_once_not_waited_for_twice() {
     );
 }
 
+/// The last field of the order form is a number, so typing into it leaves
+/// the numeric keyboard up -- over the bottom of the form, where submit
+/// lives. A keyboard is not something the driver can look underneath: it
+/// shrinks the viewport and the app's semantics stop there, so scrolling
+/// finds nothing either. A real Polar run died exactly here, polling
+/// `order.create.submit` for its whole 30s with the form correctly filled
+/// in behind the keyboard.
+#[tokio::test]
+async fn the_keyboard_is_put_away_before_the_order_is_submitted() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.keyboard_over(&[Ids::ORDER_CREATE_SUBMIT]);
+
+    let order = adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+
+    assert_eq!(order.id.as_deref(), Some("o1"), "the order was submitted");
+    let calls = ui.calls();
+    let hid = calls.iter().position(|c| c == "hide keyboard");
+    let submitted = calls
+        .iter()
+        .position(|c| c == "tap order.create.submit")
+        .expect("submit was never tapped");
+    assert!(
+        hid.is_some_and(|h| h < submitted),
+        "submit was tapped with the keyboard still up: {calls:?}"
+    );
+}
+
 #[tokio::test]
 async fn onboarding_skips_the_walkthrough_and_reads_the_generated_identity() {
     let ui = fresh_app();

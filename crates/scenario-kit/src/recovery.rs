@@ -644,6 +644,11 @@ mod tests {
         struct StuckRotation;
         #[async_trait::async_trait]
         impl mortsom_android_driver::ui::UiSession for StuckRotation {
+            async fn hide_keyboard(
+                &self,
+            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+                Ok(())
+            }
             /// Rotating away works; coming back does not.
             async fn set_orientation(
                 &self,

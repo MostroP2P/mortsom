@@ -10,7 +10,7 @@ use mortsom_app_contract::{
 use mortsom_common::Secret;
 
 use super::nav::go_home;
-use super::{expect, label, listed, present, tap, type_into};
+use super::{dismiss_keyboard, expect, label, listed, present, tap, type_into};
 use crate::selectors::Ids;
 use crate::states::from_v2_label;
 
@@ -62,6 +62,9 @@ pub async fn create(
         &draft.amount_sats.to_string(),
     )
     .await?;
+    // The sats field is numeric, so the keyboard is still up over the
+    // bottom of the form -- submit included.
+    dismiss_keyboard(device).await;
     tap(device, Ids::ORDER_CREATE_SUBMIT).await?;
     tap(device, Ids::ORDER_CONFIRM_HOME).await?;
     let id = new_trade_id(device, &known_before).await?;

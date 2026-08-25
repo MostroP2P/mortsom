@@ -8,6 +8,7 @@ pub mod settings;
 pub mod wallet;
 
 use mortsom_app_contract::{AdapterError, DeviceContext};
+use tracing::warn;
 
 /// Gap between looks while waiting for one of several screens.
 const SCREEN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
@@ -78,6 +79,24 @@ pub async fn first_present<'a>(
             return Ok(None);
         }
         tokio::time::sleep(SCREEN_POLL).await;
+    }
+}
+
+/// Puts the soft keyboard away, so the controls it covers are reachable.
+///
+/// Typing into a field raises it over the bottom of the form. That is not
+/// an element hidden below the fold: the keyboard shrinks the viewport and
+/// the app's semantics stop there, so the control underneath is absent and
+/// no scrolling look finds it.
+///
+/// Best effort: a driver that will not put a keyboard away -- or that
+/// objects because there was none up to begin with -- must not fail a run
+/// on its own. What the caller actually needs is the control underneath,
+/// and the wait for it says so precisely if the keyboard really was in the
+/// way.
+pub async fn dismiss_keyboard(device: &DeviceContext<'_>) {
+    if let Err(e) = device.ui.hide_keyboard().await {
+        warn!(error = %e, "could not put the keyboard away");
     }
 }
 

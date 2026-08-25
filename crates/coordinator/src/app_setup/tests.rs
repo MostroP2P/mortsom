@@ -358,6 +358,9 @@ impl UiSession for FakeSession {
     async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
         Ok(())
     }
+    async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+        Ok(())
+    }
     async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
         Ok(())
     }
