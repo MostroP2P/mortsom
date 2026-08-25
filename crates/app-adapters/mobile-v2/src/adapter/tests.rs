@@ -97,6 +97,53 @@ fn fresh_app() -> FakeUi {
     ui
 }
 
+/// The walkthrough's first frame is not up the instant the session opens:
+/// a cold start draws it a moment later. Asking once and moving on read an
+/// app that was still starting as an app with no walkthrough, and then
+/// waited out the whole UI timeout on the slide the order book never
+/// replaces -- which is what a real run reported as `order.add.fab did not
+/// appear`, with the skip button sitting in the hierarchy beside it.
+#[tokio::test]
+async fn a_walkthrough_that_is_still_drawing_is_waited_for_not_missed() {
+    let ui = fresh_app();
+    ui.appears_after(Ids::WALKTHROUGH_SKIP, 2);
+
+    let identity = adapter().onboard(&device(&ui), &env()).await.unwrap();
+
+    assert_eq!(identity.public_key, "npub1alice");
+    assert_eq!(
+        ui.calls().first().map(String::as_str),
+        Some("tap onboarding.walkthrough.skip"),
+        "the walkthrough was skipped, not waited out: {:?}",
+        ui.calls()
+    );
+}
+
+/// An app stuck on its splash screen shows none of the screens onboarding
+/// waits for. That wait has already spent the UI timeout by the time it
+/// gives up, so reaching for the order book again would double how long a
+/// stuck actor takes to report -- and every actor's bootstrap is
+/// sequential, with the failure evidence and the cleanup queued behind it.
+#[tokio::test]
+async fn an_app_that_shows_nothing_is_reported_once_not_waited_for_twice() {
+    // A launch that draws neither the walkthrough nor the book.
+    let ui = FakeUi::default();
+
+    let error = adapter().onboard(&device(&ui), &env()).await.unwrap_err();
+
+    assert_eq!(
+        error.category,
+        mortsom_common::FailureCategory::AutomationContract
+    );
+    assert!(
+        error
+            .message
+            .contains("neither the walkthrough nor the order book"),
+        "the report should name what the app failed to show: {}",
+        error.message
+    );
+}
+
 #[tokio::test]
 async fn onboarding_skips_the_walkthrough_and_reads_the_generated_identity() {
     let ui = fresh_app();

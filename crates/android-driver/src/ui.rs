@@ -201,6 +201,9 @@ pub mod tests_support {
         on_tap_relabel: Mutex<BTreeMap<String, (String, String)>>,
         /// Elements rendered below the fold: only a scrolling look finds them.
         below: Mutex<Vec<String>>,
+        /// Elements the app has not drawn yet, with the number of probes
+        /// still to miss them.
+        pending: Mutex<BTreeMap<String, u32>>,
     }
 
     impl ScriptedUi {
@@ -255,6 +258,16 @@ pub mod tests_support {
                 .extend(ids.iter().map(|s| (*s).to_owned()));
         }
 
+        /// Makes `id` miss its next `probes` looks before it is there.
+        ///
+        /// A cold start is exactly this: the session opens before the app
+        /// has drawn its first frame, so an element the screen will show is
+        /// briefly absent. A double that is either present or not cannot
+        /// tell a screen apart from a screen that has not arrived.
+        pub fn appears_after(&self, id: &str, probes: u32) {
+            self.pending.lock().unwrap().insert(id.into(), probes);
+        }
+
         /// Whether `id` is anywhere on the current screen, fold or no fold.
         pub fn has_anywhere(&self, id: &str) -> bool {
             self.has(id) || self.below.lock().unwrap().iter().any(|p| p == id)
@@ -264,7 +277,21 @@ pub mod tests_support {
     #[async_trait]
     impl UiSession for ScriptedUi {
         async fn exists(&self, id: &str) -> Result<bool, AppiumError> {
-            Ok(self.has(id))
+            let drawn = {
+                let mut pending = self.pending.lock().unwrap();
+                match pending.get_mut(id) {
+                    Some(left) if *left > 0 => {
+                        *left -= 1;
+                        false
+                    }
+                    Some(_) => {
+                        pending.remove(id);
+                        true
+                    }
+                    None => true,
+                }
+            };
+            Ok(drawn && self.has(id))
         }
         async fn exists_anywhere(&self, id: &str) -> Result<bool, AppiumError> {
             Ok(self.has_anywhere(id))
