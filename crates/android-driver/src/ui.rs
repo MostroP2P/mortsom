@@ -213,6 +213,8 @@ pub mod tests_support {
         under_keyboard: Mutex<Vec<String>>,
         /// Whether typing has raised the keyboard.
         keyboard_up: Mutex<bool>,
+        /// Taps that land while the app settles and do nothing, per id.
+        swallowed: Mutex<BTreeMap<String, u32>>,
     }
 
     impl ScriptedUi {
@@ -291,6 +293,28 @@ pub mod tests_support {
                 .extend(ids.iter().map(|s| (*s).to_owned()));
         }
 
+        /// Makes the next `taps` on `id` land and do nothing.
+        ///
+        /// An app rebuilding a screen -- after a relaunch, or as a keyboard
+        /// closes under the button -- takes the tap and acts on none of it.
+        /// The control is there and the driver hits it, so a double that
+        /// always acts on a tap cannot express this.
+        pub fn swallows_taps(&self, id: &str, taps: u32) {
+            self.swallowed.lock().unwrap().insert(id.into(), taps);
+        }
+
+        /// Whether this tap is swallowed, counting it if so.
+        fn swallows(&self, id: &str) -> bool {
+            let mut swallowed = self.swallowed.lock().unwrap();
+            match swallowed.get_mut(id) {
+                Some(left) if *left > 0 => {
+                    *left -= 1;
+                    true
+                }
+                _ => false,
+            }
+        }
+
         /// Whether the keyboard is covering `id` right now.
         fn covered(&self, id: &str) -> bool {
             *self.keyboard_up.lock().unwrap()
@@ -361,6 +385,9 @@ pub mod tests_support {
                 });
             }
             self.calls.lock().unwrap().push(format!("tap {id}"));
+            if self.swallows(id) {
+                return Ok(());
+            }
             if let Some(appear) = self.on_tap.lock().unwrap().get(id).cloned() {
                 self.present.lock().unwrap().extend(appear);
             }

@@ -13,6 +13,13 @@ use tracing::warn;
 /// Gap between looks while waiting for one of several screens.
 const SCREEN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
+/// How long a control that only has to draw has to answer before the tap
+/// is repeated.
+const TAP_PATIENCE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// How many times a tap is repeated before it is a contract failure.
+const TAP_ATTEMPTS: usize = 3;
+
 /// Waits for `id` within the UI timeout; a missing element is an
 /// automation-contract failure.
 pub async fn expect(device: &DeviceContext<'_>, id: &str) -> Result<(), AdapterError> {
@@ -77,6 +84,62 @@ pub async fn first_present<'a>(
         }
         if tokio::time::Instant::now() >= deadline {
             return Ok(None);
+        }
+        tokio::time::sleep(SCREEN_POLL).await;
+    }
+}
+
+/// Taps `control` until `expected` shows up, or reports that it never did.
+///
+/// A tap that lands while the app is rebuilding a screen is swallowed: the
+/// control is on screen, the driver hits it, and nothing happens -- a
+/// keyboard closing under the button as it is pressed, or a screen still
+/// settling after a relaunch. Waiting longer cannot help, because nobody
+/// is going to act on the tap that was dropped. Asking again is what does.
+pub async fn tap_until(
+    device: &DeviceContext<'_>,
+    control: &str,
+    expected: &str,
+) -> Result<(), AdapterError> {
+    tap_until_within(device, control, expected, TAP_PATIENCE).await
+}
+
+/// [`tap_until`] with an explicit patience.
+///
+/// A control that only has to draw answers in a moment. One that sends the
+/// order and waits on the network does not, and repeating that tap on a
+/// three-second hunch asks the app to submit twice -- so the patience
+/// belongs to the caller, who knows which kind of button it is.
+pub async fn tap_until_within(
+    device: &DeviceContext<'_>,
+    control: &str,
+    expected: &str,
+    patience: std::time::Duration,
+) -> Result<(), AdapterError> {
+    for _ in 0..TAP_ATTEMPTS {
+        tap(device, control).await?;
+        if appears_within(device, expected, patience).await? {
+            return Ok(());
+        }
+    }
+    Err(AdapterError::contract(format!(
+        "`{expected}` did not appear after tapping `{control}` {TAP_ATTEMPTS} times"
+    )))
+}
+
+/// Whether `id` shows up within `patience`.
+async fn appears_within(
+    device: &DeviceContext<'_>,
+    id: &str,
+    patience: std::time::Duration,
+) -> Result<bool, AdapterError> {
+    let deadline = tokio::time::Instant::now() + patience;
+    loop {
+        if present(device, id).await? {
+            return Ok(true);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
         }
         tokio::time::sleep(SCREEN_POLL).await;
     }

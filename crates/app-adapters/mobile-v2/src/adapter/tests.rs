@@ -175,6 +175,47 @@ async fn the_keyboard_is_put_away_before_the_order_is_submitted() {
     );
 }
 
+/// A tap that lands while the app is rebuilding a screen is swallowed: the
+/// control is there, the driver hits it, and nothing happens. Waiting
+/// longer cannot help -- nobody is going to act on it. Submit is the tap
+/// this bites, because the keyboard closing just above it moves the button
+/// as it is pressed; a real Polar run left the order form on screen with
+/// every field filled and `order.confirm.home` never arriving.
+#[tokio::test]
+async fn a_swallowed_submit_is_tapped_again() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.swallows_taps(Ids::ORDER_CREATE_SUBMIT, 1);
+
+    let order = adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+
+    assert_eq!(order.id.as_deref(), Some("o1"), "the order was submitted");
+}
+
+/// The same swallowed tap on the drawer: after a relaunch the app is still
+/// settling, the hamburger is on screen, and the tap opens nothing. A real
+/// run reported `drawer.account did not appear` with the order book -- and
+/// the closed drawer -- in the screenshot beside it.
+#[tokio::test]
+async fn a_swallowed_drawer_tap_is_tapped_again() {
+    let ui = app_with_orders();
+    // The drawer closes behind you when you pick a destination, so its
+    // items are only on screen while it is open.
+    ui.on_tap_hide(
+        Ids::DRAWER_ACCOUNT,
+        &[Ids::DRAWER_ACCOUNT, Ids::DRAWER_SETTINGS],
+    );
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.swallows_taps(Ids::APPBAR_DRAWER, 1);
+
+    let identity = adapter().displayed_identity(&device(&ui)).await.unwrap();
+
+    assert_eq!(identity.public_key, "npub1alice");
+}
+
 #[tokio::test]
 async fn onboarding_skips_the_walkthrough_and_reads_the_generated_identity() {
     let ui = fresh_app();
