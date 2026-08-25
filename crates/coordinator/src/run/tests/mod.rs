@@ -258,6 +258,9 @@ impl UiSession for FakeSession {
             .store(enabled, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
+    async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+        Ok(())
+    }
     async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
         Ok(())
     }

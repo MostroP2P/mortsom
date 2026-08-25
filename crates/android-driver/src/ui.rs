@@ -51,6 +51,8 @@ pub trait UiSession: Send + Sync {
     async fn set_connectivity(&self, enabled: bool) -> Result<(), AppiumError>;
     /// Rotate the device to landscape or portrait.
     async fn set_orientation(&self, landscape: bool) -> Result<(), AppiumError>;
+    /// Dismiss the soft keyboard if one is up.
+    async fn hide_keyboard(&self) -> Result<(), AppiumError>;
     /// End the session.
     async fn end(&self) -> Result<(), AppiumError>;
 }
@@ -104,6 +106,9 @@ impl UiSession for AppiumSession {
     }
     async fn set_connectivity(&self, enabled: bool) -> Result<(), AppiumError> {
         AppiumSession::set_connectivity(self, enabled).await
+    }
+    async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+        AppiumSession::hide_keyboard(self).await
     }
     async fn set_orientation(&self, landscape: bool) -> Result<(), AppiumError> {
         AppiumSession::set_orientation(self, landscape).await
@@ -204,6 +209,10 @@ pub mod tests_support {
         /// Elements the app has not drawn yet, with the number of probes
         /// still to miss them.
         pending: Mutex<BTreeMap<String, u32>>,
+        /// Elements the soft keyboard covers while it is up.
+        under_keyboard: Mutex<Vec<String>>,
+        /// Whether typing has raised the keyboard.
+        keyboard_up: Mutex<bool>,
     }
 
     impl ScriptedUi {
@@ -268,6 +277,26 @@ pub mod tests_support {
             self.pending.lock().unwrap().insert(id.into(), probes);
         }
 
+        /// Marks `ids` as the part of the screen the soft keyboard covers.
+        ///
+        /// Typing raises it and `hide_keyboard` puts it down. A covered
+        /// element is gone, not merely off-screen: the app's semantics stop
+        /// at the shrunken viewport, so no amount of scrolling finds it --
+        /// which is why a double that only knows "above" and "below the
+        /// fold" cannot express this.
+        pub fn keyboard_over(&self, ids: &[&str]) {
+            self.under_keyboard
+                .lock()
+                .unwrap()
+                .extend(ids.iter().map(|s| (*s).to_owned()));
+        }
+
+        /// Whether the keyboard is covering `id` right now.
+        fn covered(&self, id: &str) -> bool {
+            *self.keyboard_up.lock().unwrap()
+                && self.under_keyboard.lock().unwrap().iter().any(|p| p == id)
+        }
+
         /// Whether `id` is anywhere on the current screen, fold or no fold.
         pub fn has_anywhere(&self, id: &str) -> bool {
             self.has(id) || self.below.lock().unwrap().iter().any(|p| p == id)
@@ -291,14 +320,15 @@ pub mod tests_support {
                     None => true,
                 }
             };
-            Ok(drawn && self.has(id))
+            Ok(drawn && self.has(id) && !self.covered(id))
         }
         async fn exists_anywhere(&self, id: &str) -> Result<bool, AppiumError> {
-            Ok(self.has_anywhere(id))
+            Ok(self.has_anywhere(id) && !self.covered(id))
         }
         async fn wait_for(&self, id: &str, _: Duration) -> Result<(), AppiumError> {
-            // A wait scrolls before it gives up, so it sees below the fold.
-            if self.has_anywhere(id) {
+            // A wait scrolls before it gives up, so it sees below the fold --
+            // but not under the keyboard, which is not a scrolling problem.
+            if self.has_anywhere(id) && !self.covered(id) {
                 Ok(())
             } else {
                 Err(AppiumError::WaitTimeout {
@@ -332,7 +362,13 @@ pub mod tests_support {
             }
             Ok(())
         }
+        async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+            self.calls.lock().unwrap().push("hide keyboard".into());
+            *self.keyboard_up.lock().unwrap() = false;
+            Ok(())
+        }
         async fn type_text(&self, id: &str, text: &str) -> Result<(), AppiumError> {
+            *self.keyboard_up.lock().unwrap() = true;
             // Record the length only: secrets never reach logs, not even fakes'.
             self.calls
                 .lock()

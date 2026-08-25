@@ -81,6 +81,20 @@ pub async fn first_present<'a>(
     }
 }
 
+/// Puts the soft keyboard away, so the controls it covers are reachable.
+///
+/// Typing into a field raises it over the bottom of the form. That is not
+/// an element hidden below the fold: the keyboard shrinks the viewport and
+/// the app's semantics stop there, so the control underneath is absent and
+/// no scrolling look finds it.
+pub async fn dismiss_keyboard(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
+    device
+        .ui
+        .hide_keyboard()
+        .await
+        .map_err(|e| AdapterError::infrastructure(format!("hide the keyboard: {e}")))
+}
+
 /// Whether `id` is present right now.
 pub async fn present(device: &DeviceContext<'_>, id: &str) -> Result<bool, AdapterError> {
     device
