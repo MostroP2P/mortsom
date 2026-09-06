@@ -517,3 +517,7 @@ Interruption timing (`run.quiet_window_secs`, `run.background_secs`,
 
 All code, comments, identifiers, documentation, commit messages and issues in
 this project are written in **English**.
+
+## License
+
+This project is licensed under the [GNU General Public License v3.0](LICENSE).
