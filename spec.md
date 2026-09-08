@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 13 completed, 12 in progress and 40 pending.
+current evidence separately. Section 17 tracks 65 tasks: 14 completed, 11 in progress and 40 pending.
 Live scenario acceptance remains Linux 0/20 and Web 0/20.
 
 ## 1. Objective and completion criteria
@@ -548,12 +548,15 @@ current evidence agree.
 - [ ] **IN PROGRESS — P1.5 Finish artifact preparation.** Source lookup is confined to builds; supported binding
   and Web scripts, tool resolution and sanitized failures are wired. Tests pass for source-absent prebuilt
   clients, invalid/incomplete bundles and generation failures/missing outputs. Provenance validation remains.
-- [ ] **IN PROGRESS — P1.6 Implement platform-aware doctor.** Linux/Web doctor resolves public stack status
-  and checks selected runtime/build tools, app-owned codegen pins, Linux development libraries and Web
-  nightly/rust-src prerequisites. Real source-build diagnostics passed Linux 38/38 and Web 35/35 checks;
-  prebuilt paths passed Linux 21/21 and Web 17/17. Daemon identity/protocol, local endpoints, regtest wallet
-  capabilities and liquidity are checked read-only. Enforce these prerequisites before an expensive run
-  build and finish the no-order/no-wallet-mutation boundary audit before completion.
+- [x] **P1.6 DONE — Implement platform-aware doctor.** Source-build diagnostics passed Linux 38/38
+  and Web 35/35; prebuilt paths passed Linux 21/21 and Web 17/17. Selected host tools, executable app
+  scripts, codegen pin, native development libraries and Web nightly/rust-src are checked before any run
+  build. Explicit relative/absolute Xvfb paths are honored. A real CLI invocation with Flutter/Xvfb absent
+  exited 2 before generation, client startup or orders. Network checks separately verify signed daemon
+  identity/protocol, endpoints, regtest and liquidity before clients start. Doctor uses only daemon reads,
+  NWC get_info/get_balance and LND GetInfo/ChannelBalance; LND mutation permissions are not proven by the
+  reported backend-supported methods. Independent review corrected the relative-path regression;
+  coordinator/CLI tests and strict clippy are recorded with this task's commit.
 - [ ] **IN PROGRESS — P1.7 Lock stack/wallet ownership independently of artifacts.** Reviewed canonical-HOME
   lock serializes stack/client lifecycle mutations, including updates and cleanup, independently of artifacts.
   Unit/CLI tests cover contention and release. Direct Ortsom commands and other users are outside this
@@ -818,6 +821,11 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
   `/tmp/mortsom-maintenance-clippy.log`. Independent review closed recorded-platform and publication
   compatibility findings. New-driver coverage, lifecycle failure tests, complete build provenance and
   per-scenario reset remain pending.
+- Run preparation now rejects missing host/build tools before invoking app generation. A real CLI probe
+  with a restricted PATH exited 2 naming Flutter and Xvfb, without clients/orders/payments; evidence is
+  `/tmp/mortsom-prebuild-live-missing-tools.log`. Relative and absolute Xvfb overrides have regressions.
+  Doctor's read-only call graph was independently audited. Backend-supported LND operations are reported;
+  the probe does not exercise or prove mutation permissions of the configured macaroon.
 - Independent review found startup-readiness and cleanup gaps. Fixes are in
   progress and are not considered accepted until tests and live reruns pass.
 - The twenty-case acceptance matrix and CPU/RSS comparison remain pending.

@@ -10,6 +10,7 @@ mod tools;
 
 use std::path::Path;
 
+pub(crate) use desktop::require_build_prerequisites;
 pub use desktop::{DesktopDoctorOptions, DesktopPreflight, desktop_preflight, run_desktop_doctor};
 pub use host::{CommandOutput, HostProbe, RealHost};
 pub use mortsom_common::check::{CheckResult, CheckStatus, DoctorReport};

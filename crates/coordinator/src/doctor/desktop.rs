@@ -30,6 +30,7 @@ pub async fn run_desktop_doctor(
     check_tools(
         options.platform,
         options.artifact.is_none(),
+        Path::new("Xvfb"),
         host,
         &mut report,
     );
@@ -106,6 +107,7 @@ pub async fn run_desktop_doctor(
 fn check_tools(
     platform: Platform,
     needs_build: bool,
+    xvfb: &Path,
     host: &dyn HostProbe,
     report: &mut DoctorReport,
 ) {
@@ -117,9 +119,11 @@ fn check_tools(
     for tool in tools {
         check_tool(tool, None, host, report);
     }
+    if platform == Platform::Linux {
+        check_tool(&xvfb.to_string_lossy(), None, host, report);
+    }
     let tools: &[(&str, Option<&str>)] = match platform {
         Platform::Linux => &[
-            ("Xvfb", None),
             ("dbus-daemon", None),
             ("gnome-keyring-daemon", None),
             ("import", None),
@@ -140,7 +144,7 @@ fn check_tools(
 fn check_tool(tool: &str, variable: Option<&str>, host: &dyn HostProbe, report: &mut DoctorReport) {
     let configured = variable.and_then(|key| host.env(key));
     let program = configured.as_deref().unwrap_or(tool);
-    let path = if Path::new(program).is_absolute() {
+    let path = if program.contains(std::path::MAIN_SEPARATOR) {
         host.is_executable(Path::new(program))
             .then(|| Path::new(program).to_path_buf())
     } else {
@@ -288,5 +292,32 @@ pub async fn desktop_preflight(config: &Config, net: &dyn NetProbes) -> DesktopP
     DesktopPreflight {
         daemon_version,
         checks,
+    }
+}
+
+/// Checks selected runtime and build requirements before any expensive generation/build.
+pub(crate) async fn require_build_prerequisites(
+    config: &Config,
+    platform: Platform,
+    xvfb: &Path,
+    host: &dyn HostProbe,
+) -> Result<(), String> {
+    let mut report = DoctorReport::default();
+    check_tools(platform, true, xvfb, host, &mut report);
+    check_app(config, platform, None, host, &mut report);
+    super::desktop_build::check(
+        Path::new(&config.mobile.source_dir),
+        platform,
+        host,
+        &mut report,
+    )
+    .await;
+    if report.is_healthy() {
+        Ok(())
+    } else {
+        Err(mortsom_common::Redactor::default().redact(&format!(
+            "desktop build prerequisites failed before generation:\n{}",
+            report.render_with_color(false)
+        )))
     }
 }

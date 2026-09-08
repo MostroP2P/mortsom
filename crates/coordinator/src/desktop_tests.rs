@@ -145,7 +145,7 @@ async fn binding_failure_stops_the_build_and_redacts_child_output() {
         None,
         "Xvfb".into(),
         &runner,
-        &crate::doctor::RealHost,
+        &BuildHost { missing: None },
     )
     .await
     .unwrap_err();
@@ -168,7 +168,7 @@ async fn successful_build_command_without_outputs_is_rejected() {
                 None,
                 "Xvfb".into(),
                 &runner,
-                &crate::doctor::RealHost
+                &BuildHost { missing: None }
             )
             .await
             .is_err()
@@ -179,5 +179,107 @@ async fn successful_build_command_without_outputs_is_rejected() {
         if platform == Platform::Web {
             assert!(calls[1].ends_with("./scripts/build-web.sh --release"));
         }
+    }
+}
+
+#[tokio::test]
+async fn missing_build_tool_stops_before_codegen_or_flutter_runs() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = config(root.path());
+    config.mobile.source_dir = root.path().display().to_string();
+    for (platform, missing) in [
+        (Platform::Linux, "flutter"),
+        (Platform::Linux, "ninja"),
+        (Platform::Linux, "Xvfb"),
+        (Platform::Web, "wasm-pack"),
+        (Platform::Web, "chromedriver"),
+    ] {
+        let runner = FakeRunner::default();
+        let host = BuildHost {
+            missing: Some(missing),
+        };
+        let error = prepare(&config, platform, None, "Xvfb".into(), &runner, &host)
+            .await
+            .unwrap_err();
+        assert!(
+            runner.calls().is_empty(),
+            "missing {missing} must prevent all builds"
+        );
+        assert!(error.contains(missing));
+    }
+}
+
+#[tokio::test]
+async fn a_custom_xvfb_path_satisfies_runtime_checks_before_the_build() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = config(root.path());
+    config.mobile.source_dir = root.path().display().to_string();
+    for executable in ["/custom/Xvfb", "./tools/Xvfb"] {
+        let runner = FakeRunner::default();
+        let host = BuildHost {
+            missing: Some("Xvfb"),
+        };
+        let result = prepare(
+            &config,
+            Platform::Linux,
+            None,
+            executable.into(),
+            &runner,
+            &host,
+        )
+        .await;
+        assert!(result.is_err(), "fake build has no outputs");
+        assert_eq!(
+            runner.calls().len(),
+            2,
+            "the selected {executable} permits generation/build"
+        );
+    }
+}
+
+struct BuildHost {
+    missing: Option<&'static str>,
+}
+
+#[async_trait::async_trait]
+impl crate::doctor::HostProbe for BuildHost {
+    fn env(&self, _: &str) -> Option<String> {
+        None
+    }
+    fn which(&self, name: &str) -> Option<PathBuf> {
+        (self.missing != Some(name) && !name.contains('/')).then(|| PathBuf::from(name))
+    }
+    fn exists(&self, path: &Path) -> bool {
+        path.exists()
+    }
+    fn is_file(&self, path: &Path) -> bool {
+        [
+            "pubspec.yaml",
+            "lib/main_mortsom.dart",
+            "scripts/frb-generate.sh",
+            "scripts/build-web.sh",
+            "lib/rustlib/src/rust/library/std/Cargo.toml",
+        ]
+        .iter()
+        .any(|suffix| path.ends_with(suffix))
+            || path.is_file()
+    }
+    fn is_executable(&self, _: &Path) -> bool {
+        true
+    }
+    async fn run(
+        &self,
+        program: &Path,
+        _: &[&str],
+    ) -> Result<crate::doctor::CommandOutput, String> {
+        Ok(crate::doctor::CommandOutput {
+            success: true,
+            stdout: if program.ends_with("rustup") {
+                "/toolchain".into()
+            } else {
+                String::new()
+            },
+            stderr: String::new(),
+        })
     }
 }

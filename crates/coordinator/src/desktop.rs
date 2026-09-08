@@ -44,7 +44,10 @@ pub async fn prepare(
     }
     let artifact = match artifact {
         Some(path) => path.canonicalize().map_err(|e| e.to_string())?,
-        None => build_artifact(config, platform, runner).await?,
+        None => {
+            crate::doctor::require_build_prerequisites(config, platform, &xvfb, host).await?;
+            build_artifact(config, platform, runner).await?
+        }
     };
     validate_artifact(platform, &artifact, host)?;
     let bundle_root = if platform == Platform::Linux {
