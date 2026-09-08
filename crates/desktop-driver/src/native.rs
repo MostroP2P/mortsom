@@ -1,4 +1,5 @@
 //! Linux accessibility traversal and actions over an actor-owned AT-SPI bus.
+use crate::native_retry::{AccessError, classify, retry, with_fresh_node};
 use atspi::proxy::{
     accessible::AccessibleProxy, action::ActionProxy, editable_text::EditableTextProxy,
     text::TextProxy,
@@ -6,6 +7,7 @@ use atspi::proxy::{
 use atspi::zbus::{self, Connection};
 use mortsom_android_driver::appium::AppiumError;
 use mortsom_android_driver::webdriver::WebDriverError;
+use std::time::Duration;
 
 /// One public accessibility object.
 #[derive(Debug, Clone)]
@@ -65,7 +67,7 @@ impl Native {
         Ok(Self { connection })
     }
 
-    async fn proxy<'a>(&'a self, node: &'a Node) -> Result<AccessibleProxy<'a>, AppiumError> {
+    async fn proxy<'a>(&'a self, node: &'a Node) -> Result<AccessibleProxy<'a>, AccessError> {
         AccessibleProxy::builder(&self.connection)
             .cache_properties(zbus::proxy::CacheProperties::No)
             .destination(node.destination.as_str())
@@ -74,11 +76,15 @@ impl Native {
             .map_err(error)?
             .build()
             .await
-            .map_err(error)
+            .map_err(classify)
     }
 
     /// Reads the current public tree, bounded by node count and time at caller.
     pub async fn nodes(&self) -> Result<Vec<Node>, AppiumError> {
+        retry(Duration::from_secs(10), || self.nodes_once()).await
+    }
+
+    async fn nodes_once(&self) -> Result<Vec<Node>, AccessError> {
         let mut pending = vec![Node {
             destination: "org.a11y.atspi.Registry".into(),
             path: "/org/a11y/atspi/accessible/root".into(),
@@ -87,14 +93,11 @@ impl Native {
         let mut nodes = Vec::new();
         while let Some(mut node) = pending.pop() {
             if nodes.len() >= 5000 {
-                return Err(error("accessibility tree exceeds limit"));
+                return Err(error("accessibility tree exceeds limit").into());
             }
             let proxy = self.proxy(&node).await?;
-            let name = proxy
-                .name()
-                .await
-                .map_err(|e| error(format!("read node {}: {e}", node.destination)))?;
-            let children = proxy.get_children().await.map_err(error)?;
+            let name = proxy.name().await.map_err(classify)?;
+            let children = proxy.get_children().await.map_err(classify)?;
             drop(proxy);
             node.name = name;
             for child in children {
@@ -123,6 +126,16 @@ impl Native {
 
     /// Invokes the accessible object's default user action.
     pub async fn click(&self, node: &Node) -> Result<(), AppiumError> {
+        with_fresh_node(
+            node,
+            Duration::from_secs(10),
+            |id| async move { self.find(&id).await },
+            |node| async move { self.click_once(&node).await },
+        )
+        .await
+    }
+
+    async fn click_once(&self, node: &Node) -> Result<(), AccessError> {
         let proxy = ActionProxy::builder(&self.connection)
             .destination(node.destination.as_str())
             .map_err(error)?
@@ -130,11 +143,17 @@ impl Native {
             .map_err(error)?
             .build()
             .await
-            .map_err(error)?;
+            .map_err(classify)?;
+        // A read-only check may detect a rebuilt node before invocation. Once
+        // DoAction starts, every error is permanent to this attempt: replaying
+        // a business action after a lost acknowledgement could submit twice.
+        if proxy.n_actions().await.map_err(classify)? <= 0 {
+            return Err(error("control exposes no default user action").into());
+        }
         if proxy.do_action(0).await.map_err(error)? {
             Ok(())
         } else {
-            Err(error("action refused"))
+            Err(error("action refused").into())
         }
     }
 
@@ -147,6 +166,16 @@ impl Native {
 
     /// Sends the public editable-text command; the caller must verify the read-back.
     async fn set_text(&self, node: &Node, value: &str) -> Result<(), AppiumError> {
+        with_fresh_node(
+            node,
+            Duration::from_secs(10),
+            |id| async move { self.find(&id).await },
+            |node| async move { self.set_text_once(&node, value).await },
+        )
+        .await
+    }
+
+    async fn set_text_once(&self, node: &Node, value: &str) -> Result<(), AccessError> {
         let proxy = EditableTextProxy::builder(&self.connection)
             .destination(node.destination.as_str())
             .map_err(error)?
@@ -154,22 +183,32 @@ impl Native {
             .map_err(error)?
             .build()
             .await
-            .map_err(error)?;
-        if proxy.set_text_contents(value).await.map_err(error)? {
+            .map_err(classify)?;
+        if proxy.set_text_contents(value).await.map_err(classify)? {
             Ok(())
         } else {
-            Err(error("text entry refused"))
+            Err(error("text entry refused").into())
         }
     }
 
     /// Reads text content when the public Text interface is implemented.
     pub async fn text_value(&self, node: &Node) -> Result<String, AppiumError> {
+        with_fresh_node(
+            node,
+            Duration::from_secs(10),
+            |id| async move { self.find(&id).await },
+            |node| async move { self.text_value_once(&node).await },
+        )
+        .await
+    }
+
+    async fn text_value_once(&self, node: &Node) -> Result<String, AccessError> {
         if !self
             .proxy(node)
             .await?
             .get_interfaces()
             .await
-            .map_err(error)?
+            .map_err(classify)?
             .contains(atspi::Interface::Text)
         {
             return Ok(label(&node.name)
@@ -183,13 +222,23 @@ impl Native {
             .map_err(error)?
             .build()
             .await
-            .map_err(error)?
+            .map_err(classify)?
             .get_text(0, -1)
             .await
-            .map_err(error)
+            .map_err(classify)
     }
 
     async fn focus_text(&self, node: &Node) -> Result<(), AppiumError> {
+        with_fresh_node(
+            node,
+            Duration::from_secs(10),
+            |id| async move { self.find(&id).await },
+            |node| async move { self.focus_text_once(&node).await },
+        )
+        .await
+    }
+
+    async fn focus_text_once(&self, node: &Node) -> Result<(), AccessError> {
         let proxy = ActionProxy::builder(&self.connection)
             .destination(node.destination.as_str())
             .map_err(error)?
@@ -197,54 +246,74 @@ impl Native {
             .map_err(error)?
             .build()
             .await
-            .map_err(error)?;
-        let count = proxy.n_actions().await.map_err(error)?;
+            .map_err(classify)?;
+        let count = proxy.n_actions().await.map_err(classify)?;
         if !(0..=64).contains(&count) {
-            return Err(error("invalid accessibility action count"));
+            return Err(error("invalid accessibility action count").into());
         }
         for index in 0..count {
-            if proxy.get_name(index).await.map_err(error)? == "ShowOnScreen"
-                && !proxy.do_action(index).await.map_err(error)?
+            if proxy.get_name(index).await.map_err(classify)? == "ShowOnScreen"
+                && !proxy.do_action(index).await.map_err(classify)?
             {
-                return Err(error("text scroll action refused"));
+                return Err(error("text scroll action refused").into());
             }
         }
         for index in 0..count {
             if proxy
                 .get_name(index)
                 .await
-                .map_err(error)?
+                .map_err(classify)?
                 .eq_ignore_ascii_case("tap")
             {
-                return if proxy.do_action(index).await.map_err(error)? {
+                return if proxy.do_action(index).await.map_err(classify)? {
                     Ok(())
                 } else {
-                    Err(error("text focus action refused"))
+                    Err(error("text focus action refused").into())
                 };
             }
         }
-        Err(error("text control exposes no public Tap action"))
+        Err(error("text control exposes no public Tap action").into())
     }
 
     /// Public keyboard-focus state used for editable controls and evidence.
     pub async fn focused(&self, node: &Node) -> Result<bool, AppiumError> {
+        with_fresh_node(
+            node,
+            Duration::from_secs(10),
+            |id| async move { self.find(&id).await },
+            |node| async move { self.focused_once(&node).await },
+        )
+        .await
+    }
+
+    async fn focused_once(&self, node: &Node) -> Result<bool, AccessError> {
         Ok(self
             .proxy(node)
             .await?
             .get_state()
             .await
-            .map_err(error)?
+            .map_err(classify)?
             .contains(atspi::State::Focused))
     }
 
     /// The accessible enabled state.
     pub async fn enabled(&self, node: &Node) -> Result<bool, AppiumError> {
+        with_fresh_node(
+            node,
+            Duration::from_secs(10),
+            |id| async move { self.find(&id).await },
+            |node| async move { self.enabled_once(&node).await },
+        )
+        .await
+    }
+
+    async fn enabled_once(&self, node: &Node) -> Result<bool, AccessError> {
         Ok(self
             .proxy(node)
             .await?
             .get_state()
             .await
-            .map_err(error)?
+            .map_err(classify)?
             .contains(atspi::State::Enabled))
     }
 }
@@ -264,20 +333,28 @@ impl crate::text_entry::TextEntry for Native {
         self.set_text(node, value).await
     }
     async fn text(&self, node: &Node) -> Result<String, AppiumError> {
-        let interfaces = self
-            .proxy(node)
-            .await?
-            .get_interfaces()
-            .await
-            .map_err(error)?;
-        if !interfaces.contains(atspi::Interface::EditableText)
-            || !interfaces.contains(atspi::Interface::Text)
-        {
-            return Err(error(
-                "text control lacks public editable and text interfaces",
-            ));
-        }
-        self.text_value(node).await
+        with_fresh_node(
+            node,
+            Duration::from_secs(10),
+            |id| async move { self.find(&id).await },
+            |node| async move {
+                let interfaces = self
+                    .proxy(&node)
+                    .await?
+                    .get_interfaces()
+                    .await
+                    .map_err(classify)?;
+                if !interfaces.contains(atspi::Interface::EditableText)
+                    || !interfaces.contains(atspi::Interface::Text)
+                {
+                    return Err(
+                        error("text control lacks public editable and text interfaces").into(),
+                    );
+                }
+                self.text_value_once(&node).await
+            },
+        )
+        .await
     }
 }
 
