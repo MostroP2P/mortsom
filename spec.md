@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 20 completed, 6 in progress and 39 pending.
+current evidence separately. Section 17 tracks 65 tasks: 23 completed, 4 in progress and 38 pending.
 Live checkpoint acceptance remains Linux 0/2 and Web 0/2.
 
 ## 1. Objective and completion criteria
@@ -631,15 +631,26 @@ contract tests.
   no order was submitted and client/server/captured-bundle cleanup passed. Fifteen desktop tests, formatting
   and strict workspace clippy passed with independent review. Submit uncertainty remains P3.2; lifecycle
   remains P2.8. The same no-submit form probe also passed on Linux.
-- [ ] **IN PROGRESS — P2.7 Close Linux lifecycle review findings.** Private XDG/DBus/AT-SPI/keyring and
-  automatic display allocation exist. Validate the new unlocked-keyring readiness predicate, child health,
-  aggregate cleanup, retained retry handles and absence of leaked mounts/processes after failure.
-- [ ] **IN PROGRESS — P2.8 Close Web lifecycle review findings.** Guard profile directory creation before
-  every fallible startup step; test missing driver, failed session/navigation and teardown errors. Own
-  static-server request tasks with a join set or equivalent and abort/drain them on shutdown.
-- [ ] **TODO — P2.9 Inject desktop session construction.** Add a factory seam to `RunDeps` returning
-  independent `Arc<dyn UiSession>` handles and owned server resources. Remove hardcoded real runners from
-  `Farm::desktop`; test second-actor failure, sibling survival and teardown through fakes.
+- [x] **P2.7 DONE — Verify bounded Linux lifecycle ownership.** Private services gate app launch on
+  readiness/liveness. Failed startup and app/service shutdown preserve handles and files for retry; service
+  handles remain owned across cancellation. Linux process cleanup keeps its leader unreaped until the owned
+  group has no running members, avoiding PID reuse and premature profile deletion. Real leader-exit,
+  sibling-isolation, startup-failure and cancelled-shutdown regressions pass. The real copied-bundle Linux
+  form probe passed again with complete client cleanup. Reviewed commit `eb25f03` covers the process group,
+  not descendants that deliberately detach into another group. Durable actor storage remains P2.12.
+- [x] **P2.8 DONE — Verify bounded Web lifecycle ownership.** Runtime/profile ownership precedes startup
+  awaits. ChromeDriver binds its own ephemeral port; readiness checks its liveness and owned startup output.
+  Failed session/navigation and driver-kill retries retain ownership until stop is verified. Server shutdown
+  retains its join handle across cancellation and drains request tasks. Twenty-three desktop tests and a real
+  Web form/cleanup probe passed. Reviewed commit `eefafaa`; exhausted shutdown remains a failure, not a
+  claim of cleanup or restart recovery.
+- [x] **P2.9 DONE — Inject desktop session construction.** `RunDeps` supplies `DesktopFactory` and owned
+  `DesktopServer` boundaries. Four coordinator regressions prove independent actor descriptors, second-actor
+  construction failure cleanup, same-session shutdown retry and sibling/server cleanup after exhausted
+  retries. The runner retains the same session through its bounded second shutdown attempt; exhausted
+  failures are reported before remaining in-memory handles are dropped. Restart recovery remains P2.12.
+  Independent review passed; the complete pre-join-fix workspace run passed 531 tests, followed by targeted
+  desktop/farm reruns, formatting and strict workspace clippy after the join fix.
 - [x] **P2.10 DONE — Enforce fresh actors for the checkpoint; defer in-process reset.** The CLI resolves
   names/tags and rejects desktop selections containing more than one distinct scenario before loading
   stack/configuration or building clients; the coordinator repeats this guard before creating artifacts.
@@ -674,7 +685,10 @@ observers.
   and take it. For a sell order, Bob first generates and submits the buyer payout invoice through normal UI;
   only then does Alice read and pay the seller hold invoice. Reserve spend before initiating payment and track
   both hashes.
-- [ ] **TODO — P3.4 Validate state and final settlement.** Drive fiat-sent and release UI, distinguish
+- [ ] **TODO — P3.4 Validate state and final settlement.** App review confirmed premature completion:
+  PurchaseCompleted maps to SettledHoldInvoice, polling stops there and the detail screen offers rating.
+  Correct the Rust action mapping, keep polling until Success, introduce a nonterminal payout-pending UI
+  state and coordinate harness normalization plus provider/widget regressions. Drive fiat-sent and release UI, distinguish
   intermediate payout states from completion, verify both clients' terminal state plus matching wallet
   amounts/outcomes and absence of duplicate settlement. Correct inaccurate product state mapping explicitly.
 - [ ] **IN PROGRESS — P3.5 Make cancellation/teardown truthful.** Fixed missing cancel control returning
@@ -887,6 +901,12 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
   released their client/server/bundle resources. Logs: `/tmp/mortsom-web-form-readback-live.log` and
   `/tmp/mortsom-linux-form-readback-live.log`. Fifteen desktop tests passed, including stale and
   non-interactable element retries, ignored edits and input redaction. These are form probes, not trades.
+- Ordinary lifecycle validation passed 531 workspace tests; the later cancellation-safe server join passed
+  23 desktop tests and four coordinator factory tests, plus full strict clippy. Both real copied-bundle form
+  probes passed again with no submission. Logs: `/tmp/mortsom-lifecycle-workspace-tests.log`,
+  `/tmp/mortsom-server-cancel-join-tests.log`, `/tmp/mortsom-desktop-factory-final-tests.log`,
+  `/tmp/mortsom-linux-final-lifecycle-live.log` and `/tmp/mortsom-web-final-lifecycle-live.log`.
+  These prove bounded in-process cleanup of owned groups; durable unresolved profiles remain unfinished.
 - The current two-case Linux/Web matrix remains unaccepted. The other eighteen cases and CPU/RSS
   comparison are deferred until operator review, per the explicit scope change on 2026-09-08.
 
