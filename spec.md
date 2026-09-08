@@ -1,847 +1,797 @@
-# Mortsom — Technical Specification
+# Mortsom technical specification
 
-> End-to-end test harness for the Mostro mobile application.
-> Mortsom is *Mostro Mobile* written backwards: it watches a real trade from
-> the user's side of the screen.
+**Version:** 0.2
 
-**Version:** 0.1 (draft)  
-**Status:** design proposal  
-**Language policy:** English is used for code, comments, identifiers,
-documentation, commit messages, issues, logs, and error strings.
+**Updated:** 2026-09-08
 
-**Current target application:** `MostroP2P/app`, the second-generation
-Flutter/Rust client (local checkout `../mobilev2`). Linux is the default
-execution target; Web is the alternative. Android remains selectable but
-its existing implementation is frozen during the resource comparison.
+**Status:** active implementation plan; live validation in progress
 
-### September 2026 execution amendment
+**Target:** Mostro app v2 (`MostroP2P/app`, local `../mobilev2`)
 
-This amendment supersedes the Android-only topology, legacy-first ordering,
-and per-run relay ownership described below. Those sections document the
-existing implementation and still apply to the frozen Android path.
+**Default platform:** Linux
 
-The operator first runs `ortsom stack up` in the sibling checkout. Ortsom
-owns the persistent regtest chain, three LND nodes, relay and daemon. Mortsom
-may invoke that CLI through `mortsom stack up`; it must not import Ortsom's
-runner or copy its source. Stack lifecycle and scenario execution are separate
-commands. A scenario run attaches to the configured stack and never removes
-its containers. Explicit stack cleanup is performed through the Ortsom CLI.
+This document specifies the complete migration from Android emulators and the legacy app to lighter Linux and
+Web clients. It is normative for new work. The previous specification (Git revision `ec22af1:spec.md`) is
+historical; its Android implementation remains available, with no new Android work in this migration.
+Everything in this repository is written in English.
 
-`mortsom run --platform linux|web|android` selects the same target for Alice
-and Bob, defaulting to Linux and the v2 profile. Linux actors have independent
-processes, XDG storage and accessibility sessions. Web actors have independent
-browser profiles and storage, driven through the rendered Flutter semantics
-DOM using W3C WebDriver. Linux uses the public desktop accessibility API.
-Neither driver may invoke application internals or advance orders outside UI.
-The app owns any required accessibility contract additions.
+A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
+current evidence separately. Section 17 tracks 65 tasks: 11 completed, 9 in progress and 45 pending.
+Live scenario acceptance remains Linux 0/20 and Web 0/20.
 
-The Web build includes the app's supported Rust/WASM build and cross-origin
-isolation headers. Both targets use the same daemon identity and local relay,
-with production fallback disabled. Existing lane selection, secret handling,
-caps, wallet accounting and cleanup requirements remain mandatory. Regtest
-clearance requires observed wallet networks; a local hostname is insufficient.
+## 1. Objective and completion criteria
 
-Implementation gates for this migration are sequential:
+Mortsom must launch two independent copies of app v2, Alice and Bob, against a persistent local stack managed
+by Ortsom. The operator chooses Linux or Web; Linux is the default. Android remains an explicit selectable
+option.
 
-1. Attach to a ready Ortsom stack without mutating its lifecycle during a run;
-   validate platform selection and configuration with fakes and CLI tests.
-2. Launch two isolated v2 clients and prove onboarding and identity persistence
-   through accessibility on Linux, then Web; clean partial startup reliably.
-3. Complete `happy_sell` with UI, relay and wallet evidence and clean teardown.
-4. Replicate at least 20 distinct, important Ortsom scenarios through the app's
-   available UI. Document each source scenario, assertions and actual result.
-   Unsupported features, skipped cases and fake-driven tests do not count as
-   successful live replications. Fix failures and rerun from clean actor state.
-5. Record comparable CPU/RSS measurements for Linux and Web on the same suite,
-   and independently review the implementation commits.
+The migration is complete only when:
 
----
+1. Stack creation, readiness, client launch, scenario execution and cleanup
+   work through the documented CLI from a clean checkout.
+2. At least the 20 priority scenarios in section 10 pass through the real app
+   on Linux, with correlated UI, relay and wallet evidence.
+3. Those same 20 scenarios pass on Web. A pass on both platforms counts as one
+   distinct scenario, not two toward the required twenty.
+4. Every accepted run finishes with successful order/payment cleanup and
+   releases every client resource it owns. Failed unresolved runs follow the
+   protected recovery-retention policy in section 11 and do not count as passes.
+5. Comparable Linux/Web CPU and memory results are recorded using section 14.
+6. Required automated checks pass, implementation changes receive independent
+   review, and reproducible commands and evidence are documented.
 
-## 1. Decision and scope
+Unit tests, a fake daemon, successful builds, onboarding, skipped cases and launch smoke tests do not count as
+live scenario replications. A passing Ortsom invocation does not count as a passing Mortsom scenario.
 
-Mortsom is a new repository. It is not a crate inside Ortsom.
+## 2. Scope and ownership
 
-Ortsom tests the Mostro daemon and its public protocol by driving two
-protocol-native clients. Its core abstractions are Nostr messages, Lightning
-payments, orders, and observed daemon state. Mortsom initially tests the
-classic Flutter/Dart Android mobile application by driving two app
-installations like real users. Its core
-abstractions are screens, accessibility semantics, navigation, lifecycle,
-notifications, external-wallet handoff, and visible order state.
+| Component | Owner | Responsibility |
+|---|---|---|
+| Mortsom | This repository | Rust CLI, UI drivers, adapters, scenario narratives, safety, observers and reports |
+| App v2 | `../mobilev2` | Flutter/Rust application, visible states, accessible controls and test bootstrap contract |
+| Ortsom | `../ortsom` | Persistent regtest stack and reference scenario behavior |
+| Mostro | `../mostro` | Daemon implementation and container image |
+| Protocol | `../protocol` | Normative wire protocol |
 
-Combining them would make protocol tests depend on Android tooling and UI tests
-depend on daemon-oriented actor APIs. That would blur the system under test,
-increase CI cost and flakiness, and make mainnet safety controls harder to
-audit. The projects should share concepts and selected artifacts, not source
-code or a runner.
+Use sibling repositories to understand behavior; do not copy their source or import their scenario runner.
+Mortsom owns an independent UI-driven runner. Protocol v1 gift-wrap transport is obsolete and must not be
+accommodated. Reuse `mostro-core` protocol types and event constants. Keep its exact `=0.14.5` pin and
+associated Nostr dependency line until a separate reviewed commit changes that pin.
 
-Mortsom is complementary to Ortsom:
+The migration excludes new Android emulation work, legacy-app feature work, production deployment, arbitrary
+protocol fuzzing and a mainnet benchmark. Existing mainnet protections remain mandatory even though acceptance
+runs use real Lightning nodes on a local Bitcoin regtest network.
 
-- Ortsom asks whether a compliant client can complete a Mostro flow.
-- Mortsom asks whether a human can complete and understand that same flow in
-  the mobile app.
-- A failure seen by both projects points toward the daemon or protocol.
-- A failure seen only by Mortsom points toward the app, its integration, or UX.
+## 3. Architecture
 
-## 2. Goals
-
-Mortsom must:
-
-1. Test release binaries of the mobile app as black boxes.
-2. Operate Alice and Bob on independent Android devices or emulators.
-3. Execute realistic order journeys through the rendered interface.
-4. Verify UI states and correlate them with relay, wallet, and daemon evidence.
-5. Test recovery from interruption: restart, backgrounding, lost connectivity,
-   stale events, and wallet cancellation.
-6. Produce sanitized artifacts sufficient to diagnose a failure.
-7. Support a fast PR suite, a broader scheduled suite, and a tightly limited
-   mainnet canary.
-
-Mortsom is not a substitute for app unit/widget tests, protocol conformance,
-load testing, or manual usability research. It never uses personal keys or
-wallets, and it never silently runs a value-moving scenario against mainnet.
-
-## 3. Black-box contract
-
-The acceptance suite may observe only what a user or the test environment can
-legitimately observe:
-
-- Android accessibility tree, visible pixels, app process state, and system
-  notifications;
-- Nostr events on relays controlled by the run;
-- invoices and payments for wallets dedicated to the run; and
-- health/readiness signals from controlled infrastructure.
-
-It must not read the app database, invoke private application methods, mutate
-orders through an admin endpoint, or assert Flutter implementation details.
-The app may provide narrow **test-environment bootstrap** support: choose an
-environment before first launch, inject a test identity during onboarding, and
-select a supported test wallet. It must not provide test-only commands that
-create, take, pay, release, cancel, or alter an order outside the UI.
-
-Stable accessibility IDs are a product contract. Every actionable control and
-business-critical state needs one. Selectors may not use absolute coordinates,
-hierarchy depth, text fragments likely to be localized, or image matching as
-the normal mechanism.
-
-## 4. System topology
-
-```
-                         ┌─────────────────────────┐
-                         │        Mortsom          │
-                         │ runner · cleanup ·      │
-                         │ budget · artifacts      │
-                         └──────┬──────────┬───────┘
-                                │          │
-                   ┌────────────▼───┐  ┌──▼───────────────┐
-                   │ Alice Android  │  │ Bob Android      │
-                   │ Mostro Mobile  │  │ Mostro Mobile    │
-                   └──────┬─────────┘  └────────┬─────────┘
-                          │ UI automation         │
-             ┌────────────▼──────────────────────▼──────────┐
-             │ Android driver: accessibility, screenshots,   │
-             │ notifications, lifecycle, network conditions  │
-             └────────────┬──────────────────────┬──────────┘
-                          │                      │
-            ┌─────────────▼──────┐    ┌──────────▼──────────┐
-            │ controlled relays  │    │ dedicated wallets    │
-            └─────────────┬──────┘    └──────────┬──────────┘
-                          │                      │
-                    ┌─────▼──────────────────────▼──────┐
-                    │ Mostro test daemon and LND/node     │
-                    └─────────────────────────────────────┘
+```mermaid
+flowchart TD
+    CLI[Mortsom Rust coordinator] --> STACK[External Ortsom stack CLI]
+    STACK --> ENV[Persistent regtest stack]
+    CLI --> ADAPTER[App v2 domain adapter]
+    ADAPTER --> LINUX[Linux AT-SPI driver]
+    ADAPTER --> WEB[Web W3C WebDriver driver]
+    LINUX --> LA[Alice isolated desktop]
+    LINUX --> LB[Bob isolated desktop]
+    WEB --> WA[Alice browser profile]
+    WEB --> WB[Bob browser profile]
+    LA --> ENV
+    LB --> ENV
+    WA --> ENV
+    WB --> ENV
+    CLI --> OBS[Read-only UI, relay and wallet observers]
+    OBS --> REPORT[Sanitized evidence and resource report]
 ```
 
-### 4.1 Runner
+The coordinator depends on external boundaries for command execution, client sessions, Docker inspection,
+relay transport, wallets, host configuration and clock. Tests inject fakes through those boundaries. A
+platform-neutral `UiSession` exposes navigation primitives; `AppAdapter` turns domain actions into user
+journeys. Scenario bodies never contain browser or AT-SPI details.
 
-The runner selects scenarios, allocates device/identity slots, starts and
-checks the environment, enforces timeouts and spend limits, collects evidence,
-and performs teardown. It runs scenarios concurrently only when their devices,
-identities, app storage, wallets, and orders are isolated. Steps inside one
-scenario remain strictly sequential.
+Keep the existing Rust workspace. Add desktop drivers without duplicating budgeting, observers, state
+normalization, adapter logic or reporting. Existing Android-named shared interfaces may be reused initially;
+names must not make Linux/Web depend on an Android SDK, AVD, Appium or adb installation.
 
-### 4.2 Android automation
+## 4. Operator workflow and CLI
 
-Mortsom is implemented entirely in Rust. Its production Android driver uses a
-Rust WebDriver client to control an Appium server with UiAutomator2. This keeps
-the runner, configuration, safety checks, observers, artifacts, and adapters
-in one Rust codebase while retaining Android's accessibility interface and the
-ability to automate native dialogs and external-wallet handoffs. Appium is an
-external automation service, not a JavaScript or TypeScript implementation
-dependency of Mortsom.
+The intended public workflow is:
 
-The driver API is domain-oriented. A scenario calls `create_fixed_sell_order`,
-not `tap("x=312,y=842")`. The driver translates a domain action into a small
-screen-object sequence and records an evidence checkpoint after it completes.
+```sh
+# Create/update and validate the persistent environment.
+mortsom --ortsom-dir ../ortsom stack up
+mortsom --ortsom-dir ../ortsom stack status
 
-### 4.3 Evidence observers
+# Validate prerequisites without creating an order or paying anything.
+mortsom doctor --platform linux
+mortsom doctor --platform web
 
-Observers are read-only evidence sources:
+# Linux and app v2 are the defaults for Alice and Bob.
+mortsom run happy_sell
+mortsom run happy_sell --platform linux
+mortsom run happy_sell --platform web
+mortsom run --tag ortsom-core-20 --platform linux
+mortsom run --tag ortsom-core-20 --platform web
 
-- **UI observer:** screenshot and accessibility dump at each meaningful step.
-- **Notification observer:** records delivery and verifies that a notification
-  opens the correct order.
-- **Relay observer:** records events for run identities and order IDs.
-- **Wallet observer:** records invoice/payment hashes, amounts, fees, and
-  terminal states for dedicated wallets.
-- **Infrastructure observer:** records relay, daemon, emulator, and wallet
-  readiness, not private application data.
+# Optional existing build; validate it before scenario actions.
+mortsom run happy_sell --platform linux --app-artifact /path/to/bundle/mostro
+mortsom run happy_sell --platform web --app-artifact /path/to/build/web
 
-## 5. Environment lanes
+# Reserved/frozen path; requires an explicit Android-compatible config.
+mortsom --config android.local.toml run happy_sell --platform android
 
-Mortsom uses three explicit lanes. A lane must be named in configuration and
-in the final report; a generic `test` command may not infer mainnet.
-
-| Lane | Purpose | Value/network | Default use |
-|---|---|---|---|
-| Local deterministic | authoring and debugging | local relay, test daemon, controlled wallet adapter | developer machine |
-| CI integration | release confidence | isolated relay and dedicated test infrastructure | every PR smoke suite |
-| Mainnet canary | real-world integration detection | dedicated daemon/wallets, tiny hard-capped amounts | scheduled only |
-
-The local lane may simulate Lightning success, failure, or a held payment. It
-is valid for UI behavior but not a claim of Lightning interoperability. Payment
-settlement claims belong in CI integration or the canary. The canary inherits
-Ortsom's safeguards: dedicated wallets and identities, fixed low amounts,
-per-order and per-run caps, pre-flight liquidity checks, cancellation cleanup,
-and accounting. A canary failure requires review; it must not loop retries that
-could spend more funds.
-
-## 6. Bootstrap, identities, and wallets
-
-Every live scenario gets a separate Alice/Bob identity slot and fresh app
-storage. Test mnemonics are injected once during onboarding through a narrow,
-build- or launch-time bootstrap interface. They come from secret storage, never
-from a committed config, log, screenshot, or normal artifact. The app then acts
-normally; the runner does not bypass UI actions.
-
-The first vertical slice targets one supported wallet journey only. Two wallet
-adapters are expected eventually:
-
-- **NWC adapter:** configures wallets controlled by the test environment.
-- **External-wallet adapter:** installs a companion test receiver for the
-  wallet intent/deep-link callback and can return success, cancellation, or
-  failure through the same public path used by a real wallet.
-
-Supporting all wallet providers first would multiply flakiness. Each additional
-provider is a capability with its own scenario tag and acceptance contract.
-
-## 7. Scenario model
-
-Scenarios are typed domain narratives, not long tap scripts. A step finishes
-only after its expected visible state appears and, when appropriate, its
-external consequence is observed. There are no fixed sleeps. A wait is always
-a bounded predicate over UI state, notification, relay event, wallet callback,
-or an explicit negative-observation interval.
-
-```text
-scenario happy_sell:
-  alice.launch_clean()
-  bob.launch_clean()
-  alice.create_fixed_sell(amount, fiat, payment_method)
-  expect alice.order_status("Pending")
-  expect relay.order_visible(order)
-  bob.find_and_take(order)
-  expect both.order_status("Waiting for seller")
-  alice.pay_hold_invoice_via_wallet()
-  expect both.order_status("Active")
-  bob.confirm_fiat_sent()
-  expect alice.order_status("Fiat payment reported")
-  alice.release()
-  expect both.order_status("Completed")
-  expect wallet.payment_settled(order)
+# Inspect unresolved work before explicitly stopping the environment.
+mortsom cleanup <run-id>
+mortsom --ortsom-dir ../ortsom stack down
 ```
 
-Each step declares actor, precondition, stable selector(s), user-visible
-success state, correlation requirement, timeout, artifact checkpoint, and
-cleanup behavior. Cleanup is registered as soon as an order could exist.
+These commands are the target contract; section 18 identifies pending pieces. `mortsom stack up` invokes
+`ortsom stack up` as an external command in the selected sibling checkout. Running that Ortsom command
+directly is equally valid. `run` attaches to an already ready stack and fails with actionable instructions if
+it is absent; it does not implicitly create or destroy it.
 
-## 8. Assertions
+One selection applies to both actors. Mixed Linux/Web pairs are outside this iteration. Unknown platforms fail
+before building or starting clients. Android selection must neither silently use Linux nor claim unsupported
+new capabilities. Doctor reports only the dependencies needed for its selected platform. Missing required
+tools are reported before expensive builds.
 
-UI assertions verify what the user can see and do: screen identity,
-accessibility name, enabled/disabled action, normalized monetary values, order
-status, validation or error category, list membership, navigation destination,
-and notification routing.
+## 5. Persistent environment and latest mostrod
 
-Correlation assertions verify that a visible claim is grounded:
+Ortsom owns Bitcoin regtest, its LND topology, the Nostr relay, Mostro and the associated persistent volumes
+and connection metadata. Mortsom consumes explicit connection references, daemon public identity and declared
+limits. It must not load a solver secret merely to obtain a daemon public key.
 
-- displayed order identity maps to a run-scoped relay observation;
-- a terminal status maps to a known wallet terminal state;
-- a notification opens the matching order, not just any order screen;
-- app restart reconstructs the same order state without duplicating an action;
-- rejected actions produce neither an illegal UI transition nor an illegal
-  relay event.
+On `stack up`:
 
-Correlation is eventual but bounded. Brief network/UI lag is acceptable until
-the step deadline; a false completed state is not. Where the product uses an
-intermediate state, its copy must say so clearly and Mortsom asserts that state
-instead of prematurely asserting settlement.
+1. Resolve the configured Ortsom checkout and executable.
+2. Pull `mostrop2p/mostro:latest`; a failed pull is a reported failure, not
+   permission to silently use an old cached image.
+3. Delegate stack creation/update to Ortsom with that image selected.
+4. Check the running daemon's image against the resolved digest. An existing
+   container must converge to the requested image; an unchanged tag string
+   alone does not prove that it was updated.
+5. Wait for relay, daemon and wallet readiness and validate regtest networks,
+   identity, advertised relay endpoints, liquidity and declared daemon limits.
+6. Record the immutable image digest, daemon version and stack configuration
+   fingerprint, excluding secrets.
 
-## 9. Scenario catalogue
+Refresh `latest` at explicit stack updates, never in the middle of a scenario or benchmark. A run uses the
+already verified immutable image. Report the actual running image, not the local checkout version or a
+hardcoded label.
 
-### 9.1 PR smoke suite
+Scenario teardown must never remove persistent containers or volumes. Stack reset is an explicit regtest
+recovery operation: preserve evidence, unwind orders/payments, invoke supported Ortsom lifecycle commands,
+then revalidate. Never infer ownership from a container-name prefix alone or delete an unrelated operator
+environment. Failed readiness must not trigger a destructive reset.
 
-1. First launch, onboarding, test-environment selection, and identity import.
-2. Create a fixed-price sell order and find it in history.
-3. Discover and take that order from a second device.
-4. Complete a sell flow through the first supported wallet path.
-5. Complete a buy flow through the same path.
-6. Cancel a pending order and verify removal on both devices.
-7. Relaunch while an order is pending, taken, active, fiat-reported, and
-   completed; state must be restored correctly.
+## 6. Configuration, networks and safety
 
-### 9.2 Scheduled regression suite
+The committed example is `config/desktop.example.toml`. Runtime configuration and `*.local.toml` remain
+ignored. Secrets use `env:` references, become `Secret` immediately, and never appear in command arguments,
+build defines, logs or artifacts. Daemon public identity and local relay URLs are non-secret.
 
-- Required-field, amount, range, currency, and localized-number validation.
-- Loading, empty, offline, and reconnect states.
-- Wallet cancellation, invalid invoice, payment failure, and retry behavior.
-- Expiration copy and resulting state for both participants.
-- Ratings, history, and completed-order details.
-- Notification receipt and deep-link routing.
-- Backgrounding, force-stop, device rotation, and network loss at each durable
-  state.
-- Multiple concurrent orders on one device; no action may affect another order.
-- Dispute initiation and solver-resolution presentation.
+Configuration declares the lane, platform prerequisites, app profile/source or artifact, stack checkout,
+wallet references, relay endpoints, order amount, per-order cap, cumulative run cap and bounded deadlines. No
+cap means error. Host paths and platform settings must be validated without requiring a source checkout when a
+valid prebuilt artifact is supplied.
 
-### 9.3 Adversarial UX suite
+Local acceptance uses actual regtest LND payments. It is not a simulated-wallet claim and does not demonstrate
+mainnet interoperability. Network clearance is based on observed wallet/node networks; `localhost` and lane
+`local` do not prove regtest. Existing explicit mainnet confirmation remains fail-closed.
 
-- Delayed, duplicate, stale, and out-of-order events must not create duplicate
-  cards, enable illegal actions, or regress terminal state.
-- Crafted deep links must not grant an unrelated identity control of an order.
-- Reinstall/account switch must not silently reuse an old account context.
-- Sensitive data must not appear in logs, screenshots, Android recents, or
-  error messages.
+Reserve budget before a payment can begin. Include all orders in range and multi-order scenarios and account
+for fees and pending payments according to the existing safety policy. Resetting an app, retrying
+infrastructure or moving to the next scenario must never reset the cumulative run budget.
 
-## 10. Reliability and flake policy
+Only one active run may use a given exclusive stack/wallet set. Separate artifact directories must not defeat
+environment locking. A second run reports the conflict before launching clients or making changes.
 
-Device pairs, identities, wallet credentials, and app storage are exclusive to
-a live scenario. CI uses pinned emulator images and controlled relays. Emulator
-snapshots reset only between scenarios, never during a scenario.
+## 7. Client builds and public automation contract
 
-Before a run, Mortsom checks device availability, app install/version,
-environment reachability, relay readiness, daemon readiness, and wallet
-funding where relevant. Failure categories are explicit: product failure,
-automation-contract failure, test-infrastructure failure, relay failure,
-wallet failure, and environment misconfiguration.
+Build app v2's Mortsom entrypoint, `lib/main_mortsom.dart`, with an explicit test-environment marker, daemon
+public identity and local relay seeds. Disable public production fallback before subscriptions begin. Validate
+discovered relay addresses from the client's network namespace; a Docker-internal hostname is not
+automatically reachable by desktop or browser clients.
 
-One retry is allowed only for an explicitly classified infrastructure failure.
-UI assertion failures, state-correlation mismatches, and payment mismatches may
-not be retried into a pass. The runner records retries, duration, and category
-per scenario. A quarantined scenario requires an issue, owner, and expiry date.
+Follow the app's supported generation/build scripts. Regenerate Flutter Rust Bridge bindings through
+`scripts/frb-generate.sh` before source builds to avoid Dart/Rust content-hash mismatches. Do not hand-edit
+generated bindings. For Web, build the supported Rust/WASM bundle before the Flutter Web artifact. Retain
+required shared-memory support and serve cross-origin isolation headers.
 
-## 11. Artifacts and privacy
+Record source revision, dirty-state indicator, build flags, tool versions and artifact digest. Both actors use
+the same artifact. A prebuilt artifact must pass visible environment/identity checks; path existence alone is
+insufficient.
 
-Each run yields:
+The app owns `docs/automation-contract.md`. Stable IDs cover onboarding, navigation, node/relay settings, form
+fields, order identity/status, invoices, cancellation, disputes, ratings and errors. Add missing controls as
+ordinary accessible product UI, with coordinated app/harness review and widget tests. No test-only
+business-action endpoints are allowed.
 
-```text
-artifacts/<run>/
-  summary.json
-  timeline.md
-  environment.json
-  alice/steps/<step>-screen.png
-  alice/steps/<step>-ui.xml
-  bob/steps/<step>-screen.png
-  bob/steps/<step>-ui.xml
-  notifications.jsonl
-  relay-events.jsonl
-  wallet-payments.json
-  device-logcat.txt
-  cleanup.json
+### 7.1 Linux
+
+Each actor owns a native app process, virtual X display, private session bus, AT-SPI accessibility bus, Secret
+Service instance and separate XDG storage. XDG isolation alone is insufficient because shared Secret Service
+can reuse another actor's identity. Allocate displays without a fixed-port race.
+
+Readiness waits must prove accessibility registration and an unlocked usable credential collection before app
+launch. Use bounded predicates and child liveness checks. Disable incidental desktop service activation that
+can leave portal or filesystem mounts outside the owned process lifecycle.
+
+Flutter's Linux engine may not export `Semantics.identifier`. In Mortsom test builds the app exposes
+`[mortsom:<identifier>]<readout>` as its accessible name. Keep this namespacing out of normal production
+labels. Use public AT-SPI interfaces for action, focus, text entry, scrolling and state observation. A
+transport success must not substitute for visible input acceptance.
+
+### 7.2 Web
+
+Serve the release bundle on loopback with `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: require-corp`. Limit requests to files inside the canonical bundle root,
+including symlink/traversal checks. Own every request task and terminate it when the server shuts down.
+
+Use W3C WebDriver and separate browser profiles for Alice and Bob. Keep the browser sandbox enabled. Match
+exact `flt-semantics-identifier` values with properly escaped selectors; IDs can include relay URLs and
+dynamic order IDs. Use public DOM/accessibility interactions only. No JS calls into Dart, Rust, application
+stores or private state are permitted.
+
+Flutter may retain offscreen semantic fields and rebuild them after focus or scroll. Re-find elements after
+transitions; scroll through normal user actions and wait for interactability. Do not add fixed sleeps to mask
+animation races. Retain isolation headers for WASM workers and record browser/driver versions.
+
+## 8. Identity and scenario isolation
+
+Every new scenario starts with fresh Alice/Bob app storage and distinct generated test identities. Observe
+public identities through the normal UI, prove they differ, relaunch each app, and prove each identity
+persists. Do not export mnemonics to reproduce a run. Evidence uses opaque actor labels where possible.
+
+Within a persistence scenario, preserve that actor's profile across the intended restart. Between scenarios,
+close sessions and reset profile, secure storage, navigation and order subscriptions. Wallets may remain part
+of the persistent stack, but observations use scenario-specific invoice hashes and order IDs. Never use a
+global balance delta as proof of a particular payment.
+
+Start observers before relevant actions. Reject mismatched daemon identity, unready relay or failed actor
+bootstrap before creating an order. A bootstrap check in a report must influence the run outcome rather than
+being informational.
+
+## 9. Scenario actions and assertions
+
+Scenarios express business actions through the shared app adapter. Linux and Web run the same narrative. Reuse
+`mostro-core` wire types and maintain an explicit mapping to visible app states. Loading, payout pending,
+escrow settled, payout completed, cancellation and expiration must not collapse into a misleading success
+state.
+
+The supported manual external-wallet path is valid: read the invoice presented by the app, pay it on the
+actor's dedicated LND wallet, and type the buyer's wallet-generated invoice into the normal form. Wallet
+actions perform the external user's wallet role; they must not publish create/take/release/cancel protocol
+messages. NWC remains a separate capability with its own UI setup.
+
+Every wait has a predicate, deadline and failure category. Negative assertions observe an explicit interval
+starting after the action, with a sequence cursor so earlier events cannot satisfy them. Expiration waits
+derive from declared daemon limits plus bounded sweep/propagation allowance. No fixed scenario sleeps.
+
+An accepted trade joins the visible order ID, daemon-signed public relay observations, hold invoice hash,
+buyer payout hash, amounts and terminal wallet outcomes. A completed-looking screen alone is insufficient. Do
+not obtain private app keys to decrypt messages just to reproduce Ortsom's assertions; use the UI plus
+legitimately observable public events and wallet results.
+
+## 10. Twenty priority Ortsom replications
+
+The source catalogue is `../ortsom/docs/scenarios.md`; reference bodies live under
+`../ortsom/crates/ortsom/src/scenarios/`. Preserve their business assertions while replacing protocol-native
+actor actions with real UI journeys. Register stable source names and the `ortsom-core-20` tag; existing
+aliases may remain but cannot count as additional scenarios.
+
+| # | Source scenario | Required live assertions and prerequisites |
+|---|---|---|
+| 1 | `happy_sell` | Alice sells, Bob takes/provides invoice/reports fiat, Alice releases; both show completion and matching escrow/payout settle exactly once. |
+| 2 | `happy_buy` | Bob creates a buy, Alice takes as seller; same correlated settlement with reversed maker/taker roles. |
+| 3 | `cancel_before_taken` | Maker cancels pending order; book removal and legal terminal UI, with no payment. |
+| 4 | `cooperative_cancel` | Funded active order requires both actors' agreement; cancellation is visible to both and seller escrow is refunded. |
+| 5 | `unilateral_cancel_rejected` | First cancellation opens cooperation only; no premature cancellation/refund during the observation window; complete cooperative cleanup afterward. |
+| 6 | `cancel_after_take_unpaid` | Taker abandons without completing payment prerequisites; a new post-take event returns the order to a legal pending/terminal state after the declared deadline. |
+| 7 | `pending_order_expires` | Set expiry through the create-order UI; untouched order expires and leaves the book. Requires a visible expiry control and actual daemon-enforced deadline. |
+| 8 | `hold_invoice_expires` | Buyer supplies a valid invoice, seller leaves hold unpaid; observe the daemon's new pending/canceled/expired transition and no settlement. |
+| 9 | `buyer_invoice_deadline` | Buyer never submits payout invoice; observe the declared deadline and new legal recovery/terminal state, without matching the initial pending event. |
+| 10 | `full_trade_with_rating` | Complete a trade; both rate through UI; rating acceptance and resulting reputation/history are observable without duplicate settlement. |
+| 11 | `range_order` | Create a range, take an intermediate fiat amount, verify priced amount and remainder identity/amount, complete taken portion and clean remainder. |
+| 12 | `market_price_order` | Select market pricing through UI, observe resolved sat amount, enforce caps against it and verify payout with declared fee tolerance. |
+| 13 | `dispute_by_buyer` | Buyer reports fiat and disputes; both show dispute and a matching public dispute event exists; prove a supported cleanup path before funding. |
+| 14 | `dispute_by_seller` | Seller disputes an active trade; both UI states and public dispute identity correlate; prove supported cleanup before funding. |
+| 15 | `dispute_then_cooperative_cancel` | Open an untaken dispute, cooperatively cancel through both clients, observe closed dispute and refunded seller escrow. |
+| 16 | `invalid_buyer_invoice` | Submit a malformed/expired/wrong-amount invoice through UI; rejection must retain a recoverable invoice-required state and cause no illegal payment. Distinguish local validation from daemon rejection. |
+| 17 | `payout_invoice_below_the_expiry_floor` | Submit an LND invoice below the declared minimum expiry; rejection and no advancement. Requires configurable invoice expiry and known daemon floor. |
+| 18 | `payment_fails_on_release` | Invalidate the accepted buyer invoice on the controlled wallet, release through UI, observe payout failure/retry or replacement request, then recover payment and account for escrow. |
+| 19 | `buyer_invoice_expires_mid_flight` | Make the previously accepted invoice unpayable after activation, release, submit a fresh invoice through UI, and prove recovery without duplicate payout. |
+| 20 | `payout_slots_capped_per_destination` | Release trades to controlled buyer hold invoices up to the declared destination cap; the next receives no HTLC until a slot frees, then dispatches automatically; settle and account for every trade. |
+
+This prioritizes ordinary user journeys, deadlines, dispute visibility and payment recovery.
+`pending_order_expires` replaces the earlier provisional fairness candidate because it covers a common
+user-visible deadline at lower resource cost. Destination-cap behavior remains in the required set.
+
+`gated_payouts_do_not_starve_other_destinations` is an additional follow-up: fill Bob's cap and all declared
+dispatch pressure, then prove an ordinary payout to Alice proceeds. It requires extra simultaneous trades and
+budget; it is not a substitute for one of the twenty unless the matrix is explicitly revised with a
+source-backed reason and independent review.
+
+Solver resolutions, anti-abuse bonds, malformed encryption, unauthorized protocol actors and packet replay
+remain outside this initial matrix. Do not fabricate UI parity for actions a normal client cannot express.
+
+### 10.1 Missing app capabilities
+
+Missing expiry/range/rating controls or accurate states are implementation work, not waived assertions. Add or
+repair them in app v2 with accessible identifiers, visible user feedback, contract documentation and tests.
+
+Disputes require special preflight: Mortsom must prove a user-accessible exit and refund path for the tested
+untaken dispute. It cannot use an imported solver key or protocol-native admin action as a hidden cleanup
+shortcut. If a dispute is taken or the supported UI cannot unwind it, stop and report unresolved escrow; do
+not mark the scenario accepted or launch more funded cases. Fix the product workflow or explicitly revise the
+plan before claiming completion. Destroying regtest volumes is not evidence of a refund.
+
+Payment fault injection is confined to invoices and HTLCs on run-owned regtest wallets. It never edits
+app/daemon databases or changes orders. Each fault declares its prerequisite, injection point, expected
+visible response, negative payment assertion and recovery/cleanup route.
+
+## 11. Error handling, cleanup and recovery
+
+Use typed failure categories: product, automation contract, infrastructure, relay, wallet and environment
+misconfiguration. Do not infer a category from message text. A missing control is not evidence that an order
+is closed. A successful input API call is not evidence that the app accepted the value.
+
+Register cleanup as soon as submission can create an order, including uncertain submission outcomes. Discover
+new run-owned order IDs through public UI and relay observations to avoid orphaning an order when confirmation
+is missed. Never blindly repeat submit/release/pay after a timeout.
+
+On success, failure or interruption:
+
+1. Preserve sanitized UI/relay/wallet evidence before closing clients.
+2. Resolve or cancel every tracked order through supported UI, including range
+   remainders and all destination-cap trades.
+3. Verify terminal wallet outcomes; record outstanding hashes and escrow.
+4. Close both client sessions, request tasks and owned process groups even if
+   one cleanup step fails; retain enough handles to retry failed cleanup.
+5. Remove owned temporary profiles and credential storage only after all
+   orders/payments are resolved. For unresolved orders retain protected actor
+   storage as described below; still stop owned processes, buses and displays.
+6. Report every cleanup failure. Unresolved cleanup prevents acceptance.
+
+### 11.1 Durable UI recovery
+
+Persist a sanitized recovery manifest as soon as an order may exist. It records run/stack identity, actor
+labels, order IDs, invoice hashes, artifact provenance, cleanup steps and references to protected storage; it
+contains no private keys. Store recoverable actor profiles and Linux credential-service data outside the
+repository under the operator's private state directory, with owner-only permissions. Never export mnemonics
+or private app keys to the manifest.
+
+If UI cleanup fails with unresolved orders, stop processes but retain those profiles and their Secret Service
+state. A subsequent `cleanup <run-id>` reacquires the environment lock, validates the same stack and app
+provenance, starts new private runtime services using retained storage, verifies the original public actor
+identities and retries only the required normal UI actions. Web reuses the protected browser profile and its
+original loopback origin (scheme, host and port);
+record and rebind that origin because Web storage is origin-scoped. If the original port cannot be rebound,
+report an explicit recovery failure instead of silently using a new origin. Linux reuses both app and
+credential data. A missing profile or identity mismatch is an explicit
+unrecoverable-identity error, never permission to create a fresh identity and call cleanup successful.
+
+Track retained storage and recovery status in `cleanup.json`. Retention lasts until confirmed order/payment
+resolution and an explicit successful cleanup, not an automatic expiry that destroys the only recovery
+identity. Cleanup must never remove unresolved storage through a generic temporary-directory sweep. A stack
+reset may be needed for regtest diagnostics, but record unresolved outcomes before reset; disappearance after
+reset is not proof of cancellation.
+
+A subsequent clean run must not inherit identities or browser profiles. Refuse a funded run on the same
+wallet/stack set while tracked orders or held payouts remain unresolved; recover them first.
+Infrastructure retries are bounded and explicitly configured; they preserve the failed attempt and cumulative
+budget. Product, contract or payment-correlation failures must not be retried into a hidden pass. For
+development, fix the cause and start a new recorded run.
+
+## 12. Reports and reproducibility
+
+Keep existing summary, timeline, UI screenshots/hierarchy, relay events, wallet payments and cleanup artifacts
+under ignored `artifacts/<run-id>/`. Extend reports with platform, app revision/artifact digest, dirty state,
+Flutter/Rust/browser/driver versions, stack identity, actual daemon image version/digest, declared limits,
+seed relay endpoints, lane and resource data.
+
+Record scenario source name, actor roles, attempt number, timings, required capabilities, status, explicit
+failure category and cleanup status. A skip or unsupported capability is visible and never counted toward
+twenty. Persist a per-platform acceptance ledger with run IDs and sanitized evidence locations.
+
+Sanitize process errors as well as successful output. Raw app/service logs may exist only in actor-private
+directories with restrictive permissions and must be removed on teardown; do not publish them. Never capture
+the operator's real desktop when taking a Linux screenshot. Keys, mnemonics, credentials, NWC URIs and
+sensitive invoice content must not leak into evidence.
+
+## 13. Automated validation and review
+
+Follow TDD for implementation changes. Add meaningful tests for configuration, platform selection, command
+plans, redaction, actor isolation, bounded waits, state mapping, budgeting and cleanup failures. Exercise
+desktop coordinator paths through injected sessions, including partial startup and persistent-stack
+non-destruction. Test profile cleanup when executables are missing and static server shutdown with an
+in-progress request.
+
+Before every commit:
+
+```sh
+cargo fmt --all
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
 ```
 
-Artifacts are sanitized before upload. Mnemonics, private keys, NWC URIs,
-macaroons, tokens, sensitive invoices, and fiat-payment details must be
-redacted. Screenshots pass through redaction before CI publication. Raw
-evidence, if retained at all, stays in the secured runner for a short,
-documented period and is accessible only to authorized maintainers.
-
-## 12. Implementation shape
-
-Use Rust exclusively for Mortsom. The coordinator, configuration, Docker and
-emulator lifecycle, WebDriver client, relay/wallet observers, scenario kit,
-adapters, reporting, and command-line interface are Rust crates. Appium and
-UiAutomator2 run only as external services reached through the WebDriver
-protocol; Mortsom contains no TypeScript or Node application code.
-
-```text
-mortsom/
-  spec.md
-  docs/
-  packages/
-    coordinator/        # runner, budgets, timeouts, cleanup, reporting
-    app-contract/       # shared domain actions, states, capabilities, fixtures
-    app-adapters/       # one adapter per mobile application generation
-      mobile-legacy/    # first adapter: ../mobile
-      mobile-v2/        # future adapter: ../mobilev2
-    android-driver/     # Appium/UIAutomator2 and emulator primitives
-    environment/        # emulator, relay, daemon, and wallet provisioning
-    observers/          # UI, notification, relay, wallet, artifacts
-    scenario-kit/       # domain actions, assertions, shared models
-  scenarios/
-    smoke/
-    regression/
-    recovery/
-    adversarial/
-  config/
-    local.example.yaml
-    ci.example.yaml
-    canary.example.yaml
-  artifacts/            # ignored
-```
-
-The mobile app repository owns accessibility identifiers and bootstrap hooks.
-Mortsom owns automation, scenario definitions, environment orchestration, and
-reports. Changes to a semantic identifier, visible business state, or
-external-wallet callback are contract changes and require coordinated review.
-
-### 12.1 Multi-application adapter boundary
-
-Mortsom's coordinator, Android lifecycle, Docker relay, daemon management,
-NWC configuration, budget accounting, observers, artifacts, and scenario
-language are application-independent. An `AppAdapter` is the only layer that
-knows a particular app package, APK build procedure, bootstrap mechanism,
-accessibility identifiers, navigation, and screen copy.
-
-The adapter exposes business capabilities rather than widget details:
-
-```text
-AppAdapter
-  build(profile) -> Apk
-  install_and_bootstrap(device, actor, environment)
-  configure_nwc(device, wallet_reference)
-  create_sell_order(device, draft) -> VisibleOrder
-  find_and_take_order(device, order_reference)
-  pay_hold_invoice(device) -> PaymentHandoff
-  confirm_fiat_sent(device, order_reference)
-  release(device, order_reference)
-  cancel_if_open(device, order_reference)
-  observe_order(device, order_reference) -> AppOrderState
-  capabilities() -> CapabilitySet
-```
-
-The shared scenario kit operates only on this contract and on normalized
-business states such as `Pending`, `Taken`, `Active`, `FiatSent`, `Completed`,
-`Cancelled`, `Expired`, and `Disputed`. It must not import a legacy selector,
-Flutter route, Rust-core type, or localized string. An adapter maps these
-states to its application-specific rendering and proves the mapping through
-adapter contract tests.
-
-### 12.2 Profiles and capability gating
-
-Each application generation has a named profile, initially `mobile-legacy` and
-later `mobile-v2`. A profile selects source directory, build command/package,
-environment bootstrap implementation, selector registry, and supported
-capabilities. The same scenario can run against both profiles when it requires
-only their common capabilities.
-
-For example, `happy_sell` requires onboarding, custom Mostro node selection,
-local relay configuration, NWC, create/take, hold-invoice payment, fiat sent,
-release, and completed-state observation. A scenario that requires a feature
-not yet available in one app is reported as **skipped with a reason**, never
-passed and never silently omitted. The report includes app profile and app
-version for every result.
-
-This avoids freezing Mortsom around the old app while avoiding a premature
-lowest-common-denominator design. The legacy adapter is built first; the v2
-adapter is added only after the shared contract has proven one full trade.
-
-### 12.3 Cross-app parity suite
-
-When both adapters exist, Mortsom adds a `parity` suite. It runs a shared
-scenario against each profile in isolated runs and compares normalized outcome,
-legal state path, relay correlation, wallet result, cleanup result, and
-accessibility contract. It does not require pixel-identical screens or the
-same internal architecture. Differences in labels, navigation, storage, and
-implementation are adapter responsibilities; differences in user-visible
-business behavior become an explicit product decision or a finding.
-
-## 13. Open decisions
-
-1. Which wallet integration is the first acceptance target?
-2. Does the app already provide test-environment selection and safe identity
-   bootstrap, or must those be implemented?
-3. Which Android versions and device profiles constitute release support?
-4. Is a controlled Lightning adapter acceptable in PR UI tests, with real-LN
-   checks reserved for scheduled and canary lanes?
-5. Where will protected replay secrets and raw artifacts reside?
-6. Which user-visible order-state labels are contractual across releases?
-
-## 14. Success criteria
-
-The first release succeeds when it can automatically complete one trade between
-two app instances, capture privacy-safe evidence, clean up after any failure,
-and accurately classify a UI defect versus relay, wallet, daemon, or
-infrastructure failure. The program is mature when its PR suite catches mobile
-regressions without becoming ignored noise, and its canary detects
-production-integration drift within a bounded amount of real value at risk.
-
----
-
-## 15. Concrete environment contract for `mobile`
-
-This section is normative for the first implementation. Mortsom targets the
-existing Flutter application in `../mobile`, not a hypothetical generic app.
-The runner receives the source checkout or a prebuilt APK, builds the APK when
-needed, creates two clean Android virtual devices, and installs the exact same
-APK on both devices.
-
-### 16.1 Configuration model
-
-One committed example file documents all non-secret defaults. One ignored local
-file and environment variables provide secrets. Mortsom resolves every required
-secret before creating a Docker container, booting an emulator, or starting a
-wallet connection. It must list all missing variable names at once.
-
-```toml
-# mortsom.toml -- committed, non-secret baseline
-[mobile]
-source_dir = "../mobile"
-flavor = "mortsom"
-apk_path = ""                     # empty means build from source_dir
-mostro_pubkey = "env:MORTSOM_MOSTRO_PUBKEY"
-dart_defines = ["MOSTRO_PUB_KEY=${MORTSOM_MOSTRO_PUBKEY}"]
-
-[android]
-avd_image = "system-images;android-35;google_apis;x86_64"
-device_profile = "Pixel_6"
-api_level = 35
-boot_timeout_secs = 180
-ui_timeout_secs = 30
-snapshot_name = "mortsom-clean"
-
-[relay]
-docker_image = "scsibug/nostr-rs-relay:latest"
-container_name_prefix = "mortsom-relay"
-host_port = 7000
-container_port = 8080
-
-[mostro]
-mode = "external_local"           # a locally managed Mostro daemon
-settings_file = "env:MORTSOM_MOSTRO_SETTINGS_FILE"
-health_timeout_secs = 120
-relays = ["ws://host.docker.internal:7000"]
-
-[wallets]
-mode = "nwc"
-alice_nwc = "env:MORTSOM_ALICE_NWC"
-bob_nwc = "env:MORTSOM_BOB_NWC"
-
-[run]
-amount_sats = 1000
-max_order_sats = 5000
-max_run_spend_sats = 20000
-jobs = 1
-artifacts_dir = "./artifacts"
-cleanup = true
-allow_mainnet = false
-```
-
-In the mainnet canary profile, `allow_mainnet` must be explicitly true, the
-runner must require an additional confirmation environment variable, and all
-spend caps remain mandatory. Mainnet NWC URIs, macaroons, seeds, and private
-keys are secrets. Mortsom never writes them to TOML, shell history, artifacts,
-logs, screenshots, or test reports.
-
-### 16.2 Nostr Wallet Connect configuration
-
-Alice and Bob each receive a different NWC URI. They must map to dedicated,
-funded test wallets and must never refer to a personal or production wallet.
-The runner validates each URI syntactically, redacts it immediately in memory
-representations, checks reachability through the NWC protocol, and records only
-an opaque wallet label and capability summary in the artifact.
-
-The classic mobile app already exposes NWC support. The first implementation
-must configure each URI through the normal settings UI. A test-only bootstrap
-may prefill the URI behind a build flag only after a UI-driven configuration
-scenario exists and proves that the settings page itself works. Even with a
-prefill, the app must display a connected-wallet state before a payment
-scenario begins.
-
-The harness records the payment hash, requested amount, terminal outcome, and
-fee for payments that belong to the scenario. It never relies on a global
-wallet balance assertion: parallel or prior activity makes such assertions
-ambiguous. A payment is associated with an order through its invoice and hash.
-
-### 16.3 Local relay lifecycle
-
-Mortsom owns the local relay lifecycle just as Ortsom does. For every run it:
-
-1. Allocates a unique Docker project/container name and port, preventing a
-   parallel developer run from attaching to the wrong relay.
-2. Starts `nostr-rs-relay` through Docker with a run-specific data directory.
-3. Waits for the relay WebSocket endpoint and performs a Nostr protocol probe.
-4. Publishes or verifies the relay-list event expected from the test daemon.
-5. Gives the emulator a reachable relay hostname. Android emulators use
-   `10.0.2.2` for services bound on the host; Docker and host networking must
-   be configured so both the app and daemon refer to the same relay endpoint.
-6. Persists sanitized relay logs and event observations as artifacts.
-7. Stops and removes the container and run data at teardown unless a failure
-   explicitly requests retained diagnostics.
-
-The runner must not silently fall back to public relays. The classic app has
-bootstrap relays for discovery, so the dedicated Mortsom build/configuration
-must prevent those production endpoints from changing the test's network
-boundary. The test daemon's kind-10002 relay list must advertise the local
-relay that both app instances can reach.
-
-### 16.4 Local Mostro daemon with mainnet Lightning
-
-The system under test is a locally operated Mostro daemon. It uses its normal
-mainnet Lightning connection, as Ortsom does, while the relay and daemon
-process are local. Mortsom does not start a fake daemon for end-to-end claims.
-
-The pre-flight sequence is:
-
-1. Read the daemon configuration path from a secret environment reference.
-2. Verify that its configured pubkey equals `MORTSOM_MOSTRO_PUBKEY`.
-3. Verify that its relay configuration contains the Mortsom local relay.
-4. Verify daemon readiness and LND connectivity without creating an order.
-5. Verify test timeout values: pending order, hold invoice, buyer invoice,
-   fiat window, and cleanup sweep must be short enough for scenarios.
-6. Verify the dedicated wallets have the minimum funding and that configured
-   caps are lower than available funds.
-7. Refuse a mainnet run unless all checks pass and explicit mainnet opt-in is
-   present.
-
-Mortsom may launch the daemon only when it owns a declarative local service
-definition. Otherwise it treats the daemon as an external local dependency,
-checks it, and never restarts an operator-owned process. The first phase should
-use the latter mode; automatic daemon process ownership may be added after the
-health and cleanup contract is proven.
-
-### 16.5 Android emulator lifecycle
-
-Each actor gets a distinct AVD name, Android user data directory, Appium
-session, and app data directory. The runner must implement these operations:
-
-1. Locate Android SDK, emulator, adb, Appium, UiAutomator2, Flutter, and Docker
-   before beginning work; report missing prerequisites in `mortsom doctor`.
-2. Create the pinned AVD image if absent, configure RAM/disk/GPU deterministically,
-and create a clean snapshot after baseline boot.
-3. Boot Alice and Bob in parallel, wait for Android boot completion, disable
-animations, set locale/time zone, configure emulator network routing, and
-unlock screens.
-4. Install the exact APK/version on both devices and verify package/version
-   identity before launching.
-5. Start independent Appium sessions and verify accessibility queries, tap,
-   text input, screenshot capture, app backgrounding, force-stop, and relaunch.
-6. Clear application data and restore the clean emulator snapshot after each
-   scenario. Never reuse a previous scenario's account, secure storage, or
-   Sembast database unless the scenario explicitly tests persistence.
-7. On failure, collect logcat, UI hierarchy, screenshots, Android process
-   state, emulator configuration, and relevant host-side service logs before
-   cleanup.
-
-## 16. Required application-facing changes
-
-Mortsom must not begin by automating unstable visual details. The `mobile`
-repository needs an explicit automation contract, implemented and reviewed as
-product code.
-
-### 17.1 Build-time test configuration
-
-The classic app already accepts `MOSTRO_PUB_KEY` through a Dart define. Extend
-that pattern, without changing normal production behavior, to provide:
-
-- a test build flavor that accepts the Mostro pubkey and local relay seed list;
-- a way to disable public bootstrap-relay fallback in that flavor;
-- an explicit test-environment marker visible in the app and report;
-- optional onboarding-only test identity injection; and
-- optional NWC prefill that is disabled by default and does not log a URI.
-
-Values passed as Dart defines are visible to build tooling; secrets must not be
-passed there. Pass only non-secret daemon identity and relay endpoints by Dart
-define. Provide NWC URI and mnemonic at runtime through protected Appium input
-or an emulator-local secret channel that is removed after onboarding.
-
-### 17.2 Accessibility contract
-
-Add stable semantic identifiers to onboarding, settings, NWC connection,
-order-book, order-detail, create-order, take-order, invoice, fiat-sent,
-release, cancellation, dispute, and error controls. Use identifiers instead of
-localized labels. Each semantic identifier receives a short owner and a
-behavioral contract in `mobile/docs/automation-contract.md`.
-
-Important examples include `onboarding.import_mnemonic`,
-`settings.nwc.connect`, `order.create.submit`, `order.take.confirm`,
-`order.status`, `trade.fiat_sent`, `trade.release`, and `wallet.connection`.
-The final exact identifier format is a mobile-team decision, but it must be
-namespaced, stable, documented, and tested in Flutter widget tests.
-
-### 17.3 Environment selection and relay discovery
-
-The app's normal relay discovery may use bootstrap relays when it has no
-operating relay. For Mortsom this is unsafe: a disconnected local relay must
-produce a test failure, not public-network traffic. The test flavor must seed
-the local relay before subscriptions begin and restrict discovery to the daemon
-under test. A bootstrap fallback remains valid only in production builds.
-
-## 17. Sequential implementation plan
-
-Every phase has an exit gate. Do not start a later phase until the prior gate
-passes; otherwise failures will be impossible to attribute.
-
-### Phase 0 — repository and safety foundation
-
-**Goal:** make Mortsom safe to develop without touching funds or the app.
-
-1. Expand the empty Rust scaffold into a Cargo workspace. Select and document
-   Rust crates for configuration, async process management, Docker control,
-   WebDriver protocol access, serialization, redaction, and reporting before
-   adding scenarios. Appium with UiAutomator2 is an external Android service;
-   no TypeScript or Node application code belongs in Mortsom.
-2. Create `mortsom.toml.example`, `.gitignore`, secret-redaction utilities,
-   and config validation tests. Every `env:` secret reference must fail closed.
-3. Implement `mortsom doctor` for Docker, Android SDK, emulator, adb, Appium,
-   Java, Flutter, the mobile checkout, daemon reachability, relay port, and
-   required environment variables. It must perform no payment and no order.
-4. Implement run IDs, structured logs, artifact directories, and a global
-   safety guard that refuses mainnet unless explicit opt-in is present.
-5. Implement cap accounting interfaces before any wallet action. A missing cap
-   is an error, never an unlimited default.
-
-**Exit gate:** `mortsom doctor` produces a redacted report on a developer
-machine and correctly reports each missing dependency or secret.
-
-### Phase 1 — deterministic infrastructure
-
-**Goal:** automatically start and prove the local test topology.
-
-1. Add Docker Compose or an equivalent service module for `nostr-rs-relay`.
-   Allocate a unique relay port and run data directory per run.
-2. Implement relay readiness probing and explicit teardown. Add tests proving
-   a failed startup does not remove another run's container.
-3. Add external-local Mostro daemon readiness checks: pubkey, relay list, LND
-   connection, and declared short timeouts. Do not launch or restart it yet.
-4. Implement an event observer subscribed only to Mortsom actor identities and
-   run-created order IDs. Store redacted ordered JSONL evidence.
-5. Add a no-app smoke command that proves relay-to-daemon-to-relay event flow
-   using a harmless metadata or readiness observation, not an order.
-
-**Exit gate:** one command starts a local relay, verifies the local daemon uses
-it, collects relay evidence, and always cleans up containers.
-
-### Phase 2 — Android device farm of two
-
-**Goal:** create reproducible Alice and Bob devices.
-
-1. Implement AVD discovery/creation with pinned image, device profile, and
-   snapshot. Keep the image/version matrix in configuration.
-2. Implement independent Alice and Bob AVD paths and ports. Prove that killing
-   Alice cannot affect Bob.
-3. Implement boot/readiness, network host mapping, locale/time configuration,
-   animation disabling, unlock, APK installation, and version verification.
-4. Start Appium sessions and implement basic primitives: find-by-accessibility,
-   tap, type, wait, screenshot, hierarchy dump, background, force-stop,
-   relaunch, and clear-data.
-5. Implement a smoke scenario that launches both copies of the app and records
-   their initial screens without creating an identity or order.
-
-**Exit gate:** `mortsom device smoke` brings up two clean devices, launches the
-same specified APK, gathers evidence, and tears them down reliably.
-
-### Phase 3 — mobile automation contract
-
-**Goal:** make the classic app automatable without brittle selectors.
-
-1. In `mobile`, add and document stable semantic identifiers for onboarding,
-   navigation, settings, relay/node selection, NWC, order creation, and order
-   state. Add widget tests that fail if each identifier disappears.
-2. Add the Mortsom-only build configuration. It accepts local relay and daemon
-   pubkey settings, disables production relay fallback, and visibly marks the
-   environment. It must be impossible to enable accidentally in release builds.
-3. Implement UI-driven onboarding for Alice and Bob with fresh generated test
-   identities. Verify identities differ and survive app restart.
-4. Implement the normal settings UI path for configuring a custom Mostro node
-   and test relay. Verify the app reaches the local daemon's relay list.
-5. Implement UI-driven NWC setup for both devices. Verify connected state and
-   record only redacted wallet metadata.
-
-**Exit gate:** both apps, using only UI actions, have distinct identities,
-connected NWC wallets, the local relay, and the local daemon configured.
-
-### Phase 4 — first real end-to-end trade
-
-**Goal:** prove Mortsom closes the entire user journey once.
-
-1. Implement screen objects and domain actions for creating a fixed-price sell
-   order, discovering it, opening its detail screen, taking it, and checking
-   visible statuses.
-2. Register cancellation cleanup immediately after successful creation. Make
-   cleanup idempotent and preserve its evidence.
-3. Implement payment handling through the app's actual NWC flow; the runner
-   may observe payment state but may not call NWC to advance a UI scenario.
-4. Implement buyer invoice submission, fiat-sent confirmation, seller release,
-   completion display, and payment-settlement correlation.
-5. Implement a single ordered timeline artifact joining screenshots, UI states,
-   relay events, wallet observations, and cleanup result.
-6. Require explicit mainnet opt-in for this phase. Start at the smallest safe
-   amount and abort before any payment exceeding caps.
-
-**Exit gate:** `happy_sell` runs from clean devices to completed order, shows
-the correct state on both apps, records matching relay/payment evidence, and
-leaves no open order or unsettled payment.
-
-### Phase 5 — recovery, failure, and cleanup
-
-**Goal:** find the bugs users meet outside the happy path.
-
-1. Add app-restart scenarios at each durable trade state. Assert restored state
-   and absence of duplicate Nostr actions.
-2. Add network loss/recovery, relay restart, app backgrounding, force-stop,
-   slow event delivery, duplicate event, and stale event scenarios.
-3. Add NWC cancellation, unavailable wallet, rejected invoice, expired invoice,
-   failed payout, and retry-status scenarios using controlled wallet behavior
-   where needed.
-4. Add pending cancellation, expiration, cooperative cancellation, and
-   unauthorized-action UX scenarios.
-5. Add a final cleanup sweep and a `mortsom cleanup <run>` command. It must
-   report unresolved resources honestly rather than pretending success.
-
-**Exit gate:** a forced failure preserves diagnostics, executes cleanup once,
-and a following clean run begins with no inherited app or order state.
-
-### Phase 6 — CI and operational canary
-
-**Goal:** make the suite useful continuously without turning it into noise.
-
-1. Containerize runner dependencies or provide a pinned bootstrap installer for
-   CI agents. Cache Android images and Flutter dependencies safely.
-2. Run non-value-moving device and UI-contract tests on every pull request.
-3. Run isolated integration smoke tests only in a secured CI environment with
-   dedicated secrets and explicit budget policy.
-4. Publish sanitized timeline, screenshots, logs, retry classification, and
-   artifact links for failures.
-5. Add scheduled mainnet canary with single-run locking, hard caps, alerting,
-   manual review on failure, and accounting trend reports.
-6. Add a runbook explaining infrastructure failures, app regressions, payment
-   failures, relay failures, cleanup recovery, secret rotation, and incident
-   response.
-
-**Exit gate:** PR checks are deterministic and useful, while the canary can
-detect a real integration regression without risking more than its configured
-budget.
-
-### Phase 7 — `mobilev2` adapter and parity
-
-**Goal:** extend a proven harness to the new Flutter application without
-duplicating its infrastructure or weakening the legacy suite.
-
-1. Inventory `mobilev2` onboarding, node/relay configuration, NWC flow, order
-   states, package/build process, and accessibility surface against the shared
-   `AppAdapter` contract.
-2. Add only the missing adapter capabilities or normalized states that are
-   genuinely product-wide; do not leak v2 implementation types into the shared
-   scenario kit.
-3. Implement `mobile-v2` build, install, bootstrap, selector, and screen
-   mapping modules. Keep all Rust-core interaction inside the v2 app; Mortsom
-   still controls it exclusively through UI and public Android behavior.
-4. Port `happy_sell` unchanged at the scenario layer. Differences belong in the
-   adapter unless they expose a deliberate user-facing behavior difference.
-5. Add contract tests for every v2 selector and state mapping, then add the
-   cross-app parity suite for the common scenario set.
-6. Run legacy and v2 in separate jobs with their own build/profile metadata so
-   one application's failure cannot contaminate the other's artifacts.
-
-**Exit gate:** the same normalized happy-path scenario runs against both app
-profiles, produces comparable evidence, and reports intentional differences
-explicitly rather than hiding them.
+Maintain at least 80% line coverage with `cargo llvm-cov`; scenario narratives are tests rather than
+production code under test. App contract changes require relevant Flutter tests/analyze and the app's
+documented Rust checks. New or updated dependencies require a latest-stable check, respecting the explicit
+Mostro/Nostr pin exception.
+
+Use independent review subagents as requested: review each completed change before commit, then review the
+resulting commit for overlooked bugs. Resolve findings and rerun affected checks/live scenarios. Use
+Conventional Commits, separate completed specification tasks, and never commit secrets or artifacts.
+
+## 14. CPU and memory comparison
+
+Measure Linux and Web after correctness, using the same physical host, daemon image digest, app revision,
+relay, wallet state, scenario order, amounts, headless policy and declared deadlines. Run sequentially so
+modes do not compete. Exclude Flutter/Rust compilation from execution measurements and report cold
+build/startup costs separately.
+
+Collect at a documented sampling interval (initial target: one second):
+
+- Cumulative process-tree CPU seconds and mean CPU cores used, with a stated
+  percentage convention; distinguish lifecycle/startup, idle and scenario work.
+- Combined RSS and peak sampled RSS for both clients plus required helpers:
+  Xvfb, private buses/AT-SPI/keyring for Linux; browser subprocesses,
+  ChromeDriver and Web server for Web. RSS can double-count shared pages;
+  include PSS when available and disclose the limitation.
+- Shared stack/container CPU and memory separately, preventing shared daemon
+  costs from being attributed to one client platform.
+- Startup time, scenario duration, total elapsed time, pass/failure counts and
+  number of open processes after teardown.
+
+Use at least three complete measured repetitions per platform, alternating platform order. Report median and
+range, raw sanitized samples, measurement boundaries and host/tool versions. Idle comparison uses a declared
+observation window after both clients are ready; it does not introduce sleeps in scenarios. Do not claim CPU
+savings from RSS alone or present failed/incomplete suites as comparable performance results. Do not start
+Android emulators for this study; use an existing comparable Android baseline only if one already exists and
+label its limitations. Otherwise report Linux versus Web only.
+
+## 15. Dependencies and implementation risks
+
+| Risk | Planned resolution |
+|---|---|
+| Linux semantics IDs absent | Test-build name prefix plus app-owned contract and widget coverage |
+| Linux text API reports success without editing | Focus/edit through public accessibility; verify value and form response before submit |
+| Web semantics offscreen or rebuilt | User scrolling/focus, exact selectors, fresh lookup and bounded interactability waits |
+| Shared credentials or leftover services | Private DBus/Secret Service and profiles; readiness and failure-cleanup tests |
+| Dart/Rust binding mismatch | Official regeneration before build; record artifact provenance |
+| Docker relay address unreachable from host | Verify advertised endpoint reachability and test relay restrictions |
+| App conflates pending payout with completion | Repair user-visible state mapping and assert actual wallet settlement |
+| Missing dispute exit | Prove UI cleanup before funding; repair app workflow and revalidate |
+| Expiry or payout limits differ from assumptions | Read declared stack limits and verify behavior against running daemon |
+| Cap test consumes too many resources | Use explicit small test limits supported by Ortsom, budget every trade, preserve assertions |
+| Multiple-run interference | Lock the environment/wallet set, scope events, reset clients between scenarios |
+
+## 16. Delivery artifacts
+
+The delivered change includes the Rust implementation, coordinated app v2 contract fixes, CLI/config examples,
+operator setup and recovery documentation, the scenario matrix/acceptance ledger, reviewed commits, required
+automated check results and a standalone resource comparison with reproducible commands.
+
+Document prerequisites instead of relying on tools manually installed during development. Include headless
+Linux and Chromium/WebDriver setup, supported paths and failure messages. A user must be able to reproduce
+acceptance after recreating the stack and building the app from documented source revisions.
+
+## 17. Sequential implementation plan and exit gates
+
+Execute phases in order and close the preceding gate before starting planned later-phase work. Existing
+exploratory builds and live probes are recorded as completed narrow tasks where supported by evidence;
+these diagnostic results do not imply that any intervening phase has passed its gate.
+
+### 17.1 Task status convention
+
+- `[x] DONE`: the narrowly described task is completed with the evidence
+  stated. This does not imply the containing phase has passed its exit gate.
+- `[ ] IN PROGRESS`: code or a partial result exists, but required validation
+  or corrections remain. Do not count it as completed.
+- `[ ] TODO`: implementation or acceptance work remains.
+
+Gate status is separate from task status. Diagnostic live attempts are allowed to expose missing requirements;
+they cannot waive an earlier incomplete gate. When updating a checkbox, add a commit, check result or live run
+ID. Do not mark a task done solely because its function or file exists.
+
+### 17.2 Phase 0 — Specification and baseline
+
+**Status:** completed. **Primary files:** `spec.md`, `docs/ortsom-ui-parity.md`, `docs/stack.md`.
+
+- [x] **P0.1 DONE — Inventory the existing design and sibling contracts.** Read Mortsom's previous spec,
+  Ortsom's catalogue and source families, and app v2's build/accessibility contract. Ownership is specified in
+  sections 2–3.
+- [x] **P0.2 DONE — Establish the source catalogue and initial matrix.** Identify twenty distinct source
+  narratives; section 10 records the selected scope and the reason for changing the provisional fairness
+  candidate.
+- [x] **P0.3 DONE — Establish the existing Rust baseline.** Earlier workspace library/integration tests
+  passed. Fix the current clippy large-error warning with boxed device-startup errors in reviewed commit
+  `b4af42d`.
+- [x] **P0.4 DONE — Record the migration ownership amendment.** Reviewed commit `ec22af1` established
+  persistent-stack and Linux/Web execution gates; this version expands and supersedes that short amendment.
+- [x] **P0.5 DONE — Review and commit the complete specification.** Independent review checked source
+  fidelity, phase counts, actual bootstrap evidence and zero trade passes. Corrected invoice ordering, event
+  cursor timing, secret-free stack metadata and durable UI recovery including Web origin. The twenty-row
+  ledger and local links were checked; fmt, clippy and workspace tests passed before this documentation
+  commit.
+
+**Gate G0: passed.** Specification review findings are resolved; phase tasks, the twenty-case matrix and
+current evidence agree.
+
+### 17.3 Phase 1 — Stack integration, configuration and CLI
+
+**Status:** in progress. **Primary files:** coordinator `src/stack/`, `src/cli.rs`, `src/config/`,
+`src/desktop.rs`, `src/doctor/`, `config/desktop.example.toml` and CLI integration tests.
+
+- [x] **P1.1 DONE — Start the real reference environment.** The external Ortsom stack command successfully
+  brought up the development regtest topology.
+- [x] **P1.2 DONE — Update the development daemon image.** Pulled latest and recreated the running daemon on
+  the digest recorded in section 18, retaining the stack identity. This is a one-time verified update, not
+  proof that the new Mortsom update command already converges existing containers correctly.
+- [ ] **IN PROGRESS — P1.3 Complete the stack command adapter.** Existing
+  `stack::{invoke,binary,StackContext}` delegates up/status/down and resolves connection references. Add
+  running-image digest comparison and readiness verification after up; test pull failures, partial startup,
+  already-running stale images and refusal to delete unrelated containers.
+- [ ] **TODO — P1.9 Consume a secret-free stack descriptor.** Implement a public descriptor or supported
+  structured export in Ortsom containing daemon identity, endpoints, declared limits and digest, without
+  solver keys or wallet credentials. Read that contract in StackContext with schema validation; current
+  whole-file parsing of combined public/solver TOML must be replaced. Review any sibling contract addition
+  separately and test absence of secrets.
+- [ ] **IN PROGRESS — P1.4 Complete platform/configuration selection.** Linux default, Web and Android parsing
+  and a v2 example exist. Add CLI tests for defaults, unknown platforms, explicit Android config and
+  dependency isolation. Separate platform settings from shared UI deadlines; never require Android tools or
+  placeholder AVD settings to use Linux/Web.
+- [ ] **IN PROGRESS — P1.5 Finish artifact preparation.** Move source lookup inside the source-build branch,
+  run supported binding generation and Web preparation scripts, resolve executable paths and sanitize all
+  build errors. Test source-absent prebuilt artifacts, failed generation and missing outputs.
+- [ ] **TODO — P1.6 Implement platform-aware doctor.** Resolve the same stack references as run; check only
+  selected-platform tools, artifact/build prerequisites, local endpoint reachability, daemon identity,
+  network, wallet capabilities, liquidity and declared limits. Tests must prove doctor invokes neither order
+  actions nor wallet payment/invoice mutation methods.
+- [ ] **TODO — P1.7 Lock stack/wallet ownership independently of artifacts.** Derive a canonical environment
+  identity, acquire its exclusive lock before mutation, release on every exit and test two artifact paths
+  targeting one stack.
+- [ ] **TODO — P1.8 Persist immutable environment metadata.** Extend run summary and environment report with
+  actual daemon digest/version, platform, endpoint roles, app artifact hash and declared limits. Test
+  redaction and missing data.
+
+**Gate G1:** CLI/config/doctor and update/readiness tests pass; real `stack up` converges to the requested
+digest; a failed or successful run demonstrably leaves persistent stack resources intact. **Gate not yet
+accepted.**
+
+### 17.4 Phase 2 — Builds and isolated Linux/Web clients
+
+**Status:** in progress. **Primary files:** `crates/desktop-driver/src/`, coordinator `src/run/farm.rs`,
+`src/bootstrap.rs`, `src/run/mod.rs`, app v2 `lib/core/automation/`, Mortsom entrypoint and automation
+contract tests.
+
+- [x] **P2.1 DONE — Prove app v2 builds locally on both targets.** Native release and Web release/WASM builds
+  succeeded after official binding regeneration.
+- [x] **P2.2 DONE — Prove Linux accessibility discovery.** Isolated native smoke observed the environment
+  marker and walkthrough controls through AT-SPI.
+- [x] **P2.3 DONE — Prove Web accessibility discovery.** Isolated Chromium smoke observed the same environment
+  marker through the public semantics DOM.
+- [x] **P2.4 DONE — Prove actual onboarding and restart identities.** Linux run
+  `20260908T100217Z-a9eaf0273a29` and Web run `20260908T100434Z-7f107aaadcd8` passed both actors'
+  bootstrap/identity checks. Their trade assertions failed and are explicitly not part of this completion.
+- [ ] **IN PROGRESS — P2.5 Finish native interaction correctness.** Existing `native.rs` and `linux.rs` expose
+  AT-SPI actions/text/state. Add focus and scroll handling, verify actual editable values and visible form
+  feedback, and handle transient stale nodes without hiding permanent transport errors. Reproduce the
+  empty-field failure before fixing it.
+- [ ] **IN PROGRESS — P2.6 Finish Web interaction correctness.** Existing `web.rs` supports exact escaped IDs
+  and input/readout lookup. Add bounded user scrolling and re-find after focus/rebuild. Reproduce the clipped
+  sats field; test non-interactable and stale nodes without fixed delay or duplicate submit. Do not toggle
+  fixed/market mode merely because a field is offscreen.
+- [ ] **IN PROGRESS — P2.7 Close Linux lifecycle review findings.** Private XDG/DBus/AT-SPI/keyring and
+  automatic display allocation exist. Validate the new unlocked-keyring readiness predicate, child health,
+  aggregate cleanup, retained retry handles and absence of leaked mounts/processes after failure.
+- [ ] **IN PROGRESS — P2.8 Close Web lifecycle review findings.** Guard profile directory creation before
+  every fallible startup step; test missing driver, failed session/navigation and teardown errors. Own
+  static-server request tasks with a join set or equivalent and abort/drain them on shutdown.
+- [ ] **TODO — P2.9 Inject desktop session construction.** Add a factory seam to `RunDeps` returning
+  independent `Arc<dyn UiSession>` handles and owned server resources. Remove hardcoded real runners from
+  `Farm::desktop`; test second-actor failure, sibling survival and teardown through fakes.
+- [ ] **TODO — P2.10 Implement per-scenario actor reset.** Close old sessions, create new storage/credentials,
+  rerun bootstrap and rebuild actor context while retaining the run budget and persistent stack. Test that
+  previous IDs, subscriptions and profiles cannot be reused accidentally.
+- [ ] **IN PROGRESS — P2.11 Finish app contract coordination.** Linux name prefixes and desktop sidebar
+  navigation fixes exist. Review and test all direct `Semantics` nodes, production-label isolation, visible
+  readouts and test-relay restrictions. Run the app's prescribed checks before committing.
+- [ ] **TODO — P2.12 Implement protected recovery storage.** Add durable manifest and actor-storage ownership
+  records before a UI submission can create an order. Separate process shutdown from profile deletion; test a
+  coordinator restart followed by UI-only cleanup with the original identities, missing storage, mismatched
+  stack and successful final deletion.
+
+**Gate G2:** both platforms pass fresh two-actor bootstrap and restart plus input/navigation smoke, injected
+partial-failure tests and verified complete client cleanup. **Gate not yet accepted.**
+
+### 17.5 Phase 3 — One fully correlated happy sell
+
+**Status:** diagnostic implementation in progress; zero live passes. **Primary files:**
+`scenarios/src/smoke/happy_sell.rs`, `scenarios/src/flow.rs`, v2 adapter `src/screens/{nav,orders}.rs`,
+`src/states.rs`, scenario-kit `actions.rs`, `evidence.rs`, `waits.rs`, `cleanup.rs` and wallet/relay
+observers.
+
+- [ ] **IN PROGRESS — P3.1 Repair and verify creation.** Read back fiat, payment method, pricing mode and sats
+  through public interfaces before submit; assert enabled state. Wait for a new order ID and public pending
+  event. Preserve the failed Linux/Web form cases as meaningful regressions.
+- [ ] **TODO — P3.2 Handle uncertain submission safely.** Capture known order IDs and observer cursor before
+  submit; register provisional cleanup, resolve any new run-owned order after timeout, and never blindly
+  republish.
+- [ ] **TODO — P3.3 Validate discover/take and invoice steps live.** Match the exact order ID in Bob's book
+  and take it. For a sell order, Bob first generates and submits the buyer payout invoice through normal UI;
+  only then does Alice read and pay the seller hold invoice. Reserve spend before initiating payment and track
+  both hashes.
+- [ ] **TODO — P3.4 Validate state and final settlement.** Drive fiat-sent and release UI, distinguish
+  intermediate payout states from completion, verify both clients' terminal state plus matching wallet
+  amounts/outcomes and absence of duplicate settlement. Correct inaccurate product state mapping explicitly.
+- [ ] **TODO — P3.5 Make cancellation/teardown truthful.** Missing cancel control must not mean AlreadyClosed.
+  Verify a positive terminal state or a completed cooperative cancellation and refund; surface unresolved
+  cleanup as failure.
+- [ ] **TODO — P3.6 Accept Linux happy_sell from fresh actors.** Record full correlated evidence, all checks
+  and complete cleanup under a new run ID.
+- [ ] **TODO — P3.7 Accept the same narrative on Web.** Run unchanged business steps against the Web driver;
+  preserve platform-specific diagnostics.
+
+**Gate G3:** P3.6 and P3.7 pass with verified exactly-once payments and clean teardown, after G1/G2
+acceptance. **Not passed.**
+
+### 17.6 Phase 4 — Core trade and cancellation journeys
+
+**Status:** pending. **Primary files:** app-contract types/adapter/capabilities, v2 screen adapters,
+`scenarios/src/smoke/`, `scenarios/src/regression/`, `scenarios/src/flow.rs` and corresponding app
+screens/widget tests.
+
+- [ ] **TODO — P4.1 Extend typed domain actions only where needed.** Introduce explicit fixed/market/range
+  drafts, selected take amount, rating and cooperative-cancel outcomes. Keep browser/desktop details outside
+  this API. Test serialization/validation, caps and normalized state behavior.
+- [ ] **TODO — P4.2 Add happy_buy.** Keep Alice seller/Bob buyer while reversing maker/taker creation. Follow
+  the buy-order prerequisites: Alice pays the seller hold first, then maker Bob submits the buyer payout
+  invoice. Share final settlement assertions without forcing the sell-order invoice sequence or duplicating
+  platform-specific flow code.
+- [ ] **TODO — P4.3 Add cancel_before_taken.** Preserve existing cancel_pending compatibility if needed, but
+  register the source name only once for counting. Assert terminal UI/book removal and no payment.
+- [ ] **TODO — P4.4 Add cooperative_cancel and unilateral_cancel_rejected.** Expose explicit request/accept UI
+  actions and counterpart notification/state; assert absence of premature cancellation and prove refund during
+  cleanup.
+- [ ] **TODO — P4.5 Add full_trade_with_rating.** Add stable rating controls and accepted-state readouts in
+  app v2, submit each rating once and verify the source behavior through visible feedback and available public
+  reputation data.
+- [ ] **TODO — P4.6 Add range_order.** Add accessible range/take amount controls, validate min/max, observe
+  the remainder as a distinct order and register its cleanup. Budget the taken amount without treating the
+  range maximum as a completed payment or ignoring residual orders.
+- [ ] **TODO — P4.7 Add market_price_order.** Read the resolved amount before payment, apply the existing
+  cap/fee policy and fail safely if the live quote exceeds the budget. Record the observed quote instead of
+  hardcoding a rate.
+- [ ] **TODO — P4.8 Validate the phase set on Linux and Web.** Fresh actors per scenario, no inherited
+  outcomes, evidence entries and clean order/payment state after every case. Review implementation and app
+  contract commits.
+
+**Gate G4:** happy_sell plus these seven additional source scenarios pass on both targets. **Not started as an
+accepted phase.**
+
+### 17.7 Phase 5 — Expiration and dispute journeys
+
+**Status:** pending. **Primary files:** new focused expiration/dispute scenario modules, scenario-kit
+deadline/negative-observation helpers, app v2 expiry and dispute UI, v2 adapter actions/states and relay
+dispute-event scope.
+
+- [ ] **TODO — P5.1 Define declared daemon deadline inputs.** Load pending, buyer-invoice and hold-invoice
+  limits plus sweep margin without deriving business behavior from arbitrary local sleeps. Validate scenario
+  budgets before startup and capture observation cursors immediately before triggering UI actions so fast
+  daemon responses cannot be missed. Negative-observation windows start after action acknowledgement.
+- [ ] **TODO — P5.2 Add pending_order_expires.** Expose expiry selection through normal app UI and stable
+  identifiers, submit the intended deadline, and assert expiry/book disappearance. Do not mutate the order
+  through the runner.
+- [ ] **TODO — P5.3 Add cancel_after_take_unpaid.** Abandon a take, wait for the declared recovery transition
+  and validate whether the actual daemon returns pending, canceled or expired; distinguish the event from
+  initial publication.
+- [ ] **TODO — P5.4 Add hold_invoice_expires and buyer_invoice_deadline.** Make their prerequisites distinct:
+  valid buyer invoice with unpaid seller hold versus absent buyer invoice. Assert no settlement and legal UI
+  recovery.
+- [ ] **TODO — P5.5 Prove dispute cleanup capability before funded tests.** Add missing public controls for
+  request/accept cancellation of an untaken dispute, test state mapping and refund behavior. Refuse unsafe
+  dispute cases before payment if a supported exit cannot be established.
+- [ ] **TODO — P5.6 Add dispute_by_buyer and dispute_by_seller.** Preserve actor role and fiat-sent
+  preconditions, correlate dispute ID with the public event, then unwind using the proved UI route without an
+  imported solver identity.
+- [ ] **TODO — P5.7 Add dispute_then_cooperative_cancel.** Assert both order and dispute terminal outcomes
+  plus refunded hold. Where replaceable events share timestamps, use observed-event sequence/time predicates
+  instead of sleeps or weakening assertions; fix daemon behavior if current evidence requires it.
+- [ ] **TODO — P5.8 Validate all seven additions on both targets.** Record actual elapsed deadlines, cleanup
+  outcomes and distinct source names. Review app, harness and any necessary daemon changes independently.
+
+**Gate G5:** fifteen priority scenarios cumulatively accepted per platform; no open disputes or unresolved
+escrow. **Not started.**
+
+### 17.8 Phase 6 — Invoice faults and the complete twenty
+
+**Status:** pending. **Primary files:** wallet boundary/adapters, observers, app-contract capabilities, new
+payment-failure scenarios and v2 invoice UI.
+
+- [ ] **TODO — P6.1 Extend the regtest wallet fault boundary.** Provide typed create-with-expiry,
+  cancel-invoice, create/settle/cancel-hold-invoice and observe-HTLC operations with injected fakes. Restrict
+  mutations to tracked run-owned hashes and preserve real wallet-network and budget guards.
+- [ ] **TODO — P6.2 Add invalid_buyer_invoice.** Separate local syntax validation from actual daemon rejection
+  using syntactically valid invalid invoices where needed. Keep the order invoice-required and prove no
+  illicit payment.
+- [ ] **TODO — P6.3 Add payout_invoice_below_the_expiry_floor.** Generate an invoice below the declared floor
+  with adequate test timing, submit through UI and verify the expected rejection rather than an unrelated
+  parse error.
+- [ ] **TODO — P6.4 Add payment_fails_on_release.** Invalidate the tracked payout invoice after fiat-sent and
+  before release, matching the source. Release through the seller UI, verify failure/retry/replacement
+  feedback, then recover and reconcile sats.
+- [ ] **TODO — P6.5 Add buyer_invoice_expires_mid_flight.** Issue an invoice with the declared expiry floor
+  plus submission margin, prove its acceptance, then invalidate it before release as the source does. This
+  differs from P6.4 in invoice-lifetime construction, not cancellation timing. Replace it through UI and prove
+  only the replacement settles.
+- [ ] **TODO — P6.6 Add payout_slots_capped_per_destination.** Require explicit destination cap, start with no
+  run-owned pending payouts, create enough ordinary UI trades using controlled hold invoices, assert the extra
+  payout has no HTLC, free a slot and prove automatic dispatch without another release. Clean all
+  orders/invoices and budget the entire group before funding.
+- [ ] **TODO — P6.7 Register and audit ortsom-core-20.** Test that the tag maps to exactly the twenty source
+  names in section 10. Reject alias double-counts; list capability failures explicitly and never convert them
+  into passes.
+- [ ] **TODO — P6.8 Run the complete Linux suite from fresh actor state.** Fill every Linux ledger cell with a
+  passing run and clean teardown evidence.
+- [ ] **TODO — P6.9 Run the complete Web suite.** Fill every Web ledger cell with the same business assertions
+  and failure-injection points.
+
+**Gate G6:** twenty distinct priority sources pass per platform with no skips or unresolved cleanup. **Not
+started; current live count is 0/20 on each.**
+
+### 17.9 Phase 7 — Resource measurements and delivery
+
+**Status:** pending. **Primary files:** a Rust resource-sampling boundary, coordinator lifecycle/report
+integration, tests, README/runbooks and `docs/resource-comparison.md` (to be created).
+
+- [ ] **TODO — P7.1 Implement resource sampling.** Read owned process trees and container counters through
+  injectable readers/clock; preserve process start identity against PID reuse. Aggregate deltas into CPU
+  seconds, mean cores, sampled RSS peak and optional PSS. Unit-test counter reset and vanished child handling;
+  report missing samples rather than substituting zero.
+- [ ] **TODO — P7.2 Add lifecycle measurement boundaries.** Record build, startup, ready idle, scenario
+  execution and cleanup separately. Include driver/server overhead and distinguish shared stack cost from
+  actor client cost.
+- [ ] **TODO — P7.3 Execute matched repeated measurements.** Follow section 14: three full passing suites per
+  platform, alternating order, identical inputs and immutable daemon/app artifacts. Exclude failed runs from
+  comparison while retaining their diagnostic reports.
+- [ ] **TODO — P7.4 Publish the local comparison artifact.** Produce an English report with median/range
+  tables, reproducible commands, raw sample paths, hardware/tool versions and explicit RSS/shared-page and
+  sampling limitations. Do not assert Android savings without a comparable existing baseline.
+- [ ] **TODO — P7.5 Complete verification and coverage.** Run all required Rust checks and the >=80% line
+  coverage gate, plus relevant app Flutter/Rust checks. Close desktop lifecycle, redaction, state and budget
+  regression gaps.
+- [ ] **TODO — P7.6 Finish operator documentation.** Document actual working setup/build/run/reset/cleanup
+  commands and dependencies, supported platform capabilities, failure diagnosis and unresolved-escrow
+  handling.
+- [ ] **TODO — P7.7 Review completed commits and audit acceptance.** Independent review must confirm every
+  checklist/ledger claim against code and evidence. Commit only completed tasks after checks/review; report
+  the final source revisions and remaining limitations without claiming unfinished scope.
+
+**Gate G7:** all section 1 criteria met. **Not started.**
+
+## 18. Current implementation evidence
+
+Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
+
+- The persistent Ortsom regtest stack is running. The pulled `latest` image
+  was identified as mostrod v0.18.7, digest
+  `sha256:bff406d11fc90436c9f7da5186f5976a63ae7ee1d711a6636d36205421cbda31`.
+  This is the observed development image, not a permanent definition of latest.
+- Linux and Web v2 builds and isolated read-only accessibility smoke passed.
+- Both platforms passed real Alice/Bob onboarding, node/relay configuration
+  and public identity persistence checks during happy_sell attempts.
+- **No live trade scenario has passed yet.** Linux reached order submission
+  without confirmation; its screenshot showed input values had not been
+  accepted. Web reached an offscreen sats field that WebDriver could not edit.
+  These are active failures, not accepted replications.
+- Existing workspace tests and clippy passed on an earlier implementation
+  snapshot. Further changes require rerunning checks. Coverage for the new
+  drivers, desktop lifecycle failure tests, platform-aware doctor, complete
+  build provenance and per-scenario reset remain pending.
+- Independent review found startup-readiness and cleanup gaps. Fixes are in
+  progress and are not considered accepted until tests and live reruns pass.
+- The twenty-case acceptance matrix and CPU/RSS comparison remain pending.
+
+The maintained per-scenario evidence index is [Ortsom UI parity](docs/ortsom-ui-parity.md). Update this status
+when verified results change; never replace failed evidence with an unqualified success claim.
