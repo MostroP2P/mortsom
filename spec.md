@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 11 completed, 12 in progress and 42 pending.
+current evidence separately. Section 17 tracks 65 tasks: 12 completed, 12 in progress and 41 pending.
 Live scenario acceptance remains Linux 0/20 and Web 0/20.
 
 ## 1. Objective and completion criteria
@@ -532,10 +532,12 @@ current evidence agree.
   `stack::{invoke,binary,StackContext}` delegates lifecycle commands with a pinned Compose project. Twelve
   stack tests and a live `mortsom stack up` passed digest/ownership/readiness checks; independent review
   passed. Remaining gate checks include durable metadata and post-run persistence; failures never destroy the stack.
-- [ ] **IN PROGRESS — P1.9 Consume a secret-free stack descriptor.** Reviewed Ortsom commit `8e82712` exports
-  versioned public status; StackContext now validates that JSON without opening combined solver TOML.
-  Tests cover malformed/unready status and secret redaction. Endpoint, declared-limit and image fields
-  remain pending; review further sibling contract additions separately.
+- [x] **P1.9 DONE — Consume a secret-free stack descriptor.** Reviewed Ortsom commits `8e82712`, `029e90e`,
+  `1552992` and `566a53e` export versioned status, declared limits, inspected endpoints and atomic container
+  image identity. Mortsom validates those fields without opening combined solver TOML. Required records,
+  nonzero limits, image/digest consistency, local endpoints and credential paths have regression coverage;
+  149 coordinator tests, CLI tests and full clippy passed, with independent review. Live read-only status
+  confirmed the pinned image. Persistence of these facts belongs to P1.8.
 - [ ] **IN PROGRESS — P1.4 Complete platform/configuration selection.** Linux default, Web/Android parsing and
   explicit config selection have regression tests. Desktop config now uses shared `[ui]` deadlines without
   placeholder AVD settings; Android-only commands require `[android]`. Full regression checks and review
@@ -552,9 +554,10 @@ current evidence agree.
   lock serializes stack/client lifecycle mutations, including updates and cleanup, independently of artifacts.
   Unit/CLI tests cover contention and release. Direct Ortsom commands and other users are outside this
   guard; durable unresolved-work exclusion remains a separate phase 2 acceptance requirement.
-- [ ] **TODO — P1.8 Persist immutable environment metadata.** Extend run summary and environment report with
-  actual daemon digest/version, platform, endpoint roles, app artifact hash and declared limits. Test
-  redaction and missing data.
+- [ ] **IN PROGRESS — P1.8 Persist immutable environment metadata.** Summary/environment now carry platform,
+  public stack facts and a complete bundle hash. Targeted checks cover hash stability/content sensitivity
+  and keeping registered secrets redacted while retaining public image hashes. Complete daemon version,
+  artifact provenance/revalidation and immutable run capture; finish independent review and failure tests.
 
 **Gate G1:** CLI/config/doctor and update/readiness tests pass; real `stack up` converges to the requested
 digest; a failed or successful run demonstrably leaves persistent stack resources intact. **Gate not yet
@@ -780,7 +783,8 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
   This is the observed development image, not a permanent definition of latest.
 - Real Mortsom `stack up` passed immutable-image/ownership/readiness verification. Ortsom commit `6353922`
   fixes the advertised host relay address. Read-only doctor passed 18 Linux and
-  14 Web checks; declared limits, artifact provenance and full failure-path validation remain pending.
+  14 Web checks, repeated after public metadata integration; artifact provenance and full failure-path
+  validation remain pending. Declared limits are imported; scenario verification of behavior remains pending.
 - Linux and Web v2 builds and isolated read-only accessibility smoke passed.
 - Both platforms passed real Alice/Bob onboarding, node/relay configuration
   and public identity persistence checks during happy_sell attempts.
@@ -788,9 +792,9 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
   without confirmation; its screenshot showed input values had not been
   accepted. Web reached an offscreen sats field that WebDriver could not edit.
   These are active failures, not accepted replications.
-- Existing workspace tests and clippy passed on an earlier implementation
-  snapshot. Further changes require rerunning checks. Coverage for the new
-  drivers, desktop lifecycle failure tests, remaining doctor checks, complete
+- Workspace tests and strict clippy passed on the reviewed public-metadata/bundle-hash snapshot,
+  including 149 coordinator tests. Subsequent native focus changes have separate targeted checks and still
+  require a full rerun. New-driver coverage, lifecycle failure tests, remaining doctor checks, complete
   build provenance and per-scenario reset remain pending.
 - Independent review found startup-readiness and cleanup gaps. Fixes are in
   progress and are not considered accepted until tests and live reruns pass.

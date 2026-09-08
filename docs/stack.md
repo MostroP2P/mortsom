@@ -44,3 +44,27 @@ External services (not Rust dependencies): Docker Engine, Android SDK
 (`emulator`, `adb`, `avdmanager`, `sdkmanager`), Appium 2 with the
 UiAutomator2 driver, Java 17, Flutter, and a locally operated Mostro daemon
 connected to a mainnet Lightning node.
+
+## Linux and Web execution (September 2026)
+
+The desktop driver uses `atspi 0.30.0` (latest stable checked with `cargo info`)
+for Linux's public accessibility protocol, with its Tokio/zbus transport.
+The existing W3C HTTP client also drives browser semantics. Desktop sessions
+share the existing UI trait; scenarios remain independent of platform.
+Effective-user executable checks use `rustix 1.1.4` with the `fs` feature (latest stable verified via
+`cargo info`), avoiding unsafe code and permission-bit approximations.
+Ortsom remains an external CLI owning persistent regtest infrastructure.
+`mortsom stack up` pulls `mostrop2p/mostro:latest`, resolves its repository digest,
+and invokes Ortsom with that immutable image reference. At verification, latest and v0.18.7 resolve to digest
+`sha256:bff406d11fc90436c9f7da5186f5976a63ae7ee1d711a6636d36205421cbda31`.
+
+### Client bundle fingerprints
+
+The coordinator uses `sha2` 0.11.0 (latest stable verified with `cargo info sha2` on
+2026-09-08) for complete bundle content identity. The versioned
+`sha256-mortsom-bundle-v1` manifest sorts UTF-8 relative file paths, then hashes a
+fixed domain prefix and each path length, path, content length and file SHA-256.
+Lengths use unsigned 64-bit big-endian encoding. Links and special files are
+rejected. This records content identity; it does not establish build provenance.
+Only explicitly typed public hash fields in run metadata bypass pattern-based
+redaction; registered secrets remain redacted, including in those fields.
