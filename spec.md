@@ -1,6 +1,6 @@
 # Mortsom technical specification
 
-**Version:** 0.2
+**Version:** 0.3
 
 **Updated:** 2026-09-08
 
@@ -17,7 +17,7 @@ Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
 current evidence separately. Section 17 tracks 65 tasks: 15 completed, 10 in progress and 40 pending.
-Live scenario acceptance remains Linux 0/20 and Web 0/20.
+Live checkpoint acceptance remains Linux 0/2 and Web 0/2.
 
 ## 1. Objective and completion criteria
 
@@ -25,20 +25,36 @@ Mortsom must launch two independent copies of app v2, Alice and Bob, against a p
 by Ortsom. The operator chooses Linux or Web; Linux is the default. Android remains an explicit selectable
 option.
 
-The migration is complete only when:
+### 1.1 Current review checkpoint (scope revised 2026-09-08)
 
-1. Stack creation, readiness, client launch, scenario execution and cleanup
-   work through the documented CLI from a clean checkout.
-2. At least the 20 priority scenarios in section 10 pass through the real app
-   on Linux, with correlated UI, relay and wallet evidence.
-3. Those same 20 scenarios pass on Web. A pass on both platforms counts as one
-   distinct scenario, not two toward the required twenty.
-4. Every accepted run finishes with successful order/payment cleanup and
-   releases every client resource it owns. Failed unresolved runs follow the
-   protected recovery-retention policy in section 11 and do not count as passes.
-5. Comparable Linux/Web CPU and memory results are recorded using section 14.
-6. Required automated checks pass, implementation changes receive independent
-   review, and reproducible commands and evidence are documented.
+The operator explicitly reduced the immediate target to **happy_sell and happy_buy on both Linux and Web**.
+Implement and verify those four scenario/platform combinations, then stop for the operator to review the
+work. Do not automatically continue with the other eighteen scenarios or resource benchmark repetitions.
+The original twenty-scenario catalogue remains a deferred roadmap, not the current completion requirement.
+
+This checkpoint is complete only when:
+
+1. Stack setup/update, read-only doctor, client preparation and isolated Alice/Bob startup work through the
+   documented CLI, using app v2 and the verified mostrod image.
+2. happy_sell and happy_buy each pass through the real Linux UI and the real Web UI: four accepted cells,
+   with the same business assertions and correlated order IDs, escrow and buyer payout evidence.
+3. Every accepted run finishes with verified order/payment cleanup and releases its client resources.
+   Unresolved failures retain protected recovery state and never count as passes.
+4. Each invocation runs one scenario with fresh actors. Multi-scenario in-process profile reset is deferred;
+   it must not silently reuse identities if that unsupported desktop invocation is attempted.
+5. Relevant Rust/app checks and independent reviews pass. Update this spec and the evidence ledger with
+   commands, source/artifact/daemon identities, actual results and remaining limitations.
+6. Stop after the four cells pass and present the work for operator review. CPU comparison, additional
+   journeys and further live benchmark repetitions require the next user instruction.
+
+### 1.2 Deferred full migration
+
+The remaining eighteen catalogue scenarios, multi-scenario reset, invoice faults, disputes and matched
+resource benchmarks remain documented below as future work. Their phase gates do not block this smaller
+checkpoint except where shared safety, lifecycle or truthful-evidence requirements are needed by its two
+happy paths. Current execution order is Phase 0 → Phase 1 → Phase 2 → Phase 3, followed by the relevant
+verification/documentation/review work from P7.5–P7.7. Phase 3 now includes happy_buy (task P4.2, moved without
+renumbering for traceability). Do not begin the other Phase 4–7 scenario/benchmark tasks in this checkpoint.
 
 Unit tests, a fake daemon, successful builds, onboarding, skipped cases and launch smoke tests do not count as
 live scenario replications. A passing Ortsom invocation does not count as a passing Mortsom scenario.
@@ -109,8 +125,8 @@ mortsom doctor --platform web
 mortsom run happy_sell
 mortsom run happy_sell --platform linux
 mortsom run happy_sell --platform web
-mortsom run --tag ortsom-core-20 --platform linux
-mortsom run --tag ortsom-core-20 --platform web
+mortsom run happy_buy --platform linux
+mortsom run happy_buy --platform web
 
 # Optional existing build; validate it before scenario actions.
 mortsom run happy_sell --platform linux --app-artifact /path/to/bundle/mostro
@@ -272,11 +288,15 @@ buyer payout hash, amounts and terminal wallet outcomes. A completed-looking scr
 not obtain private app keys to decrypt messages just to reproduce Ortsom's assertions; use the UI plus
 legitimately observable public events and wallet results.
 
-## 10. Twenty priority Ortsom replications
+## 10. Scenario catalogue: current two and deferred eighteen
+
+Only rows 1–2 are in the current checkpoint. Rows 3–20 are deferred until the operator reviews those four
+Linux/Web results and requests further work. Existing non-value diagnostics may finish safely, but they do
+not expand the checkpoint or count toward it.
 
 The source catalogue is `../ortsom/docs/scenarios.md`; reference bodies live under
 `../ortsom/crates/ortsom/src/scenarios/`. Preserve their business assertions while replacing protocol-native
-actor actions with real UI journeys. Register stable source names and the `ortsom-core-20` tag; existing
+actor actions with real UI journeys. Register stable source names and, in the deferred milestone, the `ortsom-core-20` tag; existing
 aliases may remain but cannot count as additional scenarios.
 
 | # | Source scenario | Required live assertions and prerequisites |
@@ -387,11 +407,11 @@ development, fix the cause and start a new recorded run.
 Keep existing summary, timeline, UI screenshots/hierarchy, relay events, wallet payments and cleanup artifacts
 under ignored `artifacts/<run-id>/`. Extend reports with platform, app revision/artifact digest, dirty state,
 Flutter/Rust/browser/driver versions, stack identity, actual daemon image version/digest, declared limits,
-seed relay endpoints, lane and resource data.
+seed relay endpoints and lane. Resource sampling data is deferred with section 14.
 
 Record scenario source name, actor roles, attempt number, timings, required capabilities, status, explicit
-failure category and cleanup status. A skip or unsupported capability is visible and never counted toward
-twenty. Persist a per-platform acceptance ledger with run IDs and sanitized evidence locations.
+failure category and cleanup status. A skip or unsupported capability is visible and never counts as an
+accepted checkpoint cell. Persist a per-platform acceptance ledger with run IDs and sanitized evidence locations.
 
 Sanitize process errors as well as successful output. Raw app/service logs may exist only in actor-private
 directories with restrictive permissions and must be removed on teardown; do not publish them. Never capture
@@ -423,7 +443,7 @@ Use independent review subagents as requested: review each completed change befo
 resulting commit for overlooked bugs. Resolve findings and rerun affected checks/live scenarios. Use
 Conventional Commits, separate completed specification tasks, and never commit secrets or artifacts.
 
-## 14. CPU and memory comparison
+## 14. CPU and memory comparison (deferred after operator review)
 
 Measure Linux and Web after correctness, using the same physical host, daemon image digest, app revision,
 relay, wallet state, scenario order, amounts, headless policy and declared deadlines. Run sequentially so
@@ -469,8 +489,8 @@ label its limitations. Otherwise report Linux versus Web only.
 ## 16. Delivery artifacts
 
 The delivered change includes the Rust implementation, coordinated app v2 contract fixes, CLI/config examples,
-operator setup and recovery documentation, the scenario matrix/acceptance ledger, reviewed commits, required
-automated check results and a standalone resource comparison with reproducible commands.
+operator setup and recovery documentation, the current four-cell scenario acceptance ledger, reviewed commits
+and required automated check results. The standalone resource comparison belongs to the deferred milestone.
 
 Document prerequisites instead of relying on tools manually installed during development. Include headless
 Linux and Chromium/WebDriver setup, supported paths and failure messages. A user must be able to reproduce
@@ -478,7 +498,8 @@ acceptance after recreating the stack and building the app from documented sourc
 
 ## 17. Sequential implementation plan and exit gates
 
-Execute phases in order and close the preceding gate before starting planned later-phase work. Existing
+For the current checkpoint execute Phases 0–3 in order, with happy_buy moved into Phase 3. Close preceding
+active gates before later active phases. Tasks explicitly deferred by section 1.2 are not current gates. Existing
 exploratory builds and live probes are recorded as completed narrow tasks where supported by evidence;
 these diagnostic results do not imply that any intervening phase has passed its gate.
 
@@ -607,9 +628,12 @@ contract tests.
 - [ ] **TODO — P2.9 Inject desktop session construction.** Add a factory seam to `RunDeps` returning
   independent `Arc<dyn UiSession>` handles and owned server resources. Remove hardcoded real runners from
   `Farm::desktop`; test second-actor failure, sibling survival and teardown through fakes.
-- [ ] **TODO — P2.10 Implement per-scenario actor reset.** Close old sessions, create new storage/credentials,
+- [ ] **TODO — P2.10 Enforce fresh actors for the checkpoint; defer in-process reset.** The active
+  requirement is to reject desktop multi-scenario invocations and use separate fresh-actor commands.
+  The later full-reset implementation must close old sessions, create new storage/credentials,
   rerun bootstrap and rebuild actor context while retaining the run budget and persistent stack. Test that
-  previous IDs, subscriptions and profiles cannot be reused accidentally.
+  previous IDs, subscriptions and profiles cannot be reused accidentally. For the current checkpoint,
+  require separate single-scenario invocations with fresh actors and reject desktop multi-scenario runs.
 - [ ] **IN PROGRESS — P2.11 Finish app contract coordination.** Linux name prefixes and desktop sidebar
   navigation fixes exist. Review and test all direct `Semantics` nodes, production-label isolation, visible
   readouts and test-relay restrictions. Run the app's prescribed checks before committing.
@@ -621,7 +645,7 @@ contract tests.
 **Gate G2:** both platforms pass fresh two-actor bootstrap and restart plus input/navigation smoke, injected
 partial-failure tests and verified complete client cleanup. **Gate not yet accepted.**
 
-### 17.5 Phase 3 — One fully correlated happy sell
+### 17.5 Phase 3 — Two fully correlated happy paths and review checkpoint
 
 **Status:** diagnostic implementation in progress; zero live passes. **Primary files:**
 `scenarios/src/smoke/happy_sell.rs`, `scenarios/src/flow.rs`, v2 adapter `src/screens/{nav,orders}.rs`,
@@ -648,15 +672,20 @@ observers.
   remains unsafe evidence of completed payout and can bypass cleanup observation through AlreadyClosed.
   Verify a positive terminal state plus payment outcome or a completed cooperative cancellation and refund;
   surface unresolved cleanup as failure. This task and G3 remain unaccepted.
-- [ ] **TODO — P3.6 Accept Linux happy_sell from fresh actors.** Record full correlated evidence, all checks
-  and complete cleanup under a new run ID.
-- [ ] **TODO — P3.7 Accept the same narrative on Web.** Run unchanged business steps against the Web driver;
-  preserve platform-specific diagnostics.
+- [ ] **TODO — P4.2 Add happy_buy.** Keep Alice seller/Bob buyer while reversing maker/taker creation. Follow
+  the buy-order prerequisites: Alice pays the seller hold first, then maker Bob submits the buyer payout
+  invoice. Share final settlement assertions without forcing the sell-order invoice sequence or duplicating
+  platform-specific flow code.
+- [ ] **TODO — P3.6 Accept both Linux happy paths from fresh actors.** Run happy_sell and happy_buy as
+  separate invocations; record correlated evidence and complete cleanup under distinct run IDs.
+- [ ] **TODO — P3.7 Accept both happy paths on Web.** Run the same business assertions, with their correct
+  sell/buy invoice ordering, against fresh Web actors in separate invocations.
 
-**Gate G3:** P3.6 and P3.7 pass with verified exactly-once payments and clean teardown, after G1/G2
-acceptance. **Not passed.**
+**Gate G3:** happy_sell and happy_buy each pass on Linux and Web with verified exactly-once payments and
+clean teardown after active G1/G2 acceptance. **Not passed: Linux 0/2, Web 0/2.** Complete the relevant
+verification and review documentation, then stop for operator review; do not start the deferred cases.
 
-### 17.6 Phase 4 — Core trade and cancellation journeys
+### 17.6 Phase 4 — Core trade and cancellation journeys (deferred)
 
 **Status:** pending. **Primary files:** app-contract types/adapter/capabilities, v2 screen adapters,
 `scenarios/src/smoke/`, `scenarios/src/regression/`, `scenarios/src/flow.rs` and corresponding app
@@ -665,10 +694,6 @@ screens/widget tests.
 - [ ] **TODO — P4.1 Extend typed domain actions only where needed.** Introduce explicit fixed/market/range
   drafts, selected take amount, rating and cooperative-cancel outcomes. Keep browser/desktop details outside
   this API. Test serialization/validation, caps and normalized state behavior.
-- [ ] **TODO — P4.2 Add happy_buy.** Keep Alice seller/Bob buyer while reversing maker/taker creation. Follow
-  the buy-order prerequisites: Alice pays the seller hold first, then maker Bob submits the buyer payout
-  invoice. Share final settlement assertions without forcing the sell-order invoice sequence or duplicating
-  platform-specific flow code.
 - [ ] **TODO — P4.3 Add cancel_before_taken.** Preserve existing cancel_pending compatibility if needed, but
   register the source name only once for counting. Assert terminal UI/book removal and no payment.
 - [ ] **TODO — P4.4 Add cooperative_cancel and unilateral_cancel_rejected.** Expose explicit request/accept UI
@@ -687,10 +712,10 @@ screens/widget tests.
   outcomes, evidence entries and clean order/payment state after every case. Review implementation and app
   contract commits.
 
-**Gate G4:** happy_sell plus these seven additional source scenarios pass on both targets. **Not started as an
-accepted phase.**
+**Gate G4 (deferred):** happy_sell, happy_buy and the other six core source scenarios pass on both targets.
+This future gate is not required before the current operator review.
 
-### 17.7 Phase 5 — Expiration and dispute journeys
+### 17.7 Phase 5 — Expiration and dispute journeys (deferred)
 
 **Status:** pending. **Primary files:** new focused expiration/dispute scenario modules, scenario-kit
 deadline/negative-observation helpers, app v2 expiry and dispute UI, v2 adapter actions/states and relay
@@ -724,7 +749,7 @@ dispute-event scope.
 **Gate G5:** fifteen priority scenarios cumulatively accepted per platform; no open disputes or unresolved
 escrow. **Not started.**
 
-### 17.8 Phase 6 — Invoice faults and the complete twenty
+### 17.8 Phase 6 — Invoice faults and the complete twenty (deferred)
 
 **Status:** pending. **Primary files:** wallet boundary/adapters, observers, app-contract capabilities, new
 payment-failure scenarios and v2 invoice UI.
@@ -757,10 +782,10 @@ payment-failure scenarios and v2 invoice UI.
 - [ ] **TODO — P6.9 Run the complete Web suite.** Fill every Web ledger cell with the same business assertions
   and failure-injection points.
 
-**Gate G6:** twenty distinct priority sources pass per platform with no skips or unresolved cleanup. **Not
-started; current live count is 0/20 on each.**
+**Gate G6 (deferred):** twenty distinct priority sources pass per platform with no skips or unresolved
+cleanup. Not part of this checkpoint; current two-case acceptance is Linux 0/2 and Web 0/2.
 
-### 17.9 Phase 7 — Resource measurements and delivery
+### 17.9 Phase 7 — Verification and delivery; resource measurements deferred
 
 **Status:** pending. **Primary files:** a Rust resource-sampling boundary, coordinator lifecycle/report
 integration, tests, README/runbooks and `docs/resource-comparison.md` (to be created).
@@ -788,7 +813,8 @@ integration, tests, README/runbooks and `docs/resource-comparison.md` (to be cre
   checklist/ledger claim against code and evidence. Commit only completed tasks after checks/review; report
   the final source revisions and remaining limitations without claiming unfinished scope.
 
-**Gate G7:** all section 1 criteria met. **Not started.**
+**Current delivery gate:** section 1.1 and the relevant P7.5–P7.7 checks/reviews pass, then stop. P7.1–P7.4
+and their full-migration comparisons are deferred; do not execute extra paid runs after the checkpoint.
 
 ## 18. Current implementation evidence
 
@@ -830,7 +856,8 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
   the probe does not exercise or prove mutation permissions of the configured macaroon.
 - Independent review found startup-readiness and cleanup gaps. Fixes are in
   progress and are not considered accepted until tests and live reruns pass.
-- The twenty-case acceptance matrix and CPU/RSS comparison remain pending.
+- The current two-case Linux/Web matrix remains unaccepted. The other eighteen cases and CPU/RSS
+  comparison are deferred until operator review, per the explicit scope change on 2026-09-08.
 
 The maintained per-scenario evidence index is [Ortsom UI parity](docs/ortsom-ui-parity.md). Update this status
 when verified results change; never replace failed evidence with an unqualified success claim.
