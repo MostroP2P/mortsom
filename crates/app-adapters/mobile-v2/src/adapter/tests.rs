@@ -526,6 +526,24 @@ async fn trade_actions_drive_the_v2_controls_and_map_v2_states() {
 }
 
 #[tokio::test]
+async fn cancellation_waits_for_the_trade_list_to_finish_navigation() {
+    let ui = app_with_orders();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    ui.label(Ids::ORDER_STATUS, "pending");
+    ui.appears_after("trades.item.o1", 2);
+
+    assert_eq!(
+        a.cancel_if_open(&device(&ui), &OrderReference::new("o1"))
+            .await
+            .unwrap(),
+        CancelOutcome::Cancelled
+    );
+    assert!(ui.calls().contains(&"tap trade.cancel.confirm".to_owned()));
+}
+
+#[tokio::test]
 async fn missing_cancel_control_does_not_prove_an_open_or_unknown_order_is_closed() {
     for status in ["active", "loading", "unknown-state"] {
         let ui = app_with_orders();

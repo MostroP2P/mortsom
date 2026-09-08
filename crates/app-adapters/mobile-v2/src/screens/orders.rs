@@ -249,7 +249,7 @@ pub async fn cancel_if_open(
 ) -> Result<CancelOutcome, AdapterError> {
     go_home(device).await?;
     tap(device, Ids::NAV_TRADES).await?;
-    if !present(device, &Ids::trades_item(&order.id)).await? {
+    if !super::appears_within(device, &Ids::trades_item(&order.id), device.ui_timeout).await? {
         return Ok(CancelOutcome::NotFound);
     }
     tap(device, &Ids::trades_item(&order.id)).await?;
