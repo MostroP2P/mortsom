@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 15 completed, 10 in progress and 40 pending.
+current evidence separately. Section 17 tracks 65 tasks: 18 completed, 7 in progress and 40 pending.
 Live checkpoint acceptance remains Linux 0/2 and Web 0/2.
 
 ## 1. Objective and completion criteria
@@ -214,7 +214,13 @@ generated bindings. For Web, build the supported Rust/WASM bundle before the Flu
 required shared-memory support and serve cross-origin isolation headers.
 
 Record source revision, dirty-state indicator, build flags, tool versions and artifact digest. Both actors use
-the same artifact. A prebuilt artifact must pass visible environment/identity checks; path existence alone is
+the same artifact. Git revision and dirty flags do not capture dirty source contents or detect every edit
+made during a build; the bundle digest identifies the actual captured bytes. Stack fingerprint version
+`sha256-mortsom-stack-v1` hashes `mortsom-stack-v1\0`, the JSON byte length as an unsigned 64-bit big-endian
+integer, and the serialized public `StackSnapshot`. Struct field ordering belongs to this version; endpoint
+maps have sorted keys. Change the algorithm version if serialization changes. JSON files are individually
+atomic, not one multi-file transaction. Directory synchronization assumes a stable local directory hierarchy;
+concurrent ancestor-path replacement is outside these helpers' guarantees. A prebuilt artifact must pass visible environment/identity checks; path existence alone is
 insufficient.
 
 The app owns `docs/automation-contract.md`. Stable IDs cover onboarding, navigation, node/relay settings, form
@@ -541,7 +547,7 @@ current evidence agree.
 
 ### 17.3 Phase 1 — Stack integration, configuration and CLI
 
-**Status:** in progress. **Primary files:** coordinator `src/stack/`, `src/cli.rs`, `src/config/`,
+**Status:** completed. **Primary files:** coordinator `src/stack/`, `src/cli.rs`, `src/config/`,
 `src/desktop.rs`, `src/doctor/`, `config/desktop.example.toml` and CLI integration tests.
 
 - [x] **P1.1 DONE — Start the real reference environment.** The external Ortsom stack command successfully
@@ -549,10 +555,10 @@ current evidence agree.
 - [x] **P1.2 DONE — Update the development daemon image.** Pulled latest and recreated the running daemon on
   the digest recorded in section 18, retaining the stack identity. This is a one-time verified update, not
   proof that the new Mortsom update command already converges existing containers correctly.
-- [ ] **IN PROGRESS — P1.3 Complete the stack command adapter.** Existing
-  `stack::{invoke,binary,StackContext}` delegates lifecycle commands with a pinned Compose project. Twelve
-  stack tests and a live `mortsom stack up` passed digest/ownership/readiness checks; independent review
-  passed. Remaining gate checks include durable metadata and post-run persistence; failures never destroy the stack.
+- [x] **P1.3 DONE — Complete the stack command adapter.** Lifecycle commands delegate with a pinned
+  Compose project and validate digest, ownership and readiness. Live stack setup passed; all six container
+  identities stayed unchanged across failed run `20260908T141446Z-8f0617eeb9de`. Explicit subsequent regtest
+  down/up succeeded and revalidated the same immutable image. Durable public metadata is covered by P1.8.
 - [x] **P1.9 DONE — Consume a secret-free stack descriptor.** Reviewed Ortsom commits `8e82712`, `029e90e`,
   `1552992` and `566a53e` export versioned status, declared limits, inspected endpoints and atomic container
   image identity. Mortsom validates those fields without opening combined solver TOML. Required records,
@@ -566,9 +572,11 @@ current evidence agree.
   commands load only offline settings; publication preserves platform-specific known-secret resolution.
   Independent review passed after compatibility fixes; 167 coordinator tests, seven CLI integration tests,
   formatting and full workspace strict clippy passed on 2026-09-08. Desktop recovery remains P2 work.
-- [ ] **IN PROGRESS — P1.5 Finish artifact preparation.** Source lookup is confined to builds; supported binding
-  and Web scripts, tool resolution and sanitized failures are wired. Tests pass for source-absent prebuilt
-  clients, invalid/incomplete bundles and generation failures/missing outputs. Provenance validation remains.
+- [x] **P1.5 DONE — Finish artifact preparation.** Supported source generation/build scripts and
+  source-absent prebuilt validation work. Real Linux and Web source builds, private capture, verification
+  and capture removal passed, reporting app 2.0.0. Source revision/dirty flags, selected tools and executed
+  arguments are recorded; prebuilt history remains explicitly unknown. Regression checks cover source
+  context, changed revision/version, malformed tool output and secret redaction. See P1.8 for persistence.
 - [x] **P1.6 DONE — Implement platform-aware doctor.** Source-build diagnostics passed Linux 38/38
   and Web 35/35; prebuilt paths passed Linux 21/21 and Web 17/17. Selected host tools, executable app
   scripts, codegen pin, native development libraries and Web nightly/rust-src are checked before any run
@@ -584,17 +592,18 @@ current evidence agree.
   up/down independently of artifact or checkout paths. Four lock unit tests plus the cross-process CLI
   contention test passed with independent review; home aliases and release are covered. Direct Ortsom,
   another HOME and other users are outside this guard. Durable unresolved-work exclusion remains P2 work.
-- [ ] **IN PROGRESS — P1.8 Persist immutable environment metadata.** Summary/environment now carry platform,
-  public stack facts and a complete bundle hash. Targeted checks cover hash stability/content sensitivity
-  and keeping registered secrets redacted while retaining public image hashes. Complete daemon version,
-  source/build provenance and stack configuration fingerprint. Run-owned private bundle copies now use
-  descriptor-relative capture, reject source changes/special files, and revalidate content and executable
-  requirements before launch. Web shutdown drains owned requests before releasing the captured bundle;
-  regressions and real single-client smoke checks passed on both platforms.
+- [x] **P1.8 DONE — Persist immutable environment metadata.** Before client startup and in final reports,
+  persist the captured bundle digest, source/build provenance, public stack fingerprint and daemon version
+  observed by preflight. Real failed run `20260908T141446Z-8f0617eeb9de` retained those facts. Individual JSON
+  files use private staging, file sync, atomic replacement and directory sync; newly created directory
+  ancestors are synced, including on retries. Symlink-target and directory durability regressions passed.
+  Independent review found no remaining blocker; 179 coordinator and seven CLI tests passed. Captured
+  bundle and Web server ownership tests and real smoke checks passed on both platforms. These facts do not
+  provide protected actor recovery, which remains P2.12.
 
-**Gate G1:** CLI/config/doctor and update/readiness tests pass; real `stack up` converges to the requested
-digest; a failed or successful run demonstrably leaves persistent stack resources intact. **Gate not yet
-accepted.**
+**Gate G1: passed.** CLI/config/doctor and update/readiness checks passed; real `stack up` converged to the
+requested digest, and the failed run demonstrably retained all persistent stack containers. This gate does
+not claim successful order cleanup or any accepted trade.
 
 ### 17.4 Phase 2 — Builds and isolated Linux/Web clients
 
@@ -856,6 +865,20 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
   the probe does not exercise or prove mutation permissions of the configured macaroon.
 - Independent review found startup-readiness and cleanup gaps. Fixes are in
   progress and are not considered accepted until tests and live reruns pass.
+- Source build/capture provenance passed on both targets with app version 2.0.0. Logs:
+  `/tmp/mortsom-linux-provenance-build.log` and `/tmp/mortsom-web-provenance-build.log`. Adding the Git
+  prerequisite changes future source doctor totals to 39 Linux / 36 Web; those updated totals await a rerun.
+- Diagnostic run `20260908T141446Z-8f0617eeb9de` created sell order
+  `35ec3491-7362-4d58-ac84-2b8e992e7f11` through Linux UI, then failed on a trade-list navigation race during
+  cancellation. All payment/reservation totals were zero; unresolved cleanup correctly failed the run.
+  All six persistent containers survived unchanged and both clients shut down. The current driver deleted
+  profiles, demonstrating the remaining P2.12 recovery gap. An explicit regtest down/up discarded this
+  unfunded order; this was environment recovery, not a UI cancellation or scenario pass. The new stack
+  has a new daemon identity and requires new builds. The submitted order's observed expiry was 3600 seconds,
+  so the declared 300-second stack value must not be treated as that UI order's actual expiry.
+- Metadata verification passed 179 coordinator and seven CLI tests; independent review closed the source
+  toolchain context and fresh-directory durability findings. Log:
+  `/tmp/mortsom-directory-durability-green.log`.
 - The current two-case Linux/Web matrix remains unaccepted. The other eighteen cases and CPU/RSS
   comparison are deferred until operator review, per the explicit scope change on 2026-09-08.
 
