@@ -467,9 +467,7 @@ impl LndWallet {
         .map_err(|_| self.timeout("lookup_invoice"))?
         {
             Ok(response) => response.into_inner(),
-            Err(status) if status.code() == fedimint_tonic_lnd::tonic::Code::NotFound => {
-                return Ok(None);
-            }
+            Err(status) if requests::is_missing_invoice(&status) => return Ok(None),
             Err(status) => return Err(self.failed("lookup_invoice", status.to_string())),
         };
         amounts::incoming(&self.label, &response).map(Some)

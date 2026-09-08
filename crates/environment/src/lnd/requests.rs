@@ -14,6 +14,27 @@ pub(super) fn hash_bytes(label: &str, hash: &str) -> Result<Vec<u8>, LndError> {
         })
 }
 
+/// Whether a `lookup_invoice` failure means the node never issued that
+/// invoice, so the hash must be looked up as an outgoing payment instead.
+///
+/// LND answers `NotFound` when it has an invoice database and the hash is
+/// not in it. A node that has never issued any invoice has no database yet
+/// and answers `Unknown` with the prose `there are no existing invoices`;
+/// that is every seller on a fresh stack, so treating it as a failure would
+/// report every hold-invoice payment as broken. Other codes and other
+/// `Unknown` messages stay errors: a locked wallet must not read as a miss.
+pub(super) fn is_missing_invoice(status: &Status) -> bool {
+    match status.code() {
+        Code::NotFound => true,
+        Code::Unknown => {
+            let message = status.message();
+            message.contains("there are no existing invoices")
+                || message.contains("unable to locate invoice")
+        }
+        _ => false,
+    }
+}
+
 pub(super) async fn track<F, Fut>(
     label: &str,
     hash: &str,
@@ -92,6 +113,29 @@ mod tests {
                 Err(LndError::InvalidHash { .. })
             ));
         }
+    }
+
+    /// A seller who never issued an invoice has an empty invoice database, and
+    /// LND then answers `Unknown` with prose instead of `NotFound`. Both mean
+    /// "this node did not issue that invoice"; anything else stays an error.
+    #[test]
+    fn an_empty_invoice_database_is_a_miss_not_a_failure() {
+        assert!(is_missing_invoice(&Status::not_found(
+            "unable to locate invoice"
+        )));
+        assert!(is_missing_invoice(&Status::unknown(
+            "there are no existing invoices"
+        )));
+        assert!(is_missing_invoice(&Status::unknown(
+            "unable to locate invoice"
+        )));
+        assert!(!is_missing_invoice(&Status::unknown("wallet locked")));
+        assert!(!is_missing_invoice(&Status::permission_denied(
+            "there are no existing invoices"
+        )));
+        assert!(!is_missing_invoice(&Status::unavailable(
+            "connection refused"
+        )));
     }
 
     #[tokio::test]
