@@ -153,7 +153,7 @@ impl DeviceFarm {
                 for emulator in &emulators {
                     let _ = emulator.shutdown_with(runner, spec.shutdown_grace).await;
                 }
-                Err(err)
+                Err(*err)
             }
         }
     }
@@ -163,10 +163,10 @@ impl DeviceFarm {
         ui: &dyn UiDriver,
         spec: &FarmSpec,
         emulators: Vec<Emulator>,
-    ) -> Result<Self, (Vec<Emulator>, FarmError)> {
+    ) -> Result<Self, (Vec<Emulator>, Box<FarmError>)> {
         let versions = match install_all(runner, spec, &emulators).await {
             Ok(versions) => versions,
-            Err(e) => return Err((emulators, e)),
+            Err(e) => return Err((emulators, Box::new(e))),
         };
         let server = match ui
             .start_server(
@@ -178,7 +178,7 @@ impl DeviceFarm {
             .await
         {
             Ok(server) => server,
-            Err(e) => return Err((emulators, e.into())),
+            Err(e) => return Err((emulators, Box::new(e.into()))),
         };
         let mut devices = Vec::new();
         for (emulator, version) in emulators.into_iter().zip(versions) {
@@ -201,7 +201,7 @@ impl DeviceFarm {
                     let mut all: Vec<Emulator> = devices.into_iter().map(|d| d.emulator).collect();
                     all.push(emulator);
                     let _ = server.stop().await;
-                    return Err((all, e.into()));
+                    return Err((all, Box::new(e.into())));
                 }
             }
         }
