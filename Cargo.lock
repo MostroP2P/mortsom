@@ -2056,11 +2056,14 @@ dependencies = [
 name = "mortsom-scenarios"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "inventory",
  "mortsom-android-driver",
  "mortsom-app-contract",
  "mortsom-common",
+ "mortsom-observers",
  "mortsom-scenario-kit",
+ "nostr-sdk",
  "tokio",
  "tracing",
 ]

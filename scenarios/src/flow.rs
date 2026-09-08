@@ -66,8 +66,20 @@ pub fn sell_draft(ctx: &Context) -> OrderDraft {
 
 /// Alice publishes a sell order; her app and the relay show it pending.
 pub async fn create_pending(ctx: &Context) -> Result<OrderReference, ScenarioError> {
-    let order = actions::create_order(ctx, Actor::Alice, &sell_draft(ctx)).await?;
-    actions::wait_app_state(ctx, Actor::Alice, &order, OrderState::Pending).await?;
+    create_pending_for(ctx, Actor::Alice, OrderKind::Sell).await
+}
+
+async fn create_pending_for(
+    ctx: &Context,
+    maker: Actor,
+    kind: OrderKind,
+) -> Result<OrderReference, ScenarioError> {
+    let draft = OrderDraft {
+        kind,
+        ..sell_draft(ctx)
+    };
+    let order = actions::create_order(ctx, maker, &draft).await?;
+    actions::wait_app_state(ctx, maker, &order, OrderState::Pending).await?;
     actions::wait_relay_state(ctx, &order, OrderState::Pending).await?;
     Ok(order)
 }
@@ -88,6 +100,19 @@ pub async fn create_and_take(ctx: &Context) -> Result<Taken, ScenarioError> {
     take(ctx, order).await
 }
 
+/// Bob publishes a buy and Alice takes it as seller. Her escrow must be
+/// accepted before Bob submits his payout invoice and both apps become active.
+pub async fn create_buy_and_fund(ctx: &Context) -> Result<Taken, ScenarioError> {
+    let order = create_pending_for(ctx, Actor::Bob, OrderKind::Buy).await?;
+    actions::take_order(ctx, Actor::Alice, &order).await?;
+    actions::wait_both(ctx, &order, OrderState::Taken).await?;
+    actions::pay_hold_invoice(ctx, Actor::Alice, &order).await?;
+    let payout_hash = actions::provide_buyer_invoice(ctx, Actor::Bob, &order).await?;
+    actions::wait_both(ctx, &order, OrderState::Active).await?;
+    actions::wait_relay_state(ctx, &order, OrderState::Active).await?;
+    Ok(Taken { order, payout_hash })
+}
+
 /// Alice pays the hold invoice; both apps and the relay show the order
 /// active. Moves value: requires mainnet clearance.
 pub async fn fund(ctx: &Context, order: &OrderReference) -> Result<(), ScenarioError> {
@@ -106,16 +131,17 @@ pub async fn fiat_sent(ctx: &Context, order: &OrderReference) -> Result<(), Scen
 
 /// Alice releases; both apps and the relay show completion, the held HTLC
 /// settles (on the node path, this is where funding is finally committed
-/// against the budget) and, when the payout hash is known, Bob's wallet
+/// against the budget) and Bob's wallet
 /// shows it settled. Marks the order resolved for cleanup.
 pub async fn release_and_settle(ctx: &Context, taken: &Taken) -> Result<(), ScenarioError> {
+    let hash = taken.payout_hash.as_deref().ok_or_else(|| {
+        ScenarioError::wallet("buyer payout hash is required before releasing escrow")
+    })?;
     actions::release(ctx, Actor::Alice, &taken.order).await?;
     actions::wait_both(ctx, &taken.order, OrderState::Completed).await?;
     actions::wait_relay_state(ctx, &taken.order, OrderState::Completed).await?;
     actions::settle_hold_payment(ctx, &taken.order).await?;
-    if let Some(hash) = &taken.payout_hash {
-        actions::expect_payout_settled(ctx, Actor::Bob, &taken.order, hash).await?;
-    }
+    actions::expect_payout_settled(ctx, Actor::Bob, &taken.order, hash).await?;
     actions::mark_resolved(ctx, &taken.order);
     Ok(())
 }
@@ -129,3 +155,7 @@ pub async fn expect_cancelled(ctx: &Context, order: &OrderReference) -> Result<(
     actions::mark_resolved(ctx, order);
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "flow_tests.rs"]
+mod tests;
