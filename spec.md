@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 11 completed, 9 in progress and 45 pending.
+current evidence separately. Section 17 tracks 65 tasks: 11 completed, 12 in progress and 42 pending.
 Live scenario acceptance remains Linux 0/20 and Web 0/20.
 
 ## 1. Objective and completion criteria
@@ -529,28 +529,29 @@ current evidence agree.
   the digest recorded in section 18, retaining the stack identity. This is a one-time verified update, not
   proof that the new Mortsom update command already converges existing containers correctly.
 - [ ] **IN PROGRESS — P1.3 Complete the stack command adapter.** Existing
-  `stack::{invoke,binary,StackContext}` delegates up/status/down and resolves connection references. Add
-  running-image digest comparison and readiness verification after up; test pull failures, partial startup,
-  already-running stale images and refusal to delete unrelated containers.
-- [ ] **TODO — P1.9 Consume a secret-free stack descriptor.** Implement a public descriptor or supported
-  structured export in Ortsom containing daemon identity, endpoints, declared limits and digest, without
-  solver keys or wallet credentials. Read that contract in StackContext with schema validation; current
-  whole-file parsing of combined public/solver TOML must be replaced. Review any sibling contract addition
-  separately and test absence of secrets.
-- [ ] **IN PROGRESS — P1.4 Complete platform/configuration selection.** Linux default, Web and Android parsing
-  and a v2 example exist. Add CLI tests for defaults, unknown platforms, explicit Android config and
-  dependency isolation. Separate platform settings from shared UI deadlines; never require Android tools or
-  placeholder AVD settings to use Linux/Web.
-- [ ] **IN PROGRESS — P1.5 Finish artifact preparation.** Move source lookup inside the source-build branch,
-  run supported binding generation and Web preparation scripts, resolve executable paths and sanitize all
-  build errors. Test source-absent prebuilt artifacts, failed generation and missing outputs.
-- [ ] **TODO — P1.6 Implement platform-aware doctor.** Resolve the same stack references as run; check only
+  `stack::{invoke,binary,StackContext}` delegates lifecycle commands with a pinned Compose project. Twelve
+  stack tests and a live `mortsom stack up` passed digest/ownership/readiness checks; independent review
+  passed. Remaining gate checks include durable metadata and post-run persistence; failures never destroy the stack.
+- [ ] **IN PROGRESS — P1.9 Consume a secret-free stack descriptor.** Reviewed Ortsom commit `8e82712` exports
+  versioned public status; StackContext now validates that JSON without opening combined solver TOML.
+  Tests cover malformed/unready status and secret redaction. Endpoint, declared-limit and image fields
+  remain pending; review further sibling contract additions separately.
+- [ ] **IN PROGRESS — P1.4 Complete platform/configuration selection.** Linux default, Web/Android parsing and
+  explicit config selection have regression tests. Desktop config now uses shared `[ui]` deadlines without
+  placeholder AVD settings; Android-only commands require `[android]`. Full regression checks and review
+  are recorded before task completion; unsupported desktop recovery is explicit in cleanup reports.
+- [ ] **IN PROGRESS — P1.5 Finish artifact preparation.** Source lookup is confined to builds; supported binding
+  and Web scripts, tool resolution and sanitized failures are wired. Tests pass for source-absent prebuilt
+  clients, invalid/incomplete bundles and generation failures/missing outputs. Provenance validation remains.
+- [ ] **IN PROGRESS — P1.6 Implement platform-aware doctor.** Linux/Web doctor now resolves public stack status
+  and selects platform tools; real Linux 18/18 and Web 14/14 checks passed. Finish validation of
   selected-platform tools, artifact/build prerequisites, local endpoint reachability, daemon identity,
   network, wallet capabilities, liquidity and declared limits. Tests must prove doctor invokes neither order
   actions nor wallet payment/invoice mutation methods.
-- [ ] **TODO — P1.7 Lock stack/wallet ownership independently of artifacts.** Derive a canonical environment
-  identity, acquire its exclusive lock before mutation, release on every exit and test two artifact paths
-  targeting one stack.
+- [ ] **IN PROGRESS — P1.7 Lock stack/wallet ownership independently of artifacts.** Reviewed canonical-HOME
+  lock serializes stack/client lifecycle mutations, including updates and cleanup, independently of artifacts.
+  Unit/CLI tests cover contention and release. Direct Ortsom commands and other users are outside this
+  guard; durable unresolved-work exclusion remains a separate phase 2 acceptance requirement.
 - [ ] **TODO — P1.8 Persist immutable environment metadata.** Extend run summary and environment report with
   actual daemon digest/version, platform, endpoint roles, app artifact hash and declared limits. Test
   redaction and missing data.
@@ -775,9 +776,11 @@ integration, tests, README/runbooks and `docs/resource-comparison.md` (to be cre
 Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
 
 - The persistent Ortsom regtest stack is running. The pulled `latest` image
-  was identified as mostrod v0.18.7, digest
-  `sha256:bff406d11fc90436c9f7da5186f5976a63ae7ee1d711a6636d36205421cbda31`.
+  was identified as mostrod v0.18.7, digest `sha256:bff406d11fc90436c9f7da5186f5976a63ae7ee1d711a6636d36205421cbda31`.
   This is the observed development image, not a permanent definition of latest.
+- Real Mortsom `stack up` passed immutable-image/ownership/readiness verification. Ortsom commit `6353922`
+  fixes the advertised host relay address. Read-only doctor passed 18 Linux and
+  14 Web checks; declared limits, artifact provenance and full failure-path validation remain pending.
 - Linux and Web v2 builds and isolated read-only accessibility smoke passed.
 - Both platforms passed real Alice/Bob onboarding, node/relay configuration
   and public identity persistence checks during happy_sell attempts.
@@ -787,7 +790,7 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
   These are active failures, not accepted replications.
 - Existing workspace tests and clippy passed on an earlier implementation
   snapshot. Further changes require rerunning checks. Coverage for the new
-  drivers, desktop lifecycle failure tests, platform-aware doctor, complete
+  drivers, desktop lifecycle failure tests, remaining doctor checks, complete
   build provenance and per-scenario reset remain pending.
 - Independent review found startup-readiness and cleanup gaps. Fixes are in
   progress and are not considered accepted until tests and live reruns pass.
