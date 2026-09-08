@@ -10,8 +10,7 @@ v1.0. The plan, in order:
 
 1. **Docs cut.** Done. Only README, spec, this file, the acceptance ledger and the runbook are live; the rest
    is under `docs/history/`.
-2. **Close the first live cell.** Fix the LND lookup bug below, `cleanup` the retained run, retry Linux
-   `happy_sell`, then `happy_buy`, then both on Web.
+2. **Close the live cells.** Linux done (2/2). Web blocked by the app; see below.
 3. **Isolate the frozen Android path** (`crates/android-driver`, `crates/app-adapters/mobile-legacy`) behind
    a Cargo feature so the default workspace is desktop and Web only.
 4. **Own the stack.** Replace the Ortsom delegation in `crates/coordinator/src/stack/` with Mortsom's own
@@ -58,40 +57,36 @@ export MORTSOM_BROWSER=/snap/chromium/current/usr/lib/chromium-browser/chrome
 Disk: about 34 GiB free on `/home`. Builds are large; check before coverage runs. Never delete artifacts or
 private recovery state to gain space.
 
-## Open item: run `20260908T171517Z-a54d8617c8eb`
+## Where things stand (2026-09-08, evening)
 
-The fourth Linux `happy_sell` attempt went further than any before: order `89b96c2f-…` created, taken by
-Bob, buyer invoice provided, hold invoice paid by Alice. It then failed with category `wallet`:
-
-```text
-alice: LND lookup_invoice failed: status: Unknown, message: "there are no existing invoices"
-```
-
-Cause: `lookup_incoming` in `crates/environment/src/lnd.rs` treats only gRPC `NotFound` as "this node did
-not issue that invoice" and falls through to the outgoing-payment lookup. LND 0.19 answers `Unknown` with
-that message when the node's invoice database is empty, which is always the case for a seller who never
-issued an invoice. The fix is to treat that answer as not-found as well, with a unit test for both codes.
-
-State after the run: the order was cancelled through the UI during cleanup; no payment settled; Alice's hold
-payment must be confirmed failed or cancelled on her node; protected profiles are **retained** and
-`recovery.json` shows `resolution_verified=false`. Run `mortsom cleanup 20260908T171517Z-a54d8617c8eb` after
-the fix and before any new run.
+- **Linux 2/2 accepted**: `happy_sell` run `20260908T190151Z-d027fc8a5528`, `happy_buy` run
+  `20260908T190424Z-85827b058763`. Both settled the hold on Alice and the payout on Bob exactly once.
+- **Web 0/2, blocked by the app.** The Web build of app v2 has no trade persistence: `rust/src/db/indexeddb.rs`
+  stubs `save_trade` and listing (app issue #233). Alice's Web client created order `3d2c95a2-…` but never
+  listed it, so the harness could neither continue nor cancel through the UI. The pending order expires on the
+  daemon after one hour with no funds involved.
+- **A retained journal blocks new desktop runs.** Run `20260908T190651Z-8031670f7eb5` (Web) has an
+  unresolved submission and its profile is retained under `$HOME/.local/state/mortsom/recovery/`. Until it is
+  resolved, `run` refuses to start. `cleanup` cannot resolve it through the UI because the Web app cannot show
+  the order. Options the operator must choose between: implement the app's trades store for Web and retry
+  recovery; or add a relay-based resolution path for a maker submission whose order the app never listed
+  (correlate the daemon's pending event in the submission window, then observe its expiry or cancel it once the
+  app can); or, as an explicit operator decision, mark that journal resolved by hand after the order has
+  expired on the daemon. None of these is done.
+- Fixes landed today in the harness: LND empty-invoice-database lookup (`8de9f4e`); relay-confirmed
+  cancellation with counterpart escalation (`aaa0615`, `869644a`); relay-list draw race in recovery
+  (`30c3298`); public-book correlation uses `in-progress`, never `active` (`c39881e`).
+- App v2 product issues found (to file against `MostroP2P/app`): optimistic `Canceled` on cooperative cancel
+  request; no trade persistence on Web. Details in the acceptance ledger.
 
 ## Resume commands
 
 ```sh
 git status --short && git log -8 --oneline
 ./target/debug/mortsom stack status
+ls $HOME/.local/state/mortsom/recovery/          # 20260908T190651Z-8031670f7eb5 is the retained one
 
-# After the LND fix:
-cargo test -p mortsom-environment
-cargo build -p mortsom-coordinator --bin mortsom
-./target/debug/mortsom cleanup 20260908T171517Z-a54d8617c8eb
-
-./target/debug/mortsom run happy_sell --platform linux \
-  --app-artifact /home/negrunch/dev/mobilev2/build/linux/x64/release/bundle/mostro
-./target/debug/mortsom run happy_buy --platform linux \
-  --app-artifact /home/negrunch/dev/mobilev2/build/linux/x64/release/bundle/mostro
+# Once the Web journal is resolved and the app persists trades on Web:
 ./target/debug/mortsom run happy_sell --platform web --app-artifact /home/negrunch/dev/mobilev2/build/web
 ./target/debug/mortsom run happy_buy  --platform web --app-artifact /home/negrunch/dev/mobilev2/build/web
 ```
@@ -116,5 +111,5 @@ Commit each completed task after fmt, strict clippy and meaningful tests.
 
 ## Last verification
 
-613 workspace tests passed, zero failed, one existing ignored test; formatting and strict clippy clean, at
-`e846715`. Coverage has not been measured at this checkpoint.
+617 workspace tests passed, zero failed; formatting and strict clippy clean, at `c39881e`. Coverage has not
+been measured at this checkpoint.
