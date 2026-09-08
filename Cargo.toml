@@ -5,6 +5,7 @@ members = [
     "crates/coordinator",
     "crates/app-contract",
     "crates/android-driver",
+    "crates/desktop-driver",
     "crates/environment",
     "crates/observers",
     "crates/scenario-kit",
@@ -21,11 +22,13 @@ repository = "https://github.com/MostroP2P/mortsom"
 rust-version = "1.89"
 
 [workspace.dependencies]
+sha2 = "0.11.0"
 fedimint-tonic-lnd = { version = "0.4.0", features = ["lightningrpc", "invoicesrpc", "routerrpc"] }
 # Internal crates
 mortsom-common = { path = "crates/common" }
 mortsom-app-contract = { path = "crates/app-contract" }
 mortsom-android-driver = { path = "crates/android-driver" }
+mortsom-desktop-driver = { path = "crates/desktop-driver" }
 mortsom-environment = { path = "crates/environment" }
 mortsom-observers = { path = "crates/observers" }
 mortsom-scenario-kit = { path = "crates/scenario-kit" }
@@ -43,6 +46,7 @@ nwc = "0.45.0"
 tokio = { version = "1.53.1", features = ["full"] }
 async-trait = "0.1.92"
 futures = "0.3.34"
+rustix = { version = "1.1.4", features = ["fs"] }
 
 # CLI, configuration, serialization
 clap = { version = "4.6.6", features = ["derive"] }

@@ -77,6 +77,7 @@ pub async fn run_device_smoke(
     adapter: &dyn mortsom_app_contract::AppAdapter,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<DeviceSmokeSummary, String> {
+    config.require_android().map_err(|e| e.to_string())?;
     let run_id = RunId::new();
     let redactor = Redactor::new().with_secrets(config.wallets.secrets());
     let artifacts = RunArtifacts::create(
@@ -192,7 +193,7 @@ fn prepare(
         return None;
     };
     Some(FarmSpec {
-        android: config.android.clone(),
+        android: config.android.as_ref()?.clone(),
         apk,
         package: config.mobile.package.clone(),
         main_activity: (!config.mobile.main_activity.is_empty())
@@ -329,6 +330,8 @@ fn finish(artifacts: &RunArtifacts, summary: &mut DeviceSmokeSummary) -> Result<
         "app_version": summary.app_version,
     });
     let report = RunReport {
+        stack: None,
+        app_artifact: None,
         run_id: &summary.run_id,
         lane: summary.lane,
         command: &summary.command,

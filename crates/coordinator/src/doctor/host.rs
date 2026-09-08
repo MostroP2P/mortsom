@@ -37,6 +37,10 @@ pub trait HostProbe: Send + Sync {
     fn which(&self, program: &str) -> Option<PathBuf>;
     /// True when `path` exists (file or directory).
     fn exists(&self, path: &Path) -> bool;
+    /// True only for a regular file, following symlinks.
+    fn is_file(&self, path: &Path) -> bool;
+    /// True only for a regular file with executable permissions.
+    fn is_executable(&self, path: &Path) -> bool;
     /// Runs a program with arguments and captures its output.
     async fn run(&self, program: &Path, args: &[&str]) -> Result<CommandOutput, String>;
 }
@@ -55,11 +59,20 @@ impl HostProbe for RealHost {
         let path = std::env::var_os("PATH")?;
         std::env::split_paths(&path)
             .map(|dir| dir.join(program))
-            .find(|candidate| candidate.is_file())
+            .find(|candidate| self.is_executable(candidate))
     }
 
     fn exists(&self, path: &Path) -> bool {
         path.exists()
+    }
+
+    fn is_file(&self, path: &Path) -> bool {
+        path.is_file()
+    }
+
+    fn is_executable(&self, path: &Path) -> bool {
+        use rustix::fs::{Access, AtFlags, CWD, accessat};
+        path.is_file() && accessat(CWD, path, Access::EXEC_OK, AtFlags::EACCESS).is_ok()
     }
 
     async fn run(&self, program: &Path, args: &[&str]) -> Result<CommandOutput, String> {
@@ -83,6 +96,27 @@ impl HostProbe for RealHost {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn executability_uses_the_callers_access_not_other_users_bits() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("tool");
+        std::fs::write(&file, b"tool").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(RealHost.is_executable(&file));
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(!RealHost.is_executable(&file));
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o641)).unwrap();
+        // Root may execute any file with an execute bit; compare to OS access.
+        let executable = std::process::Command::new("test")
+            .arg("-x")
+            .arg(&file)
+            .status()
+            .unwrap()
+            .success();
+        assert_eq!(RealHost.is_executable(&file), executable);
+    }
 
     #[test]
     fn combined_joins_both_streams() {

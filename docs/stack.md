@@ -68,3 +68,27 @@ Lengths use unsigned 64-bit big-endian encoding. Links and special files are
 rejected. This records content identity; it does not establish build provenance.
 Only explicitly typed public hash fields in run metadata bypass pattern-based
 redaction; registered secrets remain redacted, including in those fields.
+
+
+### Captured clients and offline maintenance
+
+A run copies the complete app bundle into a private temporary directory before
+launch. Descriptor-relative file access rejects symlinks and special files; the
+captured content must match the initial manifest. Both actors use the captured
+copy, which is checked again before startup. Files are read-only, retaining only
+necessary executable permissions. `tempfile` 3.27.0 supplies lifetime ownership;
+its stable version was verified with `cargo info` on 2026-09-08.
+
+The Web server owns its request tasks and keeps the captured bundle alive until
+shutdown has canceled and drained them. Task failures are reported through the
+existing `tracing` 0.1.44 dependency (stable version checked on 2026-09-08).
+These content and ownership checks do not yet record source/build provenance.
+
+`accounting` and `parity` read only artifact settings. `cleanup` additionally
+reads legacy resource settings but routes by the recorded run platform; desktop
+recovery remains explicitly unsupported. `publish` resolves configured credential
+redaction values without starting Docker or connecting to wallets. Recorded
+Android runs retain environment-only credentials; Linux/Web resolve reserved
+Ortsom credential paths as the run did. Missing custom credentials or inconsistent
+platform metadata prevent publication. Strict trading configuration and spend
+caps remain mandatory for `run`.

@@ -1,0 +1,49 @@
+# Persistent Ortsom regtest stack. Values are resolved from its connection
+# references in memory; credentials are never copied into configuration.
+[mobile]
+profile = "mobile-v2"
+source_dir = "../mobilev2"
+mostro_pubkey = "env:MORTSOM_MOSTRO_PUBKEY"
+package = "foundation.mostro.app"
+
+[ui]
+timeout_secs = 30
+
+[relay]
+host_port = 7000
+
+[mostro]
+settings_file = "env:MORTSOM_MOSTRO_SETTINGS_FILE"
+relays = ["ws://127.0.0.1:7000"]
+
+[wallets.alice]
+kind = "lnd"
+host = "env:MORTSOM_ALICE_LND_HOST"
+cert = "env:MORTSOM_ALICE_LND_CERT"
+macaroon = "env:MORTSOM_ALICE_LND_MACAROON"
+
+[wallets.bob]
+kind = "lnd"
+host = "env:MORTSOM_BOB_LND_HOST"
+cert = "env:MORTSOM_BOB_LND_CERT"
+macaroon = "env:MORTSOM_BOB_LND_MACAROON"
+
+[run]
+lane = "local"
+amount_sats = 1000
+max_order_sats = 5000
+max_run_spend_sats = 50000
+jobs = 1
+artifacts_dir = "./artifacts"
+cleanup = true
+allow_mainnet = false
+infra_retries = 0
+fiat_code = "ARS"
+fiat_amount = 1000
+payment_method = "cash"
+state_timeout_secs = 90
+settle_timeout_secs = 120
+expiration_timeout_secs = 240
+quiet_window_secs = 10
+background_secs = 5
+outage_secs = 10

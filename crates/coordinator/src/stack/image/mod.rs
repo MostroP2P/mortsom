@@ -1,0 +1,139 @@
+//! Immutable identity checks for the latest daemon image selected at stack up.
+use std::{path::Path, time::Duration};
+
+use mortsom_android_driver::process::{Command, CommandRunner, run_ok};
+use serde::Deserialize;
+
+use super::StackError;
+
+const INSPECT_TIMEOUT: Duration = Duration::from_secs(30);
+const IMAGE_FORMAT: &str = r#"{"id":{{json .Id}},"digests":{{json .RepoDigests}}}"#;
+const CONTAINER_FORMAT: &str = r#"{"image":{{json .Image}},"running":{{json .State.Running}}}"#;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ExpectedImage {
+    pub id: String,
+    pub reference: String,
+}
+
+#[derive(Deserialize)]
+struct ImageMetadata {
+    id: String,
+    digests: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ContainerMetadata {
+    image: String,
+    running: bool,
+}
+
+/// Resolves the already pulled tag to an immutable registry reference.
+pub(super) async fn resolve_latest(
+    runner: &dyn CommandRunner,
+) -> Result<ExpectedImage, StackError> {
+    let output = run_ok(
+        runner,
+        &Command::new(
+            "docker",
+            &[
+                "image",
+                "inspect",
+                "--format",
+                IMAGE_FORMAT,
+                "mostrop2p/mostro:latest",
+            ],
+        ),
+        INSPECT_TIMEOUT,
+    )
+    .await?;
+    let metadata: ImageMetadata = serde_json::from_str(&output.stdout)
+        .map_err(|_| invalid("invalid Docker image metadata"))?;
+    if !valid_digest(&metadata.id) {
+        return Err(invalid("invalid Docker image ID"));
+    }
+    let references: Vec<_> = metadata
+        .digests
+        .into_iter()
+        .filter(|value| {
+            value
+                .strip_prefix("mostrop2p/mostro@")
+                .is_some_and(valid_digest)
+        })
+        .collect();
+    let [reference] = references.as_slice() else {
+        return Err(invalid(
+            "latest must have exactly one official immutable repository digest",
+        ));
+    };
+    Ok(ExpectedImage {
+        id: metadata.id,
+        reference: reference.clone(),
+    })
+}
+
+/// Checks the actual running container selected by the sibling Compose project.
+pub(super) async fn verify_running(
+    runner: &dyn CommandRunner,
+    checkout: &Path,
+    expected: &ExpectedImage,
+) -> Result<(), StackError> {
+    let output = run_ok(
+        runner,
+        &Command::new(
+            "env",
+            &[
+                &format!("--chdir={}", checkout.display()),
+                "COMPOSE_PROJECT_NAME=ortsom-regtest",
+                "docker",
+                "compose",
+                "-f",
+                "ci/regtest/compose.yml",
+                "--profile",
+                "daemon",
+                "ps",
+                "-q",
+                "mostro",
+            ],
+        ),
+        INSPECT_TIMEOUT,
+    )
+    .await?;
+    let container = output.stdout.trim();
+    if container.len() != 64 || !container.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(invalid(
+            "expected exactly one Mostro container in the selected stack",
+        ));
+    }
+    super::ownership::verify_container(runner, checkout, container).await?;
+    let output = run_ok(
+        runner,
+        &Command::new(
+            "docker",
+            &["inspect", "--format", CONTAINER_FORMAT, container],
+        ),
+        INSPECT_TIMEOUT,
+    )
+    .await?;
+    let metadata: ContainerMetadata = serde_json::from_str(&output.stdout)
+        .map_err(|_| invalid("invalid Docker container metadata"))?;
+    if !metadata.running || metadata.image != expected.id {
+        return Err(invalid(
+            "running mostrod does not match the selected latest image",
+        ));
+    }
+    Ok(())
+}
+
+fn valid_digest(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|hash| hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+}
+
+fn invalid(message: &str) -> StackError {
+    StackError::Configuration(message.into())
+}
+
+#[cfg(test)]
+mod tests;

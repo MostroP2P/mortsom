@@ -1,5 +1,10 @@
 //! `mortsom` command-line interface.
 
+mod maintenance;
+mod run;
+use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};
+use run::run_command;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -26,7 +31,7 @@ use crate::relay_smoke::{RelayObserverSource, SmokeOptions, run_relay_smoke};
 use crate::run::{LiveObserver, RunDeps, RunOptions, run_scenarios};
 
 /// Default configuration file.
-pub const DEFAULT_CONFIG: &str = "mortsom.toml";
+pub const DEFAULT_CONFIG: &str = "config/desktop.example.toml";
 
 /// End-to-end test harness for the Mostro mobile application.
 #[derive(Debug, Parser)]
@@ -35,6 +40,9 @@ pub struct Cli {
     /// Configuration file (a `<name>.local.toml` overlay is merged if present).
     #[arg(long, global = true, default_value = DEFAULT_CONFIG)]
     pub config: PathBuf,
+    /// Ortsom checkout owning the persistent regtest stack.
+    #[arg(long, global = true, default_value = "../ortsom")]
+    pub ortsom_dir: PathBuf,
     /// Subcommand.
     #[command(subcommand)]
     pub command: Command,
@@ -43,6 +51,12 @@ pub struct Cli {
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Manage the persistent regtest environment through the Ortsom CLI.
+    Stack {
+        /// Lifecycle action.
+        #[command(subcommand)]
+        action: StackAction,
+    },
     /// List registered scenarios with tags, requirements and value flag.
     List,
     /// Remove what a crashed or interrupted run left on this host (its relay
@@ -84,6 +98,15 @@ pub enum Command {
     },
     /// Run scenarios end to end (relay, devices, apps, observers, cleanup).
     Run {
+        /// Client target for Alice and Bob.
+        #[arg(long, default_value = "linux")]
+        platform: mortsom_desktop_driver::Platform,
+        /// Prebuilt native executable or Web bundle; otherwise builds the source.
+        #[arg(long)]
+        app_artifact: Option<PathBuf>,
+        /// Xvfb executable for isolated Linux desktops.
+        #[arg(long, default_value = "Xvfb")]
+        xvfb: PathBuf,
         /// Scenario names.
         scenarios: Vec<String>,
         /// Run every scenario carrying this tag.
@@ -111,6 +134,12 @@ pub enum Command {
     /// Check prerequisites, secrets, daemon, relay port and wallets. Performs
     /// no payment and creates no order.
     Doctor {
+        /// Client target whose prerequisites are checked.
+        #[arg(long, default_value = "linux")]
+        platform: mortsom_desktop_driver::Platform,
+        /// Validate an existing artifact instead of source/build prerequisites.
+        #[arg(long)]
+        app_artifact: Option<PathBuf>,
         /// Skip every check that opens a network connection.
         #[arg(long)]
         no_network: bool,
@@ -118,6 +147,36 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+}
+
+/// Persistent stack lifecycle actions.
+#[derive(Debug, Subcommand)]
+pub enum StackAction {
+    /// Pull the latest mostrod image and prepare the regtest environment.
+    Up,
+    /// Inspect the persistent services.
+    Status,
+    /// Destroy the regtest stack, including generated credentials and state.
+    Down,
+}
+
+async fn stack_cli(checkout: &std::path::Path, action: StackAction) -> ExitCode {
+    let action = match action {
+        StackAction::Up => "up",
+        StackAction::Status => "status",
+        StackAction::Down => "down",
+    };
+    let binary = crate::stack::binary(checkout);
+    match crate::stack::invoke(&TokioRunner, checkout, &binary, action).await {
+        Ok(output) => {
+            print!("{output}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::from(2)
+        }
+    }
 }
 
 /// App subcommands.
@@ -169,40 +228,112 @@ fn use_color() -> bool {
         && std::env::var("TERM").is_ok_and(|t| t != "dumb")
 }
 
+fn lock_mutation(
+    command: &Command,
+    host: &dyn HostProbe,
+) -> Result<Option<crate::lock::RunLock>, String> {
+    let mutates = matches!(
+        command,
+        Command::Run { .. }
+            | Command::Cleanup { .. }
+            | Command::App { .. }
+            | Command::Device { .. }
+            | Command::Relay { .. }
+            | Command::Stack {
+                action: StackAction::Up | StackAction::Down
+            }
+    );
+    if !mutates {
+        return Ok(None);
+    }
+    let home = host
+        .env("HOME")
+        .ok_or("HOME is required for the operator's exclusive mutation lock")?;
+    crate::lock::RunLock::acquire_host(std::path::Path::new(&home))
+        .map(Some)
+        .map_err(|error| error.to_string())
+}
+
 /// Runs the parsed command and returns the process exit code.
 pub async fn run(cli: Cli) -> ExitCode {
     // Stderr immediately; commands that own a run directory attach the
     // redacted `run.log` once the run id exists (`attach_run_log`).
     let _sink = init_logging();
+    let _host_lock = match lock_mutation(&cli.command, &RealHost) {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(3);
+        }
+    };
     match cli.command {
+        Command::Stack { action } => stack_cli(&cli.ortsom_dir, action).await,
         Command::List => list_scenarios(),
         Command::Cleanup { run } => cleanup_command(&cli.config, &run).await,
         Command::Publish {
             run,
             out,
             screenshots,
-        } => publish_command(&cli.config, &run, &out, &screenshots),
+        } => publish_command(&cli.config, &cli.ortsom_dir, &run, &out, &screenshots),
         Command::Accounting { lane } => accounting_command(&cli.config, lane.as_deref()),
         Command::Parity {
             run_a,
             run_b,
             intentional,
         } => parity_command(&cli.config, &run_a, &run_b, intentional.as_deref()),
-        Command::Run { scenarios, tag } => run_command(&cli.config, scenarios, tag).await,
+        Command::Run {
+            scenarios,
+            tag,
+            platform,
+            app_artifact,
+            xvfb,
+        } => {
+            run_command(
+                &cli.config,
+                &cli.ortsom_dir,
+                scenarios,
+                tag,
+                platform,
+                app_artifact,
+                xvfb,
+            )
+            .await
+        }
         Command::App { command } => run_app(&cli.config, command).await,
         Command::Device { command } => run_device(&cli.config, command).await,
         Command::Relay { command } => run_relay(&cli.config, command).await,
-        Command::Doctor { no_network, json } => {
+        Command::Doctor {
+            no_network,
+            json,
+            platform,
+            app_artifact,
+        } => {
             let options = DoctorOptions { no_network };
             // The daemon probe waits for events republished on the daemon's
             // own cycle, so it uses the configured health timeout.
-            let net = match Config::load(&cli.config) {
-                Ok(config) => RealNet::with_daemon_timeout(std::time::Duration::from_secs(
+            let net = match Config::diagnose(&cli.config, |name| RealHost.env(name)).config {
+                Some(config) => RealNet::with_daemon_timeout(std::time::Duration::from_secs(
                     config.mostro.health_timeout_secs,
                 )),
-                Err(_) => RealNet::default(),
+                None => RealNet::default(),
             };
-            let report = run_doctor(&cli.config, &options, &RealHost, &net).await;
+            let report = if platform == mortsom_desktop_driver::Platform::Android {
+                run_doctor(&cli.config, &options, &RealHost, &net).await
+            } else {
+                crate::doctor::run_desktop_doctor(
+                    &cli.config,
+                    &cli.ortsom_dir,
+                    &crate::doctor::DesktopDoctorOptions {
+                        platform,
+                        artifact: app_artifact,
+                        no_network,
+                    },
+                    &RealHost,
+                    &net,
+                    &TokioRunner,
+                )
+                .await
+            };
             if json {
                 match serde_json::to_string_pretty(&report) {
                     Ok(text) => println!("{text}"),
@@ -223,124 +354,6 @@ pub async fn run(cli: Cli) -> ExitCode {
     }
 }
 
-fn publish_command(
-    config_path: &std::path::Path,
-    run_id: &str,
-    out: &std::path::Path,
-    screenshots: &str,
-) -> ExitCode {
-    let config = match Config::load(config_path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    let run_id: mortsom_common::RunId = match run_id.parse() {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    let screenshots = match screenshots.parse() {
-        Ok(policy) => policy,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    let options = crate::publish::PublishOptions { screenshots };
-    match crate::publish::publish_run(&config, run_id.as_str(), out, options) {
-        Ok(manifest) => {
-            print!("{}", manifest.render());
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            ExitCode::from(1)
-        }
-    }
-}
-
-fn parity_command(
-    config_path: &std::path::Path,
-    run_a: &str,
-    run_b: &str,
-    intentional: Option<&std::path::Path>,
-) -> ExitCode {
-    let config = match Config::load(config_path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    let ids: Result<(mortsom_common::RunId, mortsom_common::RunId), String> =
-        run_a.parse().and_then(|a| run_b.parse().map(|b| (a, b)));
-    let (run_a, run_b) = match ids {
-        Ok(ids) => ids,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    let intentional = match intentional.map(crate::parity::load_intentional).transpose() {
-        Ok(list) => list.unwrap_or_default(),
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    match crate::parity::compare_runs(
-        std::path::Path::new(&config.run.artifacts_dir),
-        run_a.as_str(),
-        run_b.as_str(),
-        &intentional,
-    ) {
-        Ok(report) => {
-            print!("{}", report.render());
-            if report.parity {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            }
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            ExitCode::from(2)
-        }
-    }
-}
-
-fn accounting_command(config_path: &std::path::Path, lane: Option<&str>) -> ExitCode {
-    let config = match Config::load(config_path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    let lane = match lane.map(str::parse::<mortsom_common::Lane>).transpose() {
-        Ok(lane) => lane,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    match crate::accounting::build_accounting(std::path::Path::new(&config.run.artifacts_dir), lane)
-    {
-        Ok(report) => {
-            print!("{}", report.render());
-            ExitCode::SUCCESS
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            ExitCode::from(1)
-        }
-    }
-}
-
 /// The adapter for `mobile.profile` (validated by the config loader).
 pub fn select_adapter(
     config: &Config,
@@ -352,36 +365,6 @@ pub fn select_adapter(
         Arc::new(MobileV2Adapter::new(package, flutter, relay_seed))
     } else {
         Arc::new(MobileLegacyAdapter::new(package, flutter, relay_seed))
-    }
-}
-
-async fn cleanup_command(config_path: &std::path::Path, run_id: &str) -> ExitCode {
-    let config = match Config::load(config_path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    let run_id: mortsom_common::RunId = match run_id.parse() {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    let env = |name: &str| std::env::var(name).ok();
-    let deps = crate::cleanup_run::CleanupDeps {
-        runner: &TokioRunner,
-        docker: &DockerCli::default(),
-        env: &env,
-    };
-    let summary = crate::cleanup_run::cleanup_run(&config, &run_id, &deps).await;
-    print!("{}", summary.render());
-    if summary.clean {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
     }
 }
 
@@ -606,162 +589,49 @@ fn list_scenarios() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-async fn run_command(
-    config_path: &std::path::Path,
-    scenarios: Vec<String>,
-    tag: Option<String>,
-) -> ExitCode {
-    mortsom_scenarios::link();
-    let config = match Config::load(config_path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    // One run per host: emulator slots and the canary budget are exclusive.
-    let _lock = match crate::lock::RunLock::acquire(std::path::Path::new(&config.run.artifacts_dir))
-    {
-        Ok(lock) => lock,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(3);
-        }
-    };
-    let (Some(appium), Some(flutter)) = (RealHost.which("appium"), RealHost.which("flutter"))
-    else {
-        eprintln!("appium and flutter must be on PATH; run `mortsom doctor`");
-        return ExitCode::from(2);
-    };
-    let ui = AppiumDriver::new(appium);
-    let docker = DockerCli::default();
-    let seed = RelayHandle {
-        container_name: String::new(),
-        host_port: config.relay.host_port,
-        data_dir: std::path::PathBuf::new(),
-        image: String::new(),
-    }
-    .emulator_url();
-    let adapter = select_adapter(&config, flutter, seed);
-    let env = |name: &str| std::env::var(name).ok();
-    let wallets = wallet_factory;
-    let deps = RunDeps {
-        runner: &TokioRunner,
-        ui: &ui,
-        docker: Arc::new(docker),
-        probe: Arc::new(NostrProbe),
-        adapter,
-        env: &env,
-        wallets: &wallets,
-        observer: &LiveObserver,
-    };
-    let options = RunOptions {
-        scenarios,
-        tag,
-        shutdown_grace: None,
-    };
-    match run_scenarios(&config, &options, &deps).await {
-        Ok(summary) => {
-            print!("{}", summary.checks.render_with_color(use_color()));
-            for result in &summary.results {
-                println!(
-                    "{:<28} {:?} (attempts {})",
-                    result.name, result.outcome, result.attempts
-                );
-            }
-            println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);
-            if summary.passed {
-                ExitCode::SUCCESS
-            } else {
-                ExitCode::from(1)
-            }
-        }
-        Err(e) => {
-            eprintln!("{e}");
-            ExitCode::from(2)
-        }
-    }
-}
-
-/// The run's wallet factory.
-///
-/// A free function rather than a closure: the factory is higher-ranked over
-/// the lifetime of what it borrows, and only an `fn` item names that.
-fn wallet_factory<'b>(
-    label: &'b str,
-    wallet: &'b mortsom_environment::WalletConfig,
-) -> futures::future::BoxFuture<'b, Result<crate::run::WalletHandles, String>> {
-    Box::pin(connect_wallet(label, wallet))
-}
-
-/// Connects the wallet behind one actor.
-///
-/// On NWC the app holds the wallet and Mortsom only reads it. On LND the
-/// node is Mortsom's: it reads *and* pays, because the app under test has
-/// no wallet connected at all on that path.
-async fn connect_wallet(
-    label: &str,
-    wallet: &mortsom_environment::WalletConfig,
-) -> Result<crate::run::WalletHandles, String> {
-    use mortsom_environment::WalletConfig;
-    match wallet {
-        WalletConfig::Nwc { uri } => {
-            let reader = mortsom_observers::wallet::NwcReader::new(
-                label,
-                uri,
-                crate::run::WALLET_LOOKUP_TIMEOUT,
-            )
-            .map_err(|e| e.to_string())?;
-            Ok(crate::run::WalletHandles {
-                reader: Arc::new(reader),
-                node: None,
-                network: None,
-            })
-        }
-        WalletConfig::Lnd {
-            host,
-            macaroon,
-            cert,
-        } => {
-            let node = mortsom_environment::LndWallet::connect(label, host, cert, macaroon)
-                .await
-                .map_err(|e| e.to_string())?;
-            // The node names its own network; regtest clearance rests on
-            // this answer, never on what the configuration claims.
-            let (_alias, network) = node.info().await.map_err(|e| e.to_string())?;
-            Ok(crate::run::WalletHandles {
-                reader: Arc::new(mortsom_observers::wallet::LndReader::new(node.clone())),
-                node: Some(Arc::new(NodeWalletOverLnd(node))),
-                network: Some(network),
-            })
-        }
-    }
-}
-
-/// Adapts the environment's LND client to what a scenario asks of a wallet.
-struct NodeWalletOverLnd(mortsom_environment::LndWallet);
-
-#[async_trait::async_trait]
-impl mortsom_scenario_kit::context::NodeWallet for NodeWalletOverLnd {
-    async fn make_invoice(&self, sats: u64, memo: &str) -> Result<mortsom_common::Secret, String> {
-        self.0
-            .make_invoice(sats, memo)
-            .await
-            .map_err(|e| e.to_string())
-    }
-
-    async fn start_payment(&self, invoice: &mortsom_common::Secret) -> Result<(), String> {
-        self.0
-            .start_payment(invoice)
-            .await
-            .map(|_| ())
-            .map_err(|e| e.to_string())
-    }
-}
-
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::relay_down_targets;
+
+    #[test]
+    fn run_defaults_to_linux_and_accepts_only_the_three_named_platforms() {
+        use clap::Parser;
+        use mortsom_desktop_driver::Platform;
+        let cli = super::Cli::try_parse_from(["mortsom", "run", "happy_sell"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            super::Command::Run {
+                platform: Platform::Linux,
+                ..
+            }
+        ));
+        assert_eq!(
+            cli.config,
+            std::path::Path::new("config/desktop.example.toml")
+        );
+        for (name, expected) in [
+            ("linux", Platform::Linux),
+            ("web", Platform::Web),
+            ("android", Platform::Android),
+        ] {
+            let cli = super::Cli::try_parse_from([
+                "mortsom",
+                "--config",
+                "explicit.local.toml",
+                "run",
+                "happy_sell",
+                "--platform",
+                name,
+            ])
+            .unwrap();
+            assert!(
+                matches!(cli.command, super::Command::Run { platform, .. } if platform == expected)
+            );
+            assert_eq!(cli.config, std::path::Path::new("explicit.local.toml"));
+        }
+        assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "unknown"]).is_err());
+    }
 
     fn names() -> Vec<String> {
         ["relay-run1", "relay-run10", "relay-run2"]

@@ -23,7 +23,9 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::artifacts::files;
-use crate::config::Config;
+use crate::config::MaintenanceConfig as Config;
+
+mod platform;
 
 /// File the command writes into the run directory when it exists.
 pub const CLEANUP_COMMAND_FILE: &str = "cleanup-command.json";
@@ -86,6 +88,19 @@ pub struct EmulatorItem {
 }
 
 /// Machine-readable outcome.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DeviceCleanupStatus {
+    /// Older report with no recorded platform check.
+    #[default]
+    Unknown,
+    /// Android resource checks ran; individual results may still be failures.
+    AndroidChecked,
+    /// Desktop recovery is not available in this command yet.
+    DesktopUnsupported,
+}
+
+/// Machine-readable outcome.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CleanupRunSummary {
     /// Run being cleaned.
@@ -103,6 +118,9 @@ pub struct CleanupRunSummary {
     pub emulators: Vec<EmulatorItem>,
     /// The Appium server a crashed run left listening, if any.
     pub appium: Option<AppiumItem>,
+    /// Whether device cleanup was attempted on a supported platform.
+    #[serde(default)]
+    pub device_cleanup: DeviceCleanupStatus,
     /// True when nothing of this run is known to remain on the host and no
     /// order is unresolved.
     pub clean: bool,
@@ -139,6 +157,10 @@ impl CleanupRunSummary {
             }
         }
         match &self.appium {
+            None if self.device_cleanup == DeviceCleanupStatus::DesktopUnsupported => out.push_str(
+                "  device cleanup: NOT verified; desktop recovery is not implemented; Android/Appium probes skipped\n"),
+            None if self.device_cleanup == DeviceCleanupStatus::Unknown => out.push_str(
+                "  device cleanup: UNKNOWN; recorded platform could not be verified; device probes skipped\n"),
             None => out.push_str("  appium server: none left behind\n"),
             Some(a) if a.stopped => {
                 out.push_str(&format!("  appium server on port {}: stopped\n", a.port))
@@ -189,15 +211,29 @@ pub async fn cleanup_run(
     let run_dir = Path::new(&config.run.artifacts_dir).join(run_id);
     let run_dir_found = run_dir.is_dir();
     let (cleanup_report_found, unresolved_orders) = read_unresolved(&run_dir);
-    let containers = remove_containers(deps.docker, config, run_id).await;
-    let emulators = shut_down_emulators(deps, config).await;
+    let device_cleanup = platform::resolve(&run_dir, config.android.is_some());
+    let android_cleanup = device_cleanup == DeviceCleanupStatus::AndroidChecked;
+    let containers = if android_cleanup {
+        remove_containers(deps.docker, config, run_id).await
+    } else {
+        Vec::new()
+    };
+    let emulators = if android_cleanup {
+        shut_down_emulators(deps, config).await
+    } else {
+        Vec::new()
+    };
     // Mortsom starts the Appium server and stops it on teardown; a run that
     // died before teardown leaves it holding the port, and the next run
     // cannot start its own.
-    let appium = stop_orphan_appium(deps.runner, config.android.appium_port).await;
+    let appium = match (&config.android, android_cleanup) {
+        (Some(android), true) => stop_orphan_appium(deps.runner, android.appium_port).await,
+        _ => None,
+    };
     // Orders count as verified only when the run's own sweep reported them;
     // a run that died before its sweep leaves them unknown, not clean.
-    let clean = cleanup_report_found
+    let clean = android_cleanup
+        && cleanup_report_found
         && unresolved_orders.is_empty()
         && containers.iter().all(|c| c.removed)
         && emulators
@@ -212,6 +248,7 @@ pub async fn cleanup_run(
         containers,
         emulators,
         appium,
+        device_cleanup,
         clean,
     };
     if run_dir_found {
@@ -303,13 +340,16 @@ async fn stop_orphan_appium(runner: &dyn CommandRunner, port: u16) -> Option<App
 }
 
 async fn shut_down_emulators(deps: &CleanupDeps<'_>, config: &Config) -> Vec<EmulatorItem> {
+    let Some(android) = &config.android else {
+        return Vec::new();
+    };
     let sdk = match AndroidSdk::locate(deps.env, |p| p.exists()) {
         Ok(sdk) => sdk,
         Err(e) => {
             return Actor::ALL
                 .into_iter()
                 .map(|actor| {
-                    let slot = DeviceSlot::for_actor(&config.android, actor);
+                    let slot = DeviceSlot::for_actor(android, actor);
                     EmulatorItem {
                         actor,
                         serial: slot.serial,
@@ -323,7 +363,7 @@ async fn shut_down_emulators(deps: &CleanupDeps<'_>, config: &Config) -> Vec<Emu
     };
     let mut items = Vec::with_capacity(Actor::ALL.len());
     for actor in Actor::ALL {
-        let slot = DeviceSlot::for_actor(&config.android, actor);
+        let slot = DeviceSlot::for_actor(android, actor);
         items.push(shut_down_slot(deps.runner, sdk.adb(), &slot).await);
     }
     items

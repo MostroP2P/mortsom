@@ -91,6 +91,7 @@ pub async fn run_app_setup(
     options: &AppSetupOptions,
     deps: &SetupDeps<'_>,
 ) -> Result<AppSetupSummary, String> {
+    config.require_android().map_err(|e| e.to_string())?;
     let run_id = RunId::new();
     let redactor = Redactor::new().with_secrets(config.wallets.secrets());
     let artifacts = RunArtifacts::create(
@@ -213,7 +214,7 @@ async fn bring_up_farm(
         }
     };
     let spec = FarmSpec {
-        android: config.android.clone(),
+        android: config.android.as_ref()?.clone(),
         apk,
         package: config.mobile.package.clone(),
         main_activity: (!config.mobile.main_activity.is_empty())
@@ -309,6 +310,8 @@ fn finish(artifacts: &RunArtifacts, summary: &mut AppSetupSummary) -> Result<(),
         "relay": summary.relay.as_ref().map(|r| serde_json::json!({"container_name": r.container_name, "host_port": r.host_port})),
     });
     let report = RunReport {
+        stack: None,
+        app_artifact: None,
         run_id: &summary.run_id,
         lane: summary.lane,
         command: &summary.command,

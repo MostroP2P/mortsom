@@ -33,7 +33,7 @@ fn world() -> World {
             dir.path().join("artifacts").display()
         ),
     );
-    let config = Config::from_toml_str(&text, |name| match name {
+    let config = crate::Config::from_toml_str(&text, |name| match name {
         "MORTSOM_MOSTRO_PUBKEY" => Some(HEX.into()),
         "MORTSOM_MOSTRO_SETTINGS_FILE" => Some("/tmp/settings.toml".into()),
         "MORTSOM_ALICE_NWC" => Some(ALICE.into()),
@@ -41,7 +41,72 @@ fn world() -> World {
         _ => None,
     })
     .unwrap();
-    World { dir, config }
+    World {
+        dir,
+        config: Config::from(&config),
+    }
+}
+
+#[tokio::test]
+async fn recorded_desktop_platform_never_runs_android_cleanup_from_a_legacy_config() {
+    for platform in ["linux", "web"] {
+        let world = world();
+        let run_dir = write_cleanup(&world, "desktop-run", &[]);
+        std::fs::write(
+            run_dir.join(files::ENVIRONMENT),
+            format!(r#"{{"platform":"{platform}"}}"#),
+        )
+        .unwrap();
+        let runner = FakeRunner::default();
+        let docker = FakeDocker::default();
+        let summary = cleanup_run(
+            &world.config,
+            &"desktop-run".parse().unwrap(),
+            &CleanupDeps {
+                runner: &runner,
+                docker: &docker,
+                env: &env_for(&world, true),
+            },
+        )
+        .await;
+        assert_eq!(
+            summary.device_cleanup,
+            DeviceCleanupStatus::DesktopUnsupported
+        );
+        assert!(!summary.clean);
+        assert!(summary.emulators.is_empty() && summary.appium.is_none());
+        assert!(runner.calls().is_empty());
+    }
+}
+
+#[tokio::test]
+async fn absent_android_reports_unverified_desktop_cleanup_without_false_appium_claims() {
+    let mut world = world();
+    world.config.android = None;
+    let runner = FakeRunner::default();
+    let docker = FakeDocker::default();
+    let summary = cleanup_run(
+        &world.config,
+        &RunId::new(),
+        &CleanupDeps {
+            runner: &runner,
+            docker: &docker,
+            env: &|_| None,
+        },
+    )
+    .await;
+    assert!(!summary.clean);
+    assert!(
+        summary
+            .render()
+            .contains("desktop recovery is not implemented")
+    );
+    assert!(!summary.render().contains("appium server: none left behind"));
+    assert_eq!(
+        serde_json::to_value(&summary).unwrap()["device_cleanup"],
+        "desktop-unsupported"
+    );
+    assert!(runner.calls().is_empty());
 }
 
 fn env_for(world: &World, sdk: bool) -> impl Fn(&str) -> Option<String> + '_ {

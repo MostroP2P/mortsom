@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 12 completed, 13 in progress and 40 pending.
+current evidence separately. Section 17 tracks 65 tasks: 13 completed, 12 in progress and 40 pending.
 Live scenario acceptance remains Linux 0/20 and Web 0/20.
 
 ## 1. Objective and completion criteria
@@ -538,18 +538,22 @@ current evidence agree.
   nonzero limits, image/digest consistency, local endpoints and credential paths have regression coverage;
   149 coordinator tests, CLI tests and full clippy passed, with independent review. Live read-only status
   confirmed the pinned image. Persistence of these facts belongs to P1.8.
-- [ ] **IN PROGRESS — P1.4 Complete platform/configuration selection.** Linux default, Web/Android parsing and
-  explicit config selection have regression tests. Desktop config now uses shared `[ui]` deadlines without
-  placeholder AVD settings; Android-only commands require `[android]`. Full regression checks and review
-  are recorded before task completion; unsupported desktop recovery is explicit in cleanup reports.
+- [x] **P1.4 DONE — Complete platform/configuration selection.** Linux is the default; Web/Android and
+  explicit configuration selection have CLI regressions. Desktop uses shared `[ui]` deadlines without AVD
+  placeholders; Android-only commands require `[android]`. Cleanup follows the platform recorded before
+  client startup, rejects conflicting metadata and explicitly reports unsupported desktop recovery. Artifact
+  commands load only offline settings; publication preserves platform-specific known-secret resolution.
+  Independent review passed after compatibility fixes; 167 coordinator tests, seven CLI integration tests,
+  formatting and full workspace strict clippy passed on 2026-09-08. Desktop recovery remains P2 work.
 - [ ] **IN PROGRESS — P1.5 Finish artifact preparation.** Source lookup is confined to builds; supported binding
   and Web scripts, tool resolution and sanitized failures are wired. Tests pass for source-absent prebuilt
   clients, invalid/incomplete bundles and generation failures/missing outputs. Provenance validation remains.
-- [ ] **IN PROGRESS — P1.6 Implement platform-aware doctor.** Linux/Web doctor now resolves public stack status
-  and selects platform tools; real Linux 21/21 and Web 17/17 checks passed. Finish validation of
-  selected-platform tools, artifact/build prerequisites, local endpoint reachability, daemon identity,
-  network, wallet capabilities, liquidity and declared limits. Tests must prove doctor invokes neither order
-  actions nor wallet payment/invoice mutation methods.
+- [ ] **IN PROGRESS — P1.6 Implement platform-aware doctor.** Linux/Web doctor resolves public stack status
+  and checks selected runtime/build tools, app-owned codegen pins, Linux development libraries and Web
+  nightly/rust-src prerequisites. Real source-build diagnostics passed Linux 38/38 and Web 35/35 checks;
+  prebuilt paths passed Linux 21/21 and Web 17/17. Daemon identity/protocol, local endpoints, regtest wallet
+  capabilities and liquidity are checked read-only. Enforce these prerequisites before an expensive run
+  build and finish the no-order/no-wallet-mutation boundary audit before completion.
 - [ ] **IN PROGRESS — P1.7 Lock stack/wallet ownership independently of artifacts.** Reviewed canonical-HOME
   lock serializes stack/client lifecycle mutations, including updates and cleanup, independently of artifacts.
   Unit/CLI tests cover contention and release. Direct Ortsom commands and other users are outside this
@@ -557,7 +561,10 @@ current evidence agree.
 - [ ] **IN PROGRESS — P1.8 Persist immutable environment metadata.** Summary/environment now carry platform,
   public stack facts and a complete bundle hash. Targeted checks cover hash stability/content sensitivity
   and keeping registered secrets redacted while retaining public image hashes. Complete daemon version,
-  artifact provenance/revalidation and immutable run capture; finish independent review and failure tests.
+  source/build provenance and stack configuration fingerprint. Run-owned private bundle copies now use
+  descriptor-relative capture, reject source changes/special files, and revalidate content and executable
+  requirements before launch. Web shutdown drains owned requests before releasing the captured bundle;
+  regressions and real single-client smoke checks passed on both platforms.
 
 **Gate G1:** CLI/config/doctor and update/readiness tests pass; real `stack up` converges to the requested
 digest; a failed or successful run demonstrably leaves persistent stack resources intact. **Gate not yet
@@ -799,10 +806,18 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
 - A subsequent isolated Linux form diagnostic passed public readback of fiat amount, payment method and
   fixed sats after bounded focus/write retries. It canceled the form without publishing and released the
   client resources. It does not count as a trade or settle the remaining submission/cleanup requirements.
-- Workspace tests and strict clippy passed on the reviewed public-metadata/bundle-hash snapshot,
-  including 149 coordinator tests. Subsequent native focus changes have separate targeted checks and still
-  require a full rerun. New-driver coverage, lifecycle failure tests, remaining doctor checks, complete
-  build provenance and per-scenario reset remain pending.
+- Private captured-bundle launch diagnostics passed on Linux and Web, including visible test marker,
+  onboarding skip, order-book control, client/server shutdown and captured-file removal. These single-client
+  probes created no orders or payments. They do not validate recovery or the twenty scenarios.
+- Source-build doctor passed 38 Linux and 35 Web checks after correcting the CLI syntax of the libsecret
+  minimum-version check. It made no order or payment. Logs: `/tmp/mortsom-linux-source-doctor-recheck.log`
+  and `/tmp/mortsom-web-source-doctor.log` (local diagnostic evidence, not committed artifacts).
+- Workspace tests passed after native focus and bundle/server ownership fixes. The subsequent offline
+  maintenance changes passed all 167 coordinator tests and seven CLI integration tests, plus full workspace
+  strict clippy and formatting. Logs: `/tmp/mortsom-offline-maintenance-recheck.log` and
+  `/tmp/mortsom-maintenance-clippy.log`. Independent review closed recorded-platform and publication
+  compatibility findings. New-driver coverage, lifecycle failure tests, complete build provenance and
+  per-scenario reset remain pending.
 - Independent review found startup-readiness and cleanup gaps. Fixes are in
   progress and are not considered accepted until tests and live reruns pass.
 - The twenty-case acceptance matrix and CPU/RSS comparison remain pending.

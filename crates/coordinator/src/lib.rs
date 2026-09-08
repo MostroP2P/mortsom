@@ -21,3 +21,8 @@ pub mod run;
 pub mod safety;
 
 pub use config::{Config, ConfigError, RunConfig};
+pub mod desktop;
+pub mod stack;
+
+/// Deterministic fingerprints of complete client bundles.
+pub mod fingerprint;

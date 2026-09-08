@@ -5,6 +5,15 @@
 //! sweeps cleanup, and writes the joined evidence.
 
 mod execute;
+mod observer;
+mod preflight;
+mod report;
+pub use observer::{LiveObserver, ObserverFactory};
+pub use report::RunSummary;
+use report::finish;
+mod farm;
+pub use farm::DesktopOptions;
+use farm::Farm;
 mod relay_control;
 mod sink;
 
@@ -14,23 +23,21 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::future::BoxFuture;
-use mortsom_android_driver::farm::{DeviceFarm, FarmSpec, TeardownItem};
+use mortsom_android_driver::farm::{DeviceFarm, FarmSpec};
 use mortsom_android_driver::process::CommandRunner;
 use mortsom_android_driver::sdk::{AndroidSdk, avd_home};
 use mortsom_android_driver::ui::UiDriver;
 use mortsom_app_contract::{AppAdapter, TestEnvironment};
 use mortsom_common::check::{CheckStatus, DoctorReport};
 use mortsom_common::logging::attach_run_log;
-use mortsom_common::{Lane, Redactor, RunId};
+use mortsom_common::{Redactor, RunId};
 use mortsom_environment::WalletConfig;
 use mortsom_environment::docker::ContainerRuntime;
-use mortsom_environment::relay::{
-    ReadinessProbe, RelayHandle, RelayTeardown, start_relay, teardown_relay,
-};
-use mortsom_observers::relay::{ObserverScope, RelayObserver};
+use mortsom_environment::relay::{ReadinessProbe, RelayHandle, start_relay, teardown_relay};
+use mortsom_observers::relay::RelayObserver;
 use mortsom_observers::wallet::{WalletObserver, WalletReader};
-use mortsom_scenario_kit::budget::{Budget, SpendCaps, Totals};
-use mortsom_scenario_kit::cleanup::{CleanupRegistry, CleanupReport};
+use mortsom_scenario_kit::budget::{Budget, SpendCaps};
+use mortsom_scenario_kit::cleanup::CleanupRegistry;
 use mortsom_scenario_kit::context::NodeWallet;
 use mortsom_scenario_kit::context::{ActorSession, Context, MainnetClearance, RecoveryTiming};
 use mortsom_scenario_kit::outcome::{Outcome, ScenarioResult};
@@ -38,14 +45,12 @@ use mortsom_scenario_kit::recovery::{NoRelayControl, RelayControl};
 use mortsom_scenario_kit::registry::{ManualPayments, ScenarioDef, required_on, select};
 use mortsom_scenario_kit::timeline::{Timeline, TimelineKind};
 use relay_control::LiveRelayControl;
-use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 use crate::artifacts::{RunArtifacts, files};
-use crate::bootstrap::{ActorSetup, bootstrap_actor};
+use crate::bootstrap::{ActorSetup, bootstrap_session};
 use crate::config::Config;
 use crate::evidence::StepRecorder;
-use crate::report::{RunReport, write_report};
 use crate::safety::authorize_mainnet;
 
 pub use execute::execute_scenario;
@@ -65,6 +70,10 @@ pub struct RunOptions {
     pub scenarios: Vec<String>,
     /// Suite tag.
     pub tag: Option<String>,
+    /// Optional Linux/Web execution; absent for existing Android callers.
+    pub desktop: Option<DesktopOptions>,
+    /// Verified public stack snapshot for persistent desktop runs.
+    pub stack: Option<crate::stack::StackSnapshot>,
     /// Grace for emulator shutdown.
     pub shutdown_grace: Option<Duration>,
 }
@@ -93,39 +102,6 @@ pub type WalletFactory<'a> = dyn for<'b> Fn(&'b str, &'b WalletConfig) -> BoxFut
     + Sync
     + 'a;
 
-/// Starts the relay observer for a run (real: connects; tests: detached).
-#[async_trait::async_trait]
-pub trait ObserverFactory: Send + Sync {
-    /// Starts observing `relay_url` for the daemon `pubkey`.
-    async fn start(
-        &self,
-        relay_url: &str,
-        pubkey: nostr_sdk::prelude::PublicKey,
-    ) -> Result<Arc<RelayObserver>, String>;
-}
-
-/// Connects to the run relay.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct LiveObserver;
-
-#[async_trait::async_trait]
-impl ObserverFactory for LiveObserver {
-    async fn start(
-        &self,
-        relay_url: &str,
-        pubkey: nostr_sdk::prelude::PublicKey,
-    ) -> Result<Arc<RelayObserver>, String> {
-        RelayObserver::start(
-            &[relay_url.to_owned()],
-            ObserverScope::daemon_only(pubkey),
-            OBSERVER_CONNECT_TIMEOUT,
-        )
-        .await
-        .map(Arc::new)
-        .map_err(|e| e.to_string())
-    }
-}
-
 /// Everything the runner needs from the outside world.
 pub struct RunDeps<'a> {
     /// Process runner.
@@ -144,42 +120,8 @@ pub struct RunDeps<'a> {
     pub wallets: &'a WalletFactory<'a>,
     /// Relay observer factory.
     pub observer: &'a dyn ObserverFactory,
-}
-
-/// Machine-readable outcome, written to `summary.json`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RunSummary {
-    /// Run identifier.
-    pub run_id: RunId,
-    /// Lane.
-    pub lane: Lane,
-    /// Command.
-    pub command: String,
-    /// App profile.
-    pub app_profile: String,
-    /// App version, when known.
-    pub app_version: Option<String>,
-    /// Whether mainnet clearance was granted.
-    pub mainnet_cleared: bool,
-    /// Relay used.
-    pub relay: Option<RelayHandle>,
-    /// Actor bootstrap outcomes.
-    pub actors: Vec<ActorSetup>,
-    /// Scenario results.
-    pub results: Vec<ScenarioResult>,
-    /// Environment and bootstrap checks.
-    pub checks: DoctorReport,
-    /// Cleanup report.
-    pub cleanup: Option<CleanupReport>,
-    /// Budget totals.
-    pub budget: Option<Totals>,
-    /// Farm teardown.
-    pub farm_teardown: Vec<TeardownItem>,
-    /// Relay teardown.
-    pub relay_teardown: Option<RelayTeardown>,
-    /// True when every check passed and every selected scenario passed or
-    /// was skipped with a reason.
-    pub passed: bool,
+    /// Read-only network preflight required for Linux/Web runs.
+    pub net: Option<&'a dyn crate::doctor::NetProbes>,
 }
 
 /// Runs the selected scenarios.
@@ -188,6 +130,9 @@ pub async fn run_scenarios(
     options: &RunOptions,
     deps: &RunDeps<'_>,
 ) -> Result<RunSummary, String> {
+    if options.desktop.is_none() {
+        config.require_android().map_err(|e| e.to_string())?;
+    }
     let selected = select(&options.scenarios, options.tag.as_deref())?;
     let clearance = clear_value_moving(config, deps, &selected)?;
     let mainnet = match clearance {
@@ -213,6 +158,18 @@ pub async fn run_scenarios(
         command: "run".into(),
         app_profile: deps.adapter.profile().name,
         app_version: None,
+        mostrod_version: None,
+        stack: options.stack.clone(),
+        app_artifact: options
+            .desktop
+            .as_ref()
+            .map(|d| d.bundle.fingerprint().clone()),
+        platform: Some(
+            options
+                .desktop
+                .as_ref()
+                .map_or(mortsom_desktop_driver::Platform::Android, |d| d.platform),
+        ),
         mainnet_cleared: mainnet.is_some(),
         relay: None,
         actors: Vec::new(),
@@ -224,6 +181,7 @@ pub async fn run_scenarios(
         relay_teardown: None,
         passed: false,
     };
+    report::record_platform(&artifacts, &summary)?;
     let (runnable, gated) = gate_capabilities(
         deps.adapter.as_ref(),
         &selected,
@@ -234,6 +192,11 @@ pub async fn run_scenarios(
     );
     summary.results.extend(gated);
     if runnable.is_empty() {
+        return finish(&artifacts, &mut summary).map(|()| summary);
+    }
+
+    if !preflight::check(config, options, deps, &mut summary).await {
+        preflight::reject(&runnable, &mut summary);
         return finish(&artifacts, &mut summary).map(|()| summary);
     }
 
@@ -381,7 +344,8 @@ struct World<'a> {
     observer: Option<Arc<RelayObserver>>,
     wallets: Option<Arc<WalletObserver>>,
     node_wallets: BTreeMap<String, Arc<dyn NodeWallet>>,
-    farm: Option<DeviceFarm>,
+    farm: Option<Farm>,
+    desktop: Option<DesktopOptions>,
 }
 
 impl<'a> World<'a> {
@@ -410,6 +374,7 @@ impl<'a> World<'a> {
             wallets: None,
             node_wallets: BTreeMap::new(),
             farm: None,
+            desktop: options.desktop.clone(),
         }
     }
 
@@ -417,21 +382,39 @@ impl<'a> World<'a> {
     /// stage name on error; whatever started is torn down by `tear_down`.
     async fn bring_up(&mut self, summary: &mut RunSummary) -> Result<(), String> {
         let relay_timeout = Duration::from_secs(self.config.mostro.health_timeout_secs);
-        let relay = start_relay(
-            self.deps.docker.as_ref(),
-            self.deps.probe.as_ref(),
-            &self.config.relay,
-            summary.run_id.as_str(),
-            self.artifacts.dir(),
-            relay_timeout,
-        )
-        .await
-        .map_err(|e| record_fail(summary, "relay-start", e.to_string()))?;
-        summary
-            .checks
-            .push("relay-start", CheckStatus::Pass, relay.host_url());
-        summary.relay = Some(relay.clone());
-        self.relay = Some(relay.clone());
+        let relay = if self.desktop.is_some() {
+            let handle = RelayHandle {
+                container_name: String::new(),
+                host_port: self.config.relay.host_port,
+                data_dir: PathBuf::new(),
+                image: String::new(),
+            };
+            if !self.deps.probe.is_ready(&handle.host_url()).await {
+                return Err(record_fail(
+                    summary,
+                    "stack-relay",
+                    "persistent relay is not ready; run `mortsom stack up`".into(),
+                ));
+            }
+            handle
+        } else {
+            let relay = start_relay(
+                self.deps.docker.as_ref(),
+                self.deps.probe.as_ref(),
+                &self.config.relay,
+                summary.run_id.as_str(),
+                self.artifacts.dir(),
+                relay_timeout,
+            )
+            .await
+            .map_err(|e| record_fail(summary, "relay-start", e.to_string()))?;
+            summary
+                .checks
+                .push("relay-start", CheckStatus::Pass, relay.host_url());
+            summary.relay = Some(relay.clone());
+            self.relay = Some(relay.clone());
+            relay
+        };
 
         let pubkey =
             self.config.mobile.mostro_pubkey().ok_or_else(|| {
@@ -494,18 +477,18 @@ impl<'a> World<'a> {
         }
 
         let farm = self.bring_up_farm(summary).await?;
-        summary.app_version = Some(
-            farm.device(mortsom_android_driver::avd::Actor::Alice)
-                .version
-                .version_name
-                .clone(),
-        );
+        summary.app_version = Some(farm.version());
         let env = self.env();
-        for device in farm.devices() {
-            let actor = bootstrap_actor(
+        for (actor, session) in farm.sessions() {
+            let ctx = mortsom_app_contract::DeviceContext {
+                actor,
+                ui: session.as_ref(),
+                ui_timeout: Duration::from_secs(self.config.ui_timeout_secs()),
+            };
+            let actor = bootstrap_session(
                 self.config,
                 self.deps.adapter.as_ref(),
-                device,
+                ctx,
                 &env,
                 self.artifacts,
                 &self.recorder,
@@ -522,13 +505,37 @@ impl<'a> World<'a> {
             a.identity.is_some()
                 && (!a.wallet_expected || a.wallet.as_ref().is_some_and(|w| w.connected))
         });
+        let identities_restored = summary.actors.iter().all(|actor| {
+            actor
+                .identity
+                .as_ref()
+                .zip(actor.identity_after_restart.as_ref())
+                .is_some_and(|(before, after)| before.public_key == after.public_key)
+        });
+        let distinct = summary.actors.len() == 2
+            && summary.actors[0]
+                .identity
+                .as_ref()
+                .zip(summary.actors[1].identity.as_ref())
+                .is_some_and(|(alice, bob)| alice.public_key != bob.public_key);
+        if !identities_restored || !distinct || !summary.checks.is_healthy() {
+            return Err(record_fail(
+                summary,
+                "actor-isolation",
+                "bootstrap checks, distinct identities and identity persistence must all pass"
+                    .into(),
+            ));
+        }
         if !bootstrapped {
             return Err("actor bootstrap failed (see checks)".into());
         }
         Ok(())
     }
 
-    async fn bring_up_farm(&self, summary: &mut RunSummary) -> Result<DeviceFarm, String> {
+    async fn bring_up_farm(&self, summary: &mut RunSummary) -> Result<Farm, String> {
+        if let Some(options) = &self.desktop {
+            return Farm::desktop(options).await;
+        }
         let apk = resolve_apk(self.config, self.deps)
             .await
             .map_err(|e| record_fail(summary, "apk", e))?;
@@ -541,7 +548,11 @@ impl<'a> World<'a> {
         let sdk = AndroidSdk::locate(self.deps.env, |p| p.exists())
             .map_err(|e| record_fail(summary, "android-sdk", e.to_string()))?;
         let spec = FarmSpec {
-            android: self.config.android.clone(),
+            android: self
+                .config
+                .require_android()
+                .map_err(|e| e.to_string())?
+                .clone(),
             apk,
             package: self.config.mobile.package.clone(),
             main_activity: (!self.config.mobile.main_activity.is_empty())
@@ -558,7 +569,7 @@ impl<'a> World<'a> {
             CheckStatus::Pass,
             "alice and bob booted, same build installed",
         );
-        Ok(farm)
+        Ok(Farm::Android(farm))
     }
 
     /// Widens the observer scope to the actor's displayed identity so its
@@ -598,11 +609,14 @@ impl<'a> World<'a> {
     fn env(&self) -> TestEnvironment {
         TestEnvironment {
             mostro_pubkey: self.config.mobile.mostro_pubkey.clone(),
-            relay_url: self
-                .relay
-                .as_ref()
-                .map(RelayHandle::emulator_url)
-                .unwrap_or_default(),
+            relay_url: if self.desktop.is_some() {
+                format!("ws://127.0.0.1:{}", self.config.relay.host_port)
+            } else {
+                self.relay
+                    .as_ref()
+                    .map(RelayHandle::emulator_url)
+                    .unwrap_or_default()
+            },
             lane: self.config.run.lane,
         }
     }
@@ -630,12 +644,12 @@ impl<'a> World<'a> {
             };
         };
         let actors: Vec<ActorSession> = farm
-            .devices()
-            .iter()
-            .map(|d| ActorSession {
-                actor: d.actor,
-                ui: Arc::clone(&d.session),
-                wallet_label: d.actor.as_str().to_owned(),
+            .sessions()
+            .into_iter()
+            .map(|(actor, ui)| ActorSession {
+                actor,
+                ui,
+                wallet_label: actor.as_str().to_owned(),
             })
             .collect();
         let ctx = Context {
@@ -659,7 +673,7 @@ impl<'a> World<'a> {
             fiat_code: config.run.fiat_code.clone(),
             fiat_amount: config.run.fiat_amount,
             payment_method: config.run.payment_method.clone(),
-            ui_timeout: Duration::from_secs(config.android.ui_timeout_secs),
+            ui_timeout: Duration::from_secs(config.ui_timeout_secs()),
             state_timeout: Duration::from_secs(config.run.state_timeout_secs),
             settle_timeout: Duration::from_secs(config.run.settle_timeout_secs),
             expiration_timeout: Duration::from_secs(config.run.expiration_timeout_secs),
@@ -777,52 +791,6 @@ async fn resolve_apk(config: &Config, deps: &RunDeps<'_>) -> Result<PathBuf, Str
 
 fn short(id: &str) -> String {
     id.chars().take(12).collect()
-}
-
-fn finish(artifacts: &RunArtifacts, summary: &mut RunSummary) -> Result<(), String> {
-    let scenarios_ok = summary
-        .results
-        .iter()
-        .all(|r| !matches!(r.outcome, Outcome::Failed { .. }));
-    let clean = summary.cleanup.as_ref().is_none_or(CleanupReport::is_clean);
-    summary.passed = summary.checks.is_healthy() && scenarios_ok && clean;
-    let cleanup = serde_json::json!({
-        "orders": summary.cleanup,
-        "farm": summary.farm_teardown,
-        "relay": summary.relay_teardown,
-    });
-    let environment = serde_json::json!({
-        "run_id": summary.run_id,
-        "lane": summary.lane,
-        "command": summary.command,
-        "app_profile": summary.app_profile,
-        "app_version": summary.app_version,
-        "mainnet_cleared": summary.mainnet_cleared,
-        "relay": summary.relay.as_ref().map(|r| serde_json::json!({"container_name": r.container_name, "host_port": r.host_port})),
-    });
-    // The timeline is the scenario timeline written at teardown; the report
-    // writer's table would overwrite it, so a run keeps its own file and the
-    // report only writes summary/environment/cleanup.
-    let report = RunReport {
-        run_id: &summary.run_id,
-        lane: summary.lane,
-        command: &summary.command,
-        app_profile: Some(&summary.app_profile),
-        checks: &summary.checks,
-        passed: summary.passed,
-    };
-    let timeline_exists = artifacts
-        .file(files::TIMELINE)
-        .map(|p| p.is_file())
-        .unwrap_or(false);
-    write_report(
-        artifacts,
-        &report,
-        summary,
-        &environment,
-        &cleanup,
-        !timeline_exists,
-    )
 }
 
 #[cfg(test)]

@@ -11,7 +11,9 @@ const MAX_BACK_STEPS: usize = 4;
 /// Drawer → account (key management).
 pub async fn go_to_account(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
     go_home(device).await?;
-    tap_until(device, Ids::APPBAR_DRAWER, Ids::DRAWER_ACCOUNT).await?;
+    if !present(device, Ids::DRAWER_ACCOUNT).await? {
+        tap_until(device, Ids::APPBAR_DRAWER, Ids::DRAWER_ACCOUNT).await?;
+    }
     tap(device, Ids::DRAWER_ACCOUNT).await?;
     expect(device, Ids::KEYS_PUBLIC_KEY).await
 }
@@ -19,7 +21,9 @@ pub async fn go_to_account(device: &DeviceContext<'_>) -> Result<(), AdapterErro
 /// Drawer → settings.
 pub async fn go_to_settings(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
     go_home(device).await?;
-    tap_until(device, Ids::APPBAR_DRAWER, Ids::DRAWER_SETTINGS).await?;
+    if !present(device, Ids::DRAWER_SETTINGS).await? {
+        tap_until(device, Ids::APPBAR_DRAWER, Ids::DRAWER_SETTINGS).await?;
+    }
     tap(device, Ids::DRAWER_SETTINGS).await?;
     expect(device, Ids::SETTINGS_MOSTRO_NODE).await
 }
@@ -30,12 +34,21 @@ pub async fn go_home(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
         if present(device, Ids::ORDER_ADD_FAB).await? {
             return Ok(());
         }
-        if present(device, Ids::APPBAR_BACK).await? {
-            tap(device, Ids::APPBAR_BACK).await?;
-        } else if present(device, Ids::NAV_ORDER_BOOK).await? {
+        if present(device, Ids::NAV_ORDER_BOOK).await? {
             tap(device, Ids::NAV_ORDER_BOOK).await?;
+        } else if present(device, Ids::APPBAR_BACK).await? {
+            tap(device, Ids::APPBAR_BACK).await?;
         } else {
             break;
+        }
+        if super::appears_within(
+            device,
+            Ids::ORDER_ADD_FAB,
+            std::time::Duration::from_secs(3),
+        )
+        .await?
+        {
+            return Ok(());
         }
     }
     expect(device, Ids::ORDER_ADD_FAB).await.map_err(|e| {

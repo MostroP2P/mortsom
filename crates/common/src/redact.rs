@@ -87,13 +87,20 @@ impl Redactor {
             .sort_by_key(|known| std::cmp::Reverse(known.expose().len()));
     }
 
-    /// Returns `text` with every known secret and secret-shaped pattern
-    /// replaced by [`REDACTED`].
-    pub fn redact(&self, text: &str) -> String {
+    /// Redacts registered secrets in an explicitly public, typed metadata field.
+    /// Free text must use `redact` so secret-shaped patterns are also removed.
+    pub fn redact_known(&self, text: &str) -> String {
         let mut out = text.to_owned();
         for value in &self.known {
             out = out.replace(value.expose(), REDACTED);
         }
+        out
+    }
+
+    /// Returns `text` with every known secret and secret-shaped pattern
+    /// replaced by [`REDACTED`].
+    pub fn redact(&self, text: &str) -> String {
+        let mut out = self.redact_known(text);
         for pattern in PATTERNS.iter() {
             out = pattern.replace_all(&out, REDACTED).into_owned();
         }

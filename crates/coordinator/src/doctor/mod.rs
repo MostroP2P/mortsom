@@ -1,6 +1,8 @@
 //! `mortsom doctor`: prerequisites, secrets, daemon, relay port and wallets.
 //! It performs no payment and creates no order (spec Phase 0.3).
 
+mod desktop;
+mod desktop_build;
 mod host;
 mod net;
 mod settings;
@@ -8,6 +10,7 @@ mod tools;
 
 use std::path::Path;
 
+pub use desktop::{DesktopDoctorOptions, DesktopPreflight, desktop_preflight, run_desktop_doctor};
 pub use host::{CommandOutput, HostProbe, RealHost};
 pub use mortsom_common::check::{CheckResult, CheckStatus, DoctorReport};
 pub use net::{NetProbes, PortState, RealNet};
@@ -35,12 +38,15 @@ pub async fn run_doctor(
 
     tools::check_tools(
         host,
-        config.map(|c| &c.android),
+        config.and_then(|c| c.android.as_ref()),
         config.map(|c| &c.mobile),
         &mut report,
     )
     .await;
     if let Some(config) = config {
+        if let Err(error) = config.require_android() {
+            report.push("android-config", CheckStatus::Fail, error.to_string());
+        }
         settings::check_daemon_settings(
             host,
             &config.mostro.settings_file,
