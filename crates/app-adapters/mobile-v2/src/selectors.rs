@@ -95,6 +95,7 @@ impl Ids {
     pub const INVOICE_SUBMIT: &'static str = "invoice.submit";
     pub const INVOICE_CANCEL: &'static str = "invoice.cancel";
     pub const PAY_INVOICE_TEXT: &'static str = "pay.invoice.text";
+    pub const PAY_ORDER_ID: &'static str = "pay.order_id";
     pub const PAY_NWC: &'static str = "pay.nwc";
     pub const PAY_CANCEL: &'static str = "pay.cancel";
 
@@ -172,6 +173,7 @@ impl Ids {
         Self::INVOICE_SUBMIT,
         Self::INVOICE_CANCEL,
         Self::PAY_INVOICE_TEXT,
+        Self::PAY_ORDER_ID,
         Self::PAY_NWC,
         Self::PAY_CANCEL,
     ];

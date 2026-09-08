@@ -101,7 +101,22 @@ pub async fn find_and_take(
     tap(device, tab).await?;
     tap(device, &Ids::order_book_item(&order.id)).await?;
     tap(device, Ids::ORDER_TAKE_CONFIRM).await?;
-    expect(device, Ids::ORDER_STATUS).await
+    let form = match kind {
+        OrderKind::Sell => Ids::INVOICE_TEXT,
+        OrderKind::Buy => Ids::PAY_INVOICE_TEXT,
+    };
+    match super::first_present(device, &[form, Ids::ORDER_STATUS]).await? {
+        Some(id) if id == form => {
+            invoice_form_state(device, order).await?.ok_or_else(|| {
+                AdapterError::contract("take invoice form disappeared before verification")
+            })?;
+            Ok(())
+        }
+        Some(_) => verify_order_id(device, Ids::ORDER_ID, order).await,
+        None => Err(AdapterError::contract(
+            "take did not reach the expected invoice form or trade detail",
+        )),
+    }
 }
 
 /// Opens the trade detail of `order` from the trades list.
@@ -121,7 +136,11 @@ pub async fn observe(
     device: &DeviceContext<'_>,
     order: &OrderReference,
 ) -> Result<AppOrderState, AdapterError> {
+    if let Some(state) = invoice_form_state(device, order).await? {
+        return Ok(state);
+    }
     open_trade(device, order).await?;
+    verify_order_id(device, Ids::ORDER_ID, order).await?;
     let raw = label(device, Ids::ORDER_STATUS).await?;
     let state = from_v2_label(&raw).ok_or_else(|| {
         AdapterError::product(format!(
@@ -142,8 +161,11 @@ pub async fn pay_hold_invoice(
     order: &OrderReference,
     path: PaymentPath,
 ) -> Result<PaymentHandoff, AdapterError> {
-    open_trade(device, order).await?;
-    tap(device, Ids::TRADE_PAY_INVOICE).await?;
+    if !present(device, Ids::PAY_INVOICE_TEXT).await? {
+        open_trade(device, order).await?;
+        tap(device, Ids::TRADE_PAY_INVOICE).await?;
+    }
+    verify_order_id(device, Ids::PAY_ORDER_ID, order).await?;
     let invoice = label(device, Ids::PAY_INVOICE_TEXT)
         .await?
         .trim()
@@ -169,6 +191,40 @@ pub async fn pay_hold_invoice(
         kind: PaymentPath::Nwc,
         invoice: (!invoice.is_empty()).then(|| Secret::new(invoice)),
     })
+}
+
+async fn verify_order_id(
+    device: &DeviceContext<'_>,
+    id: &str,
+    order: &OrderReference,
+) -> Result<(), AdapterError> {
+    if label(device, id).await?.trim() != order.id {
+        return Err(AdapterError::contract(
+            "invoice or trade screen belongs to a different order",
+        ));
+    }
+    Ok(())
+}
+
+/// Manual invoice screens are waiting states only when their public order ID
+/// matches. Reading them must not leave the form before its next user action.
+async fn invoice_form_state(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<Option<AppOrderState>, AdapterError> {
+    for (form, id, raw) in [
+        (Ids::INVOICE_TEXT, Ids::INVOICE_ORDER_ID, "waiting-invoice"),
+        (Ids::PAY_INVOICE_TEXT, Ids::PAY_ORDER_ID, "waiting-payment"),
+    ] {
+        if present(device, form).await? {
+            verify_order_id(device, id, order).await?;
+            return Ok(Some(AppOrderState {
+                state: OrderState::Taken,
+                raw_label: raw.into(),
+            }));
+        }
+    }
+    Ok(None)
 }
 
 /// Opens the exact order's manual invoice form without replacing an existing

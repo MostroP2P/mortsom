@@ -432,7 +432,12 @@ fn app_with_orders() -> FakeUi {
     );
     ui.on_tap(
         Ids::TRADE_PAY_INVOICE,
-        &[Ids::PAY_INVOICE_TEXT, Ids::PAY_NWC, Ids::PAY_CANCEL],
+        &[
+            Ids::PAY_INVOICE_TEXT,
+            Ids::PAY_ORDER_ID,
+            Ids::PAY_NWC,
+            Ids::PAY_CANCEL,
+        ],
     );
     // With a wallet connected v2 generates and submits the buyer invoice in
     // one step; the readout is all the screen leaves behind.
@@ -453,6 +458,7 @@ fn app_with_orders() -> FakeUi {
     ui.label(Ids::ORDER_STATUS, "pending");
     ui.label(Ids::ORDER_ID, "o1");
     ui.label(Ids::PAY_INVOICE_TEXT, "lnbc1000n1secretinvoice");
+    ui.label(Ids::PAY_ORDER_ID, "o1");
     ui.label(Ids::INVOICE_NWC_TEXT, "lnbc1000n1buyerinvoice");
     ui
 }
@@ -823,3 +829,6 @@ async fn a_manual_invoice_form_for_another_order_is_never_reused() {
             .any(|call| call == "tap invoice.submit" || call.starts_with("type invoice.text"))
     );
 }
+
+#[path = "tests_take.rs"]
+mod take;
