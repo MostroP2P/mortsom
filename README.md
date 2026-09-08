@@ -357,7 +357,7 @@ log alone as proof of a hang or kill unrelated browser processes. UI/state/payme
 
 A pass requires the requested scenario to pass and cleanup/evidence checks to succeed. Skipped scenarios,
 failed attempts, unfunded form probes and a regtest reset never count as a happy-path pass. See the
-[parity ledger](docs/ortsom-ui-parity.md) and [spec attempt ledger](docs/history/spec-v0.3.md#1814-live-checkpoint-attempt-ledger)
+[parity ledger](docs/acceptance-ledger.md) and [spec attempt ledger](docs/history/spec-v0.3.md#1814-live-checkpoint-attempt-ledger)
 for actual accepted results.
 
 ## Recover a failed run

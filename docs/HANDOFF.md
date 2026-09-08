@@ -4,6 +4,12 @@ This is the continuation record for the operator-requested token-exhaustion chec
 Read `../spec.md` first, then this file. The spec is normative; this record explains where execution stopped.
 All repository content must remain in English; operator-facing conversation is in Spanish.
 
+**Spec v1.0 gap (2026-09-08).** The rewritten `spec.md` requires `mortsom stack up/status/down` to build and
+own the regtest stack independently, with no dependency on an Ortsom checkout or binary. The code still
+delegates to `ortsom` through `--ortsom-dir` (`crates/coordinator/src/stack/`) and the example config still
+describes an Ortsom-owned stack. Closing that gap is implementation work that follows the spec; until then the
+resume commands below keep working against the existing persistent stack.
+
 ## Objective and stopping boundary
 
 Finish **happy_sell and happy_buy on Linux and Web: four accepted live cells**, then stop for operator
@@ -113,7 +119,7 @@ artifacts. Coverage >=80% and final delivery audit are still pending.
 
 ## Live failures already diagnosed
 
-Full detail is in the archived spec (`docs/history/spec-v0.3.md`, section 18.14) and `docs/ortsom-ui-parity.md`.
+Full detail is in the archived spec (`docs/history/spec-v0.3.md`, section 18.14) and `docs/acceptance-ledger.md`.
 
 | Run | Result |
 |---|---|

@@ -1,4 +1,4 @@
-# Ortsom UI parity acceptance ledger
+# Acceptance ledger
 
 The normative scenario rules are in [spec.md](../spec.md), section 8; the historical
 task checklists and twenty-scenario catalogue are in [docs/history/spec-v0.3.md](history/spec-v0.3.md). Source definitions are in `../ortsom/docs/scenarios.md` and

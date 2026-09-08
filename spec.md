@@ -75,7 +75,7 @@ Both actors run on the same platform in one invocation. Mixed pairs are out of s
 ## 4. Operator workflow
 
 ```sh
-# Regtest environment, delegated to Ortsom.
+# Regtest environment owned by Mortsom.
 mortsom stack up
 mortsom stack status
 mortsom stack down
@@ -107,23 +107,50 @@ is built or launched. Selecting Android must neither silently use Linux nor clai
 
 ## 5. Stack
 
-Ortsom owns the regtest environment: `bitcoind`, the Nostr relay, `mostrod` and the LND nodes Alice, Bob and
-Carol, with their persistent volumes and connection metadata. `mortsom stack up` runs `ortsom stack up` in the
-configured sibling checkout; running Ortsom directly is equally valid.
+Mortsom owns its regtest environment and needs no other tool to create it. `mortsom stack up` builds the
+whole world from nothing on a machine with Docker: a regtest chain, three Lightning nodes with balanced
+channels, a Nostr relay and a `mostrod` with an identity minted for this stack. `stack status` reports it and
+`stack down` removes it, volumes included.
+
+| Service | Role | Host port |
+|---|---|---|
+| `bitcoind` | Regtest chain; mines its own coins, so nothing needs external funding | none |
+| `lnd-alice` | Alice's wallet | 10001 |
+| `lnd-bob` | Bob's wallet | 10002 |
+| `lnd-carol` | The daemon's escrow node | 10003 |
+| `relay` | In-memory Nostr relay reachable only from this host | 7000 |
+| `mostro` | The daemon under test | none |
+
+Topology: Alice and Bob each open one channel to Carol, funded at 1,000,000 sats with 500,000 pushed across,
+so both have outbound liquidity to pay a hold invoice and inbound liquidity to receive a payout. There is
+deliberately no Alice-to-Bob channel: every payment has the daemon's node on one end, and a second route would
+only let a payment succeed by accident. Carol exists so the daemon never escrows on a node an actor pays from.
 
 `stack up` must:
 
-1. Pull the configured Mostro image. A failed pull is an error, not permission to use a stale cached image.
-2. Delegate creation or update to Ortsom with that image.
-3. Verify that the running daemon container converges to the pulled digest.
-4. Wait for relay, daemon and wallet readiness; validate regtest networks, daemon identity, advertised relay
-   endpoints, channel liquidity and declared daemon limits.
-5. Record the image digest, daemon version and a public stack fingerprint. Never record secrets.
+1. Resolve the daemon image. The default is a pinned release recorded in configuration; `--mostro-image`
+   selects another. Pull it; a failed pull is an error, never permission to use a stale cached image.
+2. Start the chain, nodes and relay; wait for each to be usable; fund the nodes and open the channels above,
+   skipping work already done so the command is re-runnable against a half-built stack.
+3. Mint the daemon identity for this stack, write its settings with the declared test limits, and start the
+   daemon as the invoking user so it can read owner-only files. Verify the running container matches the
+   pulled digest.
+4. Wait until the daemon publishes its info event on the relay, then validate regtest networks, advertised
+   relay endpoints, channel liquidity and declared limits.
+5. Write the public connection references, daemon public identity, image digest and stack fingerprint to
+   Mortsom's ignored local overlay. Node credentials and the daemon's private key stay in owner-only files
+   that are never echoed, logged or copied into artifacts.
 
-Mortsom reads connection references and the daemon's public identity from the stack. It must not load the
-solver secret to obtain a public key. Scenario teardown never removes persistent containers or volumes. A
+`stack status` exits non-zero until the stack is usable, so it can be waited on. It reports each service,
+each node's active channels and the daemon identity in effect.
+
+`stack down` stops the services, removes their volumes and deletes the generated identity and credentials,
+so no public key is left that nothing answers on. Both `up` and `down` refuse to touch containers or volumes
+that this Mortsom checkout did not create.
+
+`run` never creates, updates or destroys the stack. Scenario teardown never removes containers or volumes. A
 stack reset is an explicit operator action; it is not evidence that an order was cancelled or a payment
-refunded.
+refunded. The published ports collide with a local Polar network or relay; those must be stopped first.
 
 ## 6. Platforms
 
@@ -189,8 +216,8 @@ narrative; scenario bodies contain no AT-SPI or WebDriver detail.
 | `happy_sell` | Alice creates a sell order. Bob takes it and provides a payout invoice. Alice pays the hold invoice. Bob reports fiat sent. Alice releases. | Matching order ID on both screens and in relay events. Hold invoice paid by Alice and settled once. Payout received by Bob once. Both clients show completion. |
 | `happy_buy` | Bob creates a buy order. Alice takes it as seller and pays the hold invoice. Bob provides a payout invoice and reports fiat sent. Alice releases. | Same evidence with maker and taker roles reversed. |
 
-Source narratives are Ortsom's `happy_sell` and `happy_buy`; Mortsom preserves their business assertions and
-replaces protocol-native actor actions with real UI journeys.
+These are the two ordinary trades of the Mostro protocol. Mortsom expresses every actor action as a real UI
+journey; nothing is sent on the protocol by the harness itself.
 
 Rules for every scenario:
 
@@ -274,7 +301,7 @@ Evidence is sanitized: keys, mnemonics, credentials, NWC URIs and invoice conten
 service logs live only in actor-private directories and are removed on teardown. Linux screenshots capture
 the actor's virtual display, never the operator's desktop.
 
-Accepted results are recorded per platform in [docs/ortsom-ui-parity.md](docs/ortsom-ui-parity.md) with run
+Accepted results are recorded per platform in [docs/acceptance-ledger.md](docs/acceptance-ledger.md) with run
 IDs and evidence locations. Skips and unsupported capabilities are visible and never count.
 
 ## 13. Validation and review
@@ -299,7 +326,7 @@ overlooked bugs. Commits follow Conventional Commits and never include secrets, 
 
 Documented as roadmap, not required by this version:
 
-- The remaining eighteen Ortsom scenarios: cancellations, expirations, disputes, ratings, range and market
+- Eighteen further scenarios: cancellations, expirations, disputes, ratings, range and market
   orders, invoice faults and payout caps.
 - CPU and memory comparison of Linux and Web, and against the Android baseline, under matched conditions.
 - Multi-scenario runs with in-process profile reset.
@@ -312,7 +339,7 @@ Documented as roadmap, not required by this version:
 |---|---|
 | [README.md](README.md) | Installation, quick start and command reference |
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Where execution stopped and how to resume |
-| [docs/ortsom-ui-parity.md](docs/ortsom-ui-parity.md) | Per-platform acceptance ledger |
+| [docs/acceptance-ledger.md](docs/acceptance-ledger.md) | Per-platform acceptance ledger |
 | [docs/runbook.md](docs/runbook.md) | Failure categories and operator responses |
 | [docs/stack.md](docs/stack.md) | Workspace and crate rationale |
 | [docs/mobile-v2-inventory.md](docs/mobile-v2-inventory.md) | App v2 screens and controls relevant to automation |
