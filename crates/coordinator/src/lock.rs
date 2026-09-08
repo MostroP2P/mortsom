@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-/// Lock file name inside the artifacts directory.
+/// Lock file name inside the selected lock directory.
 pub const LOCK_FILE: &str = ".mortsom-run.lock";
 
 /// Why the lock was not taken.
@@ -47,7 +47,7 @@ impl RunLock {
         Self::acquire(&root.join(".local/state/mortsom"))
     }
 
-    /// Takes the exclusive run lock under `artifacts_dir` without waiting.
+    /// Takes an exclusive lock in an explicitly selected directory without waiting.
     pub fn acquire(artifacts_dir: &Path) -> Result<Self, LockError> {
         std::fs::create_dir_all(artifacts_dir).map_err(|source| LockError::Io {
             path: artifacts_dir.to_path_buf(),

@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 14 completed, 11 in progress and 40 pending.
+current evidence separately. Section 17 tracks 65 tasks: 15 completed, 10 in progress and 40 pending.
 Live scenario acceptance remains Linux 0/20 and Web 0/20.
 
 ## 1. Objective and completion criteria
@@ -557,10 +557,12 @@ current evidence agree.
   NWC get_info/get_balance and LND GetInfo/ChannelBalance; LND mutation permissions are not proven by the
   reported backend-supported methods. Independent review corrected the relative-path regression;
   coordinator/CLI tests and strict clippy are recorded with this task's commit.
-- [ ] **IN PROGRESS — P1.7 Lock stack/wallet ownership independently of artifacts.** Reviewed canonical-HOME
-  lock serializes stack/client lifecycle mutations, including updates and cleanup, independently of artifacts.
-  Unit/CLI tests cover contention and release. Direct Ortsom commands and other users are outside this
-  guard; durable unresolved-work exclusion remains a separate phase 2 acceptance requirement.
+- [x] **P1.7 DONE — Lock stack/wallet ownership independently of artifacts.** The canonical-HOME
+  Mortsom CLI lock precedes configuration loading and all stack/client lifecycle mutation dispatch, and
+  stays held until the command completes. It serializes run, cleanup, app/device/relay commands and stack
+  up/down independently of artifact or checkout paths. Four lock unit tests plus the cross-process CLI
+  contention test passed with independent review; home aliases and release are covered. Direct Ortsom,
+  another HOME and other users are outside this guard. Durable unresolved-work exclusion remains P2 work.
 - [ ] **IN PROGRESS — P1.8 Persist immutable environment metadata.** Summary/environment now carry platform,
   public stack facts and a complete bundle hash. Targeted checks cover hash stability/content sensitivity
   and keeping registered secrets redacted while retaining public image hashes. Complete daemon version,
