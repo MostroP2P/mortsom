@@ -343,6 +343,38 @@ async fn node_selection_uses_the_dialog_only_when_the_default_is_shown() {
     assert!(!new_calls.contains(&"tap settings.relays.add".to_owned()));
 }
 
+/// A retained profile's relay list is not drawn the instant the relays
+/// route opens. Asking once and moving on read "not listed", opened the add
+/// dialog, and the app answered that the relay was already there while the
+/// dialog covered the list -- which a live recovery reported as the relay
+/// row not appearing within the whole UI timeout.
+#[tokio::test]
+async fn a_relay_list_that_is_still_drawing_is_waited_for_not_re_added() {
+    let ui = fresh_app();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.on_tap_relabel(
+        Ids::NODE_CUSTOM_CONFIRM,
+        Ids::SETTINGS_MOSTRO_NODE_PUBKEY,
+        PUBKEY,
+    );
+    adapter()
+        .configure_node_and_relay(&device(&ui), &env())
+        .await
+        .unwrap();
+
+    ui.appears_after(RELAY_ROW, 3);
+    let before = ui.calls().len();
+    adapter()
+        .configure_node_and_relay(&device(&ui), &env())
+        .await
+        .unwrap();
+    let new_calls = &ui.calls()[before..];
+    assert!(
+        !new_calls.contains(&"tap settings.relays.add".to_owned()),
+        "{new_calls:?}"
+    );
+}
+
 #[tokio::test]
 async fn nwc_setup_types_the_uri_without_recording_it() {
     let ui = fresh_app();

@@ -352,29 +352,34 @@ pub mod tests_support {
         pub fn has_anywhere(&self, id: &str) -> bool {
             self.has(id) || self.below.lock().unwrap().iter().any(|p| p == id)
         }
+
+        /// One probe against a possibly still-drawing element: consumes a
+        /// pending frame and reports whether the element is up yet.
+        fn drawn(&self, id: &str) -> bool {
+            let mut pending = self.pending.lock().unwrap();
+            match pending.get_mut(id) {
+                Some(left) if *left > 0 => {
+                    *left -= 1;
+                    false
+                }
+                Some(_) => {
+                    pending.remove(id);
+                    true
+                }
+                None => true,
+            }
+        }
     }
 
     #[async_trait]
     impl UiSession for ScriptedUi {
         async fn exists(&self, id: &str) -> Result<bool, AppiumError> {
-            let drawn = {
-                let mut pending = self.pending.lock().unwrap();
-                match pending.get_mut(id) {
-                    Some(left) if *left > 0 => {
-                        *left -= 1;
-                        false
-                    }
-                    Some(_) => {
-                        pending.remove(id);
-                        true
-                    }
-                    None => true,
-                }
-            };
-            Ok(drawn && self.has(id) && !self.covered(id))
+            Ok(self.drawn(id) && self.has(id) && !self.covered(id))
         }
         async fn exists_anywhere(&self, id: &str) -> Result<bool, AppiumError> {
-            Ok(self.has_anywhere(id) && !self.covered(id))
+            // An element the screen has not drawn yet is absent below the
+            // fold as much as above it: scrolling cannot find it either.
+            Ok(self.drawn(id) && self.has_anywhere(id) && !self.covered(id))
         }
         async fn wait_for(&self, id: &str, _: Duration) -> Result<(), AppiumError> {
             // A wait scrolls before it gives up, so it sees below the fold --
