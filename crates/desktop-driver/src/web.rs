@@ -10,6 +10,9 @@ use serde_json::json;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 
+mod lifecycle;
+use lifecycle::{driver_port, stop};
+
 pub(crate) fn error(cause: impl std::fmt::Display) -> AppiumError {
     AppiumError::WebDriver(
         mortsom_android_driver::webdriver::WebDriverError::Transport(
@@ -19,8 +22,8 @@ pub(crate) fn error(cause: impl std::fmt::Display) -> AppiumError {
 }
 
 struct Runtime {
-    session: Session,
-    driver: Box<dyn ChildProcess>,
+    session: Option<Session>,
+    driver: Option<Box<dyn ChildProcess>>,
     root: PathBuf,
 }
 
@@ -55,7 +58,7 @@ impl WebSession {
             .lock()
             .await
             .as_ref()
-            .map(|r| r.session.clone())
+            .and_then(|r| r.session.clone())
             .ok_or_else(|| error("browser session is not ready"))
     }
     async fn element(&self, id: &str) -> Result<Element, AppiumError> {
@@ -88,7 +91,7 @@ impl WebSession {
             })
         })
     }
-    async fn create(&self) -> Result<Runtime, AppiumError> {
+    async fn create(&self, slot: &mut Option<Runtime>) -> Result<(), AppiumError> {
         use std::os::unix::fs::DirBuilderExt;
         let root =
             std::env::temp_dir().join(format!("mortsom-browser-{}", mortsom_common::RunId::new()));
@@ -96,68 +99,54 @@ impl WebSession {
             .mode(0o700)
             .create(&root)
             .map_err(error)?;
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .map_err(error)?
-            .local_addr()
-            .map_err(error)?
-            .port();
-        let driver = self
-            .runner
-            .spawn(
-                &Command::new(
-                    &self.driver,
-                    &[&format!("--port={port}"), "--allowed-ips=127.0.0.1"],
-                ),
-                None,
-            )
-            .await?;
-        let result = self.connect(port, &root).await;
-        match result {
-            Ok(session) => Ok(Runtime {
-                session,
-                driver,
-                root,
-            }),
-            Err(cause) => {
-                let shutdown = driver.kill().await;
-                let cleanup = std::fs::remove_dir_all(root);
-                shutdown?;
-                cleanup.map_err(error)?;
-                Err(cause)
-            }
-        }
-    }
-    async fn connect(&self, port: u16, root: &std::path::Path) -> Result<Session, AppiumError> {
-        let endpoint = format!("http://127.0.0.1:{port}");
-        let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(2))
-            .build()
-            .map_err(error)?;
-        tokio::time::timeout(Duration::from_secs(20), async {
-            let mut tick = tokio::time::interval(Duration::from_millis(100));
-            loop {
-                tick.tick().await;
-                if http
-                    .get(format!("{endpoint}/status"))
-                    .send()
-                    .await
-                    .is_ok_and(|r| r.status().is_success())
-                {
-                    return;
+        *slot = Some(Runtime {
+            session: None,
+            driver: None,
+            root,
+        });
+        let runtime = slot
+            .as_mut()
+            .ok_or_else(|| error("missing startup ownership"))?;
+        if let Err(cause) = self.start(runtime).await {
+            return match stop(runtime).await {
+                Ok(()) => {
+                    *slot = None;
+                    Err(cause)
                 }
-            }
-        })
-        .await
-        .map_err(error)?;
-        let capabilities = json!({"browserName":"chrome", "goog:chromeOptions": {
-            "binary": self.browser, "args": ["--headless=new", "--window-size=1280,960", "--disable-background-networking", "--no-first-run", format!("--user-data-dir={}", root.display())]
-        }});
-        let session = Session::create(&endpoint, capabilities, Duration::from_secs(30)).await?;
-        if let Err(cause) = session.post("url", &json!({"url":self.url})).await {
-            session.delete().await?;
-            return Err(cause.into());
+                Err(cleanup) => Err(error(format!("{cause}; startup cleanup failed: {cleanup}"))),
+            };
         }
-        Ok(session)
+        Ok(())
+    }
+
+    async fn start(&self, runtime: &mut Runtime) -> Result<(), AppiumError> {
+        let log = runtime.root.join("driver.log");
+        runtime.driver = Some(
+            self.runner
+                .spawn(
+                    &Command::new(&self.driver, &["--port=0", "--allowed-ips=127.0.0.1"]),
+                    Some(&log),
+                )
+                .await?,
+        );
+        let driver = runtime
+            .driver
+            .as_ref()
+            .ok_or_else(|| error("driver not started"))?;
+        let port = driver_port(driver.as_ref(), &log).await?;
+        let endpoint = format!("http://127.0.0.1:{port}");
+        let capabilities = json!({"browserName":"chrome", "goog:chromeOptions": {
+            "binary": self.browser, "args": ["--headless=new", "--window-size=1280,960", "--disable-background-networking", "--no-first-run", format!("--user-data-dir={}", runtime.root.join("profile").display())]
+        }});
+        runtime.session =
+            Some(Session::create(&endpoint, capabilities, Duration::from_secs(30)).await?);
+        runtime
+            .session
+            .as_ref()
+            .ok_or_else(|| error("session not created"))?
+            .post("url", &json!({"url":self.url}))
+            .await?;
+        Ok(())
     }
 }
 
@@ -265,8 +254,7 @@ impl UiSession for WebSession {
     }
     async fn clear_app(&self) -> Result<(), AppiumError> {
         self.end().await?;
-        *self.runtime.lock().await = Some(self.create().await?);
-        Ok(())
+        self.create(&mut *self.runtime.lock().await).await
     }
     async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
         Err(error("Web network capability is not implemented"))
@@ -278,13 +266,10 @@ impl UiSession for WebSession {
         Ok(())
     }
     async fn end(&self) -> Result<(), AppiumError> {
-        if let Some(runtime) = self.runtime.lock().await.take() {
-            let session = runtime.session.delete().await;
-            let driver = runtime.driver.kill().await;
-            let files = std::fs::remove_dir_all(runtime.root);
-            session?;
-            driver?;
-            files.map_err(error)?;
+        let mut slot = self.runtime.lock().await;
+        if let Some(runtime) = slot.as_mut() {
+            stop(runtime).await?;
+            *slot = None;
         }
         Ok(())
     }
@@ -304,3 +289,7 @@ mod tests {
         assert!(selector("settings.relays.item.ws://127.0.0.1:7000").is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "web_lifecycle_tests.rs"]
+mod lifecycle_tests;

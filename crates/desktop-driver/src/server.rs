@@ -40,11 +40,20 @@ impl WebServer {
 
     /// Stops all requests before releasing the server.
     pub async fn stop(mut self) -> std::io::Result<()> {
+        self.shutdown().await
+    }
+
+    /// Retains the join handle if the caller cancels shutdown and retries it.
+    pub async fn shutdown(&mut self) -> std::io::Result<()> {
         self.signal_stop();
-        match self.task.take() {
-            Some(task) => task.await.map_err(std::io::Error::other)?,
-            None => Ok(()),
-        }
+        let result = match self.task.as_mut() {
+            Some(task) => task
+                .await
+                .unwrap_or_else(|cause| Err(std::io::Error::other(cause))),
+            None => return Ok(()),
+        };
+        self.task = None;
+        result
     }
 
     fn signal_stop(&mut self) {
@@ -176,6 +185,30 @@ fn mime(path: &Path) -> &'static str {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    #[tokio::test]
+    async fn cancelled_shutdown_retains_the_join_until_the_request_owner_finishes() {
+        let (stop, receiver) = tokio::sync::oneshot::channel();
+        let (finish, completion) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = receiver.await;
+            completion.await.map_err(std::io::Error::other)
+        });
+        let mut server = super::WebServer {
+            url: "http://127.0.0.1:9000".into(),
+            task: Some(task),
+            stop: Some(stop),
+        };
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), server.shutdown())
+                .await
+                .is_err()
+        );
+        assert!(server.task.is_some());
+        finish.send(()).unwrap();
+        server.shutdown().await.unwrap();
+        assert!(server.task.is_none());
+    }
+
     use super::*;
 
     #[tokio::test]
