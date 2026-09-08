@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 12 completed, 12 in progress and 41 pending.
+current evidence separately. Section 17 tracks 65 tasks: 12 completed, 13 in progress and 40 pending.
 Live scenario acceptance remains Linux 0/20 and Web 0/20.
 
 ## 1. Objective and completion criteria
@@ -546,7 +546,7 @@ current evidence agree.
   and Web scripts, tool resolution and sanitized failures are wired. Tests pass for source-absent prebuilt
   clients, invalid/incomplete bundles and generation failures/missing outputs. Provenance validation remains.
 - [ ] **IN PROGRESS — P1.6 Implement platform-aware doctor.** Linux/Web doctor now resolves public stack status
-  and selects platform tools; real Linux 18/18 and Web 14/14 checks passed. Finish validation of
+  and selects platform tools; real Linux 21/21 and Web 17/17 checks passed. Finish validation of
   selected-platform tools, artifact/build prerequisites, local endpoint reachability, daemon identity,
   network, wallet capabilities, liquidity and declared limits. Tests must prove doctor invokes neither order
   actions nor wallet payment/invoice mutation methods.
@@ -629,9 +629,13 @@ observers.
 - [ ] **TODO — P3.4 Validate state and final settlement.** Drive fiat-sent and release UI, distinguish
   intermediate payout states from completion, verify both clients' terminal state plus matching wallet
   amounts/outcomes and absence of duplicate settlement. Correct inaccurate product state mapping explicitly.
-- [ ] **TODO — P3.5 Make cancellation/teardown truthful.** Missing cancel control must not mean AlreadyClosed.
-  Verify a positive terminal state or a completed cooperative cancellation and refund; surface unresolved
-  cleanup as failure.
+- [ ] **IN PROGRESS — P3.5 Make cancellation/teardown truthful.** Fixed missing cancel control returning
+  AlreadyClosed for active, loading or unknown states; the regression failed before the fix and all 30 v2
+  adapter tests passed afterward, with independent review. Cancelled currently acknowledges the confirmation
+  tap; coordinator cleanup still verifies terminal state. App v2's hold-settled to pending-rating mapping
+  remains unsafe evidence of completed payout and can bypass cleanup observation through AlreadyClosed.
+  Verify a positive terminal state plus payment outcome or a completed cooperative cancellation and refund;
+  surface unresolved cleanup as failure. This task and G3 remain unaccepted.
 - [ ] **TODO — P3.6 Accept Linux happy_sell from fresh actors.** Record full correlated evidence, all checks
   and complete cleanup under a new run ID.
 - [ ] **TODO — P3.7 Accept the same narrative on Web.** Run unchanged business steps against the Web driver;
@@ -782,8 +786,8 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
   was identified as mostrod v0.18.7, digest `sha256:bff406d11fc90436c9f7da5186f5976a63ae7ee1d711a6636d36205421cbda31`.
   This is the observed development image, not a permanent definition of latest.
 - Real Mortsom `stack up` passed immutable-image/ownership/readiness verification. Ortsom commit `6353922`
-  fixes the advertised host relay address. Read-only doctor passed 18 Linux and
-  14 Web checks, repeated after public metadata integration; artifact provenance and full failure-path
+  fixes the advertised host relay address. Read-only doctor passed 21 Linux and
+  17 Web checks after stack/config binding and regtest wallet-capability validation; artifact provenance and full failure-path
   validation remain pending. Declared limits are imported; scenario verification of behavior remains pending.
 - Linux and Web v2 builds and isolated read-only accessibility smoke passed.
 - Both platforms passed real Alice/Bob onboarding, node/relay configuration
@@ -792,6 +796,9 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
   without confirmation; its screenshot showed input values had not been
   accepted. Web reached an offscreen sats field that WebDriver could not edit.
   These are active failures, not accepted replications.
+- A subsequent isolated Linux form diagnostic passed public readback of fiat amount, payment method and
+  fixed sats after bounded focus/write retries. It canceled the form without publishing and released the
+  client resources. It does not count as a trade or settle the remaining submission/cleanup requirements.
 - Workspace tests and strict clippy passed on the reviewed public-metadata/bundle-hash snapshot,
   including 149 coordinator tests. Subsequent native focus changes have separate targeted checks and still
   require a full rerun. New-driver coverage, lifecycle failure tests, remaining doctor checks, complete

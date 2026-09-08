@@ -259,7 +259,9 @@ pub async fn cancel_if_open(
         return Ok(CancelOutcome::AlreadyClosed);
     }
     if !present(device, Ids::TRADE_CANCEL).await? {
-        return Ok(CancelOutcome::AlreadyClosed);
+        return Err(AdapterError::contract(
+            "cancel control is absent without a confirmed terminal order state",
+        ));
     }
     tap(device, Ids::TRADE_CANCEL).await?;
     tap(device, Ids::TRADE_CANCEL_CONFIRM).await?;
