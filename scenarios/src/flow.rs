@@ -109,16 +109,18 @@ pub async fn create_buy_and_fund(ctx: &Context) -> Result<Taken, ScenarioError> 
     actions::pay_hold_invoice(ctx, Actor::Alice, &order).await?;
     let payout_hash = actions::provide_buyer_invoice(ctx, Actor::Bob, &order).await?;
     actions::wait_both(ctx, &order, OrderState::Active).await?;
-    actions::wait_relay_state(ctx, &order, OrderState::Active).await?;
+    actions::wait_relay_state(ctx, &order, OrderState::Taken).await?;
     Ok(Taken { order, payout_hash })
 }
 
-/// Alice pays the hold invoice; both apps and the relay show the order
-/// active. Moves value: requires mainnet clearance.
+/// Alice pays the hold invoice; both apps show the order active. The daemon
+/// tells only the two parties about `active`: the public book keeps the
+/// order `in-progress` from the take until it closes, so that is the relay
+/// state to correlate with. Moves value: requires mainnet clearance.
 pub async fn fund(ctx: &Context, order: &OrderReference) -> Result<(), ScenarioError> {
     actions::pay_hold_invoice(ctx, Actor::Alice, order).await?;
     actions::wait_both(ctx, order, OrderState::Active).await?;
-    actions::wait_relay_state(ctx, order, OrderState::Active).await
+    actions::wait_relay_state(ctx, order, OrderState::Taken).await
 }
 
 /// Bob reports fiat sent; Alice sees it.

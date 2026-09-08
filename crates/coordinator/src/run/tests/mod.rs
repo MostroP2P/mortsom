@@ -625,17 +625,12 @@ impl ObserverFactory for FakeObserver {
         tokio::spawn(async move {
             for _ in 0..200 {
                 for (id, status) in FAKE_ORDER_IDS.iter().flat_map(|id| {
-                    [
-                        "pending",
-                        "waiting-payment",
-                        "active",
-                        "fiat-sent",
-                        "success",
-                        "canceled",
-                    ]
-                    .into_iter()
-                    .filter(move |s| publish_canceled || *s != "canceled")
-                    .map(move |s| (*id, s))
+                    // What the live daemon puts on the public book: taken,
+                    // funded and fiat-sent orders all read `in-progress`.
+                    ["pending", "in-progress", "success", "canceled"]
+                        .into_iter()
+                        .filter(move |s| publish_canceled || *s != "canceled")
+                        .map(move |s| (*id, s))
                 }) {
                     if status == "canceled"
                         && gate

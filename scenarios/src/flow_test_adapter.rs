@@ -11,6 +11,12 @@ impl Adapter {
     pub fn created(&self) -> (Actor, OrderKind) {
         self.state.lock().unwrap().created.unwrap()
     }
+    /// The app moves to `state`; the public book stays as it was. The live
+    /// daemon keeps `active` and `fiat-sent` off the book: only pending,
+    /// in-progress, canceled, success and expired are published.
+    fn private_transition(&self, state: OrderState) {
+        self.state.lock().unwrap().order = state;
+    }
     async fn transition(&self, state: OrderState, wire: &str) {
         self.state.lock().unwrap().order = state;
         let event = EventBuilder::new(Kind::Custom(38383), "")
@@ -89,7 +95,8 @@ impl AppAdapter for Adapter {
     ) -> Result<(), AdapterError> {
         assert_eq!(order.kind, Some(OrderKind::Buy));
         self.action("take", device.actor);
-        self.state.lock().unwrap().order = OrderState::Taken;
+        // The live daemon republishes a taken order as `in-progress`.
+        self.transition(OrderState::Taken, "in-progress").await;
         Ok(())
     }
     async fn pay_hold_invoice(
@@ -120,7 +127,7 @@ impl AppAdapter for Adapter {
     ) -> Result<Option<Secret>, AdapterError> {
         self.action("invoice", device.actor);
         assert!(self.state.lock().unwrap().hold_started);
-        self.transition(OrderState::Active, "active").await;
+        self.private_transition(OrderState::Active);
         Ok(invoice.cloned())
     }
     async fn confirm_fiat_sent(
@@ -129,7 +136,7 @@ impl AppAdapter for Adapter {
         _: &OrderReference,
     ) -> Result<(), AdapterError> {
         self.action("fiat", device.actor);
-        self.transition(OrderState::FiatSent, "fiat-sent").await;
+        self.private_transition(OrderState::FiatSent);
         Ok(())
     }
     async fn release(
