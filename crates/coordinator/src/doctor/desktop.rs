@@ -112,7 +112,7 @@ fn check_tools(
     report: &mut DoctorReport,
 ) {
     let tools: &[&str] = if needs_build {
-        &["docker", "flutter", "cargo"]
+        &["docker", "flutter", "cargo", "git"]
     } else {
         &["docker"]
     };

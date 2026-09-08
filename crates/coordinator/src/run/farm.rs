@@ -17,6 +17,8 @@ pub struct DesktopOptions {
     pub artifact: PathBuf,
     /// Run-owned bundle, independent of later changes to the source build.
     pub bundle: Arc<crate::fingerprint::CapturedBundle>,
+    /// Source/build facts associated with the captured contents.
+    pub provenance: crate::provenance::BuildProvenance,
     /// Xvfb executable for private Linux displays.
     pub xvfb: PathBuf,
     /// ChromeDriver executable.
@@ -54,6 +56,7 @@ pub(super) enum Farm {
         sessions: Vec<(Actor, Arc<dyn UiSession>)>,
         server: Option<WebServer>,
         bundle: Arc<crate::fingerprint::CapturedBundle>,
+        app_version: Option<String>,
     },
 }
 
@@ -90,6 +93,7 @@ impl Farm {
             sessions,
             server,
             bundle: Arc::clone(&options.bundle),
+            app_version: options.provenance.app_version.clone(),
         })
     }
 
@@ -104,10 +108,10 @@ impl Farm {
         }
     }
 
-    pub(super) fn version(&self) -> String {
+    pub(super) fn version(&self) -> Option<String> {
         match self {
-            Self::Android(farm) => farm.device(Actor::Alice).version.version_name.clone(),
-            Self::Desktop { .. } => "v2-desktop".into(),
+            Self::Android(farm) => Some(farm.device(Actor::Alice).version.version_name.clone()),
+            Self::Desktop { app_version, .. } => app_version.clone(),
         }
     }
 
@@ -118,6 +122,7 @@ impl Farm {
                 sessions,
                 server,
                 bundle: _bundle,
+                ..
             } => {
                 let mut items = Vec::new();
                 for (actor, session) in sessions {

@@ -270,15 +270,29 @@ impl crate::doctor::HostProbe for BuildHost {
     async fn run(
         &self,
         program: &Path,
-        _: &[&str],
+        args: &[&str],
     ) -> Result<crate::doctor::CommandOutput, String> {
-        Ok(crate::doctor::CommandOutput {
-            success: true,
-            stdout: if program.ends_with("rustup") {
-                "/toolchain".into()
+        let (program, args) = if program.ends_with("env") {
+            (Path::new(args[1]), &args[2..])
+        } else {
+            (program, args)
+        };
+        let stdout = if program.ends_with("git") {
+            if args.contains(&"rev-parse") {
+                "a".repeat(40)
             } else {
                 String::new()
-            },
+            }
+        } else if args.first() == Some(&"metadata") {
+            serde_json::json!({"packages":[{"manifest_path":args.last().unwrap(), "version":"2.0.0"}]}).to_string()
+        } else if program.ends_with("rustup") && args.contains(&"sysroot") {
+            "/toolchain".into()
+        } else {
+            "tool 1.2.3".into()
+        };
+        Ok(crate::doctor::CommandOutput {
+            success: true,
+            stdout,
             stderr: String::new(),
         })
     }

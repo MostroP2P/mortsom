@@ -6,6 +6,7 @@ fn desktop_options(world: &World) -> RunOptions {
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("mostro"), b"fixture").unwrap();
     options.desktop = Some(crate::run::DesktopOptions {
+        provenance: crate::provenance::BuildProvenance::prebuilt(),
         platform: mortsom_desktop_driver::Platform::Linux,
         artifact: world.dir.path().join("missing-app"),
         xvfb: "missing-Xvfb".into(),
@@ -71,5 +72,57 @@ async fn a_different_stack_identity_is_rejected_before_network_or_client_startup
             .checks
             .iter()
             .any(|check| check.detail.contains("network probe is required"))
+    );
+}
+
+#[test]
+fn initial_environment_retains_public_bundle_and_stack_facts_before_clients_start() {
+    let world = world(true);
+    let mut options = desktop_options(&world);
+    options.stack = Some(
+        serde_json::from_value(serde_json::json!({
+            "daemon_pubkey": nostr_sdk::prelude::Keys::generate().public_key().to_hex(),
+            "relay_url":"ws://127.0.0.1:7000","wallet_endpoints":{},
+            "daemon_image":{"image_id":format!("sha256:{}", "a".repeat(64)),
+                "reference":"mostrop2p/mostro:latest","repository_digest":null},
+            "declared_limits":{"order_expiration_secs":300,"hold_invoice_expiry_secs":120,
+                "buyer_invoice_deadline_secs":120,"payout_invoice_min_expiry_secs":300}
+        }))
+        .unwrap(),
+    );
+    let mut summary = crate::run::report::initial_summary(
+        &world.config,
+        &options,
+        RunId::new(),
+        "mobile-v2".into(),
+        false,
+    )
+    .unwrap();
+    summary.mostrod_version = Some("0.18.7".into());
+    let artifacts = RunArtifacts::create(
+        world.dir.path(),
+        summary.run_id.clone(),
+        mortsom_common::Redactor::new(),
+    )
+    .unwrap();
+    crate::run::report::record_environment(&artifacts, &summary).unwrap();
+    let saved: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(artifacts.file(files::ENVIRONMENT).unwrap()).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(saved["status"], "starting");
+    assert_eq!(saved["mostrod_version"], "0.18.7");
+    assert_eq!(saved["app_build"]["origin"], "prebuilt");
+    assert_eq!(
+        saved["app_artifact"]["digest"],
+        summary.app_artifact.as_ref().unwrap().digest
+    );
+    assert_eq!(
+        saved["stack_fingerprint"]["digest"],
+        summary.stack_fingerprint.as_ref().unwrap().digest
+    );
+    assert!(
+        !artifacts.file(files::SUMMARY).unwrap().exists(),
+        "this evidence precedes the final summary"
     );
 }

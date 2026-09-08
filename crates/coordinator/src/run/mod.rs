@@ -28,7 +28,7 @@ use mortsom_android_driver::process::CommandRunner;
 use mortsom_android_driver::sdk::{AndroidSdk, avd_home};
 use mortsom_android_driver::ui::UiDriver;
 use mortsom_app_contract::{AppAdapter, TestEnvironment};
-use mortsom_common::check::{CheckStatus, DoctorReport};
+use mortsom_common::check::CheckStatus;
 use mortsom_common::logging::attach_run_log;
 use mortsom_common::{Redactor, RunId};
 use mortsom_environment::WalletConfig;
@@ -152,36 +152,14 @@ pub async fn run_scenarios(
     .map_err(|e| format!("cannot create artifacts: {e}"))?;
     attach_run_log(artifacts.dir(), redactor).map_err(|e| format!("cannot attach run log: {e}"))?;
     info!(run = %run_id, lane = %config.run.lane, scenarios = ?selected.iter().map(|d| d.name).collect::<Vec<_>>(), "run starting");
-    let mut summary = RunSummary {
-        run_id: run_id.clone(),
-        lane: config.run.lane,
-        command: "run".into(),
-        app_profile: deps.adapter.profile().name,
-        app_version: None,
-        mostrod_version: None,
-        stack: options.stack.clone(),
-        app_artifact: options
-            .desktop
-            .as_ref()
-            .map(|d| d.bundle.fingerprint().clone()),
-        platform: Some(
-            options
-                .desktop
-                .as_ref()
-                .map_or(mortsom_desktop_driver::Platform::Android, |d| d.platform),
-        ),
-        mainnet_cleared: mainnet.is_some(),
-        relay: None,
-        actors: Vec::new(),
-        results: Vec::new(),
-        checks: DoctorReport::default(),
-        cleanup: None,
-        budget: None,
-        farm_teardown: Vec::new(),
-        relay_teardown: None,
-        passed: false,
-    };
-    report::record_platform(&artifacts, &summary)?;
+    let mut summary = report::initial_summary(
+        config,
+        options,
+        run_id.clone(),
+        deps.adapter.profile().name,
+        mainnet.is_some(),
+    )?;
+    report::record_environment(&artifacts, &summary)?;
     let (runnable, gated) = gate_capabilities(
         deps.adapter.as_ref(),
         &selected,
@@ -200,6 +178,7 @@ pub async fn run_scenarios(
         return finish(&artifacts, &mut summary).map(|()| summary);
     }
 
+    report::record_environment(&artifacts, &summary)?;
     let mut world = World::new(
         config,
         options,
@@ -477,7 +456,7 @@ impl<'a> World<'a> {
         }
 
         let farm = self.bring_up_farm(summary).await?;
-        summary.app_version = Some(farm.version());
+        summary.app_version = farm.version();
         let env = self.env();
         for (actor, session) in farm.sessions() {
             let ctx = mortsom_app_contract::DeviceContext {

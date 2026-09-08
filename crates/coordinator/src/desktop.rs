@@ -42,11 +42,14 @@ pub async fn prepare(
     if platform == Platform::Android {
         return Err("Android uses the APK builder".into());
     }
-    let artifact = match artifact {
-        Some(path) => path.canonicalize().map_err(|e| e.to_string())?,
+    let (artifact, provenance) = match artifact {
+        Some(path) => (
+            path.canonicalize().map_err(|e| e.to_string())?,
+            crate::provenance::BuildProvenance::prebuilt(),
+        ),
         None => {
             crate::doctor::require_build_prerequisites(config, platform, &xvfb, host).await?;
-            build_artifact(config, platform, runner).await?
+            build_artifact(config, platform, runner, host).await?
         }
     };
     validate_artifact(platform, &artifact, host)?;
@@ -72,6 +75,7 @@ pub async fn prepare(
     };
     Ok(DesktopOptions {
         bundle: std::sync::Arc::new(bundle),
+        provenance,
         platform,
         artifact,
         xvfb,
@@ -84,55 +88,71 @@ async fn build_artifact(
     config: &Config,
     platform: Platform,
     runner: &dyn CommandRunner,
-) -> Result<PathBuf, String> {
+    host: &dyn crate::doctor::HostProbe,
+) -> Result<(PathBuf, crate::provenance::BuildProvenance), String> {
     let source = Path::new(&config.mobile.source_dir)
         .canonicalize()
         .map_err(|e| e.to_string())?;
-    run_script(
-        runner,
-        &source,
-        &["./scripts/frb-generate.sh"],
-        Duration::from_secs(600),
-    )
-    .await?;
-    if platform == Platform::Web {
-        run_script(
-            runner,
-            &source,
-            &["./scripts/build-web.sh", "--release"],
-            Duration::from_secs(3600),
-        )
-        .await?;
-    }
-    let cmd = build_command(
+    let mut provenance = crate::provenance::BuildProvenance::begin(&source, platform, host).await?;
+    tracing::info!(%platform, "building v2 clients");
+    for (command, timeout) in build_plan(
         &source,
         platform,
         &config.mobile.mostro_pubkey,
         config.relay.host_port,
-    );
-    tracing::info!(%platform, "building v2 clients");
-    run_ok(runner, &cmd, Duration::from_secs(3600))
-        .await
-        .map_err(build_error)?;
-    Ok(source.join(match platform {
+    ) {
+        run_ok(runner, &command, timeout)
+            .await
+            .map_err(build_error)?;
+        provenance.commands.push(
+            std::iter::once(command.program.display().to_string())
+                .chain(command.args.into_iter().map(|arg| {
+                    if arg == format!("--chdir={}", source.display()) {
+                        "--chdir=<source>".into()
+                    } else {
+                        arg
+                    }
+                }))
+                .collect(),
+        );
+    }
+    provenance.finish(&source, host).await?;
+    let artifact = source.join(match platform {
         Platform::Linux => "build/linux/x64/release/bundle/mostro",
         Platform::Web => "build/web",
         Platform::Android => return Err("Android uses the APK builder".into()),
-    }))
+    });
+    Ok((artifact, provenance))
 }
 
-async fn run_script(
-    runner: &dyn CommandRunner,
+fn build_plan(
     source: &Path,
-    script: &[&str],
-    timeout: Duration,
-) -> Result<(), String> {
-    let mut command = Command::new("env", &[&format!("--chdir={}", source.display())]);
-    command.args.extend(script.iter().map(|s| (*s).to_string()));
-    run_ok(runner, &command, timeout)
-        .await
-        .map_err(build_error)?;
-    Ok(())
+    platform: Platform,
+    pubkey: &str,
+    relay_port: u16,
+) -> Vec<(Command, Duration)> {
+    let script = |args: &[&str]| {
+        let mut command = Command::new("env", &[&format!("--chdir={}", source.display())]);
+        command
+            .args
+            .extend(args.iter().map(|arg| (*arg).to_owned()));
+        command
+    };
+    let mut commands = vec![(
+        script(&["./scripts/frb-generate.sh"]),
+        Duration::from_secs(600),
+    )];
+    if platform == Platform::Web {
+        commands.push((
+            script(&["./scripts/build-web.sh", "--release"]),
+            Duration::from_secs(3600),
+        ));
+    }
+    commands.push((
+        build_command(source, platform, pubkey, relay_port),
+        Duration::from_secs(3600),
+    ));
+    commands
 }
 
 /// Validates the platform's required build outputs before any client starts.

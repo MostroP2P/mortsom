@@ -332,6 +332,7 @@ fn finish(artifacts: &RunArtifacts, summary: &mut DeviceSmokeSummary) -> Result<
     let report = RunReport {
         stack: None,
         app_artifact: None,
+        app_build: None,
         run_id: &summary.run_id,
         lane: summary.lane,
         command: &summary.command,

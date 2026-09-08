@@ -403,6 +403,7 @@ fn finish(artifacts: &RunArtifacts, summary: &mut SmokeSummary) -> Result<(), St
     let report = RunReport {
         stack: None,
         app_artifact: None,
+        app_build: None,
         run_id: &summary.run_id,
         lane: summary.lane,
         command: &summary.command,

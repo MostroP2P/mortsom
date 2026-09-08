@@ -34,12 +34,18 @@ pub struct RunSummary {
     /// Public persistent stack snapshot, absent in historical Android reports.
     #[serde(default)]
     pub stack: Option<crate::stack::StackSnapshot>,
+    /// Stable identity of the public stack configuration, when available.
+    #[serde(default)]
+    pub stack_fingerprint: Option<crate::stack::StackFingerprint>,
     /// Selected client platform; absent in historical reports.
     #[serde(default)]
     pub platform: Option<mortsom_desktop_driver::Platform>,
     /// Full client bundle content identity, absent for historical reports.
     #[serde(default)]
     pub app_artifact: Option<crate::fingerprint::BundleFingerprint>,
+    /// Source/build history; supplied artifacts explicitly report unknown history.
+    #[serde(default)]
+    pub app_build: Option<crate::provenance::BuildProvenance>,
     /// Whether mainnet clearance was granted.
     pub mainnet_cleared: bool,
     /// Relay used.
@@ -63,19 +69,20 @@ pub struct RunSummary {
     pub passed: bool,
 }
 
-/// Persists cleanup routing before any client can start, including interrupted bootstrap.
-pub(super) fn record_platform(
+/// Persists public build/stack facts and cleanup routing before clients can start.
+pub(super) fn record_environment(
     artifacts: &RunArtifacts,
     summary: &RunSummary,
 ) -> Result<(), String> {
     artifacts
-        .write_json(
+        .write_metadata_json(
             files::ENVIRONMENT,
-            &serde_json::json!({
-                "run_id": summary.run_id, "platform": summary.platform, "status": "starting",
-            }),
+            &environment(summary, "starting"),
+            summary.stack.as_ref(),
+            summary.app_artifact.as_ref(),
+            summary.app_build.as_ref(),
         )
-        .map_err(|error| format!("cannot record run platform before startup: {error}"))
+        .map_err(|error| format!("cannot record environment before startup: {error}"))
 }
 
 pub(super) fn finish(artifacts: &RunArtifacts, summary: &mut RunSummary) -> Result<(), String> {
@@ -90,25 +97,14 @@ pub(super) fn finish(artifacts: &RunArtifacts, summary: &mut RunSummary) -> Resu
         "farm": summary.farm_teardown,
         "relay": summary.relay_teardown,
     });
-    let environment = serde_json::json!({
-        "run_id": summary.run_id,
-        "lane": summary.lane,
-        "command": summary.command,
-        "app_profile": summary.app_profile,
-        "app_version": summary.app_version,
-        "mostrod_version": summary.mostrod_version,
-        "platform": summary.platform,
-        "stack": summary.stack,
-        "app_artifact": summary.app_artifact,
-        "mainnet_cleared": summary.mainnet_cleared,
-        "relay": summary.relay.as_ref().map(|r| serde_json::json!({"container_name": r.container_name, "host_port": r.host_port})),
-    });
+    let environment = environment(summary, "finished");
     // The timeline is the scenario timeline written at teardown; the report
     // writer's table would overwrite it, so a run keeps its own file and the
     // report only writes summary/environment/cleanup.
     let report = RunReport {
         stack: summary.stack.as_ref(),
         app_artifact: summary.app_artifact.as_ref(),
+        app_build: summary.app_build.as_ref(),
         run_id: &summary.run_id,
         lane: summary.lane,
         command: &summary.command,
@@ -128,4 +124,71 @@ pub(super) fn finish(artifacts: &RunArtifacts, summary: &mut RunSummary) -> Resu
         &cleanup,
         !timeline_exists,
     )
+}
+
+/// Builds the report before any client starts.
+pub(super) fn initial_summary(
+    config: &crate::Config,
+    options: &super::RunOptions,
+    run_id: RunId,
+    app_profile: String,
+    mainnet_cleared: bool,
+) -> Result<RunSummary, String> {
+    Ok(RunSummary {
+        run_id,
+        lane: config.run.lane,
+        command: "run".into(),
+        app_profile,
+        app_version: None,
+        app_build: options
+            .desktop
+            .as_ref()
+            .map(|desktop| desktop.provenance.clone()),
+        mostrod_version: None,
+        stack: options.stack.clone(),
+        stack_fingerprint: options
+            .stack
+            .as_ref()
+            .map(crate::stack::StackSnapshot::fingerprint)
+            .transpose()?,
+        app_artifact: options
+            .desktop
+            .as_ref()
+            .map(|d| d.bundle.fingerprint().clone()),
+        platform: Some(
+            options
+                .desktop
+                .as_ref()
+                .map_or(mortsom_desktop_driver::Platform::Android, |d| d.platform),
+        ),
+        mainnet_cleared,
+        relay: None,
+        actors: Vec::new(),
+        results: Vec::new(),
+        checks: DoctorReport::default(),
+        cleanup: None,
+        budget: None,
+        farm_teardown: Vec::new(),
+        relay_teardown: None,
+        passed: false,
+    })
+}
+
+fn environment(summary: &RunSummary, status: &str) -> serde_json::Value {
+    serde_json::json!({
+        "run_id": summary.run_id,
+        "lane": summary.lane,
+        "command": summary.command,
+        "app_profile": summary.app_profile,
+        "app_version": summary.app_version,
+        "mostrod_version": summary.mostrod_version,
+        "platform": summary.platform,
+        "stack": summary.stack,
+        "stack_fingerprint": summary.stack_fingerprint,
+        "status": status,
+        "app_artifact": summary.app_artifact,
+        "app_build": summary.app_build,
+        "mainnet_cleared": summary.mainnet_cleared,
+        "relay": summary.relay.as_ref().map(|r| serde_json::json!({"container_name": r.container_name, "host_port": r.host_port})),
+    })
 }

@@ -2,7 +2,9 @@
 
 mod connections;
 pub use connections::credential_reference;
+mod fingerprint;
 mod image;
+pub use fingerprint::StackFingerprint;
 mod metadata;
 pub use metadata::{DaemonImage, DeclaredLimits, StackSnapshot};
 mod ownership;
