@@ -195,7 +195,7 @@ async fn attempt_with_wallet(
         adapter: adapter.clone(),
         env: &env,
         wallets: &no_wallets,
-        observer: &FakeObserver,
+        observer: &FakeObserver::default(),
     };
     let options = options(journal.clone());
     let (artifacts, mut summary) = report_fixture(fixture, &options);
@@ -280,9 +280,27 @@ pub(super) fn attach_runtime(
         bundle,
         app_version: None,
     });
-    world.observer = Some(Arc::new(RelayObserver::detached(
-        ObserverScope::daemon_only(Keys::generate().public_key()),
+    // The fixture daemon: it publishes `canceled` for the saved order, since
+    // cleanup now believes the relay rather than a screen about cancellation.
+    let daemon = Keys::generate();
+    let observer = Arc::new(RelayObserver::detached(ObserverScope::daemon_only(
+        daemon.public_key(),
     )));
+    let feeder = Arc::clone(&observer);
+    tokio::spawn(async move {
+        for _ in 0..200 {
+            let event = EventBuilder::new(Kind::Custom(38383), "")
+                .tags([
+                    Tag::parse(["d", "old-order"]).unwrap(),
+                    Tag::parse(["s", "canceled"]).unwrap(),
+                ])
+                .finalize(&daemon)
+                .unwrap();
+            feeder.ingest("ws://fixture", &event);
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    });
+    world.observer = Some(observer);
     world.wallets = Some(Arc::new(WalletObserver::new(Vec::new())));
     sessions
 }
@@ -369,6 +387,26 @@ async fn changed_retained_identity_refuses_configuration_and_order_cleanup() {
     assert_eq!(*adapter.recovery_calls.lock().unwrap(), ["existing:alice"]);
     assert!(adapter.cancelled.lock().unwrap().is_empty());
     assert!(!journal.snapshot().closed && journal.root().join("actors").exists());
+    // The screen at the moment of refusal is the only diagnostic a live
+    // recovery leaves behind; it must be captured before the client closes.
+    assert!(
+        failed_recovery_steps(fixture.dir.path(), "alice")
+            .iter()
+            .any(|step| step.contains("recovery-identity-failed")),
+        "no recovery-identity-failed evidence for alice"
+    );
+}
+
+/// Step artifact names recorded for `actor` under any run in `root`.
+fn failed_recovery_steps(root: &std::path::Path, actor: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for run in std::fs::read_dir(root).into_iter().flatten().flatten() {
+        let steps = run.path().join(actor).join("steps");
+        for entry in std::fs::read_dir(steps).into_iter().flatten().flatten() {
+            names.push(entry.file_name().to_string_lossy().into_owned());
+        }
+    }
+    names
 }
 
 #[tokio::test]
@@ -416,7 +454,7 @@ fn changed_stack_refuses_resume_before_environment_or_process_access() {
         adapter: adapter.clone(),
         env: &env,
         wallets: &no_wallets,
-        observer: &FakeObserver,
+        observer: &FakeObserver::default(),
     };
     let error = recovery_impl::prepare(&mut options, &RunId::new(), &deps).unwrap_err();
     assert!(error.contains("stack identity changed"));

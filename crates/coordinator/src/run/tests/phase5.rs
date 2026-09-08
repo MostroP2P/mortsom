@@ -173,3 +173,33 @@ async fn cleanup_reports_an_order_that_stays_open_honestly() {
         "{entry:?}"
     );
 }
+
+/// A funded order is cancelled when the daemon says so on the relay, not
+/// when one screen shows the word. The live run of 2026-09-08 recorded a
+/// hold-invoice order as cancelled from Alice's UI alone while the daemon had
+/// only opened a cooperative cancel and still held her 1005 sats.
+#[tokio::test]
+async fn cleanup_needs_the_relay_to_confirm_a_funded_cancellation() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+    adapter.ui_claims_cancelled = true;
+    let adapter = Arc::new(adapter);
+    let observer = FakeObserver {
+        publish_canceled: false,
+    };
+
+    let summary = run_with_observer(&world, adapter, opts(&["happy_sell"]), true, &observer)
+        .await
+        .unwrap();
+
+    assert!(!summary.passed);
+    let cleanup = summary.cleanup.unwrap();
+    assert_eq!(cleanup.unresolved, vec!["o1".to_owned()]);
+    let entry = &cleanup.entries[0];
+    assert!(
+        matches!(&entry.result, Some(mortsom_scenario_kit::cleanup::CleanupResult::Failed { message }) if message.contains("relay never published canceled")),
+        "{entry:?}"
+    );
+}

@@ -288,6 +288,9 @@ struct FakeAdapter {
     created: Mutex<u32>,
     /// Cancel is accepted by the UI but the daemon never closes the order.
     stubborn: bool,
+    /// The UI flips a funded order to `cancelled` on the maker's request
+    /// alone, while the daemon still holds the escrow.
+    ui_claims_cancelled: bool,
     /// The driver stops answering at the moment the scenario fails.
     silence_driver_on_failure: bool,
 }
@@ -309,6 +312,7 @@ impl FakeAdapter {
             coop_pending: Mutex::new(Vec::new()),
             created: Mutex::new(0),
             stubborn: false,
+            ui_claims_cancelled: false,
             silence_driver_on_failure: false,
         }
     }
@@ -486,6 +490,11 @@ impl AppAdapter for FakeAdapter {
                 orders.insert(order.id.clone(), OrderState::Pending);
                 Ok(CancelOutcome::Cancelled)
             }
+            Some(OrderState::Active | OrderState::FiatSent) if self.ui_claims_cancelled => {
+                orders.insert(order.id.clone(), OrderState::Cancelled);
+                self.cancelled.lock().unwrap().push(order.id.clone());
+                Ok(CancelOutcome::Cancelled)
+            }
             // A funded order needs both sides: the first request only marks it.
             Some(OrderState::Active | OrderState::FiatSent)
                 if !self.coop_pending.lock().unwrap().contains(&order.id) =>
@@ -568,13 +577,25 @@ const FAKE_ORDER_IDS: [&str; 12] = [
     "o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8", "o9", "o10", "o11", "o12",
 ];
 
-struct FakeObserver;
+/// Fake daemon on the relay. `publish_canceled: false` models a daemon that
+/// never closes an order the UI claims is cancelled.
+struct FakeObserver {
+    publish_canceled: bool,
+}
+impl Default for FakeObserver {
+    fn default() -> Self {
+        Self {
+            publish_canceled: true,
+        }
+    }
+}
 #[async_trait]
 impl ObserverFactory for FakeObserver {
     async fn start(&self, _: &str, pubkey: PublicKey) -> Result<Arc<RelayObserver>, String> {
         let observer = Arc::new(RelayObserver::detached(ObserverScope::daemon_only(pubkey)));
         let keys = Keys::parse(NSEC).unwrap();
         let feeder = Arc::clone(&observer);
+        let publish_canceled = self.publish_canceled;
         tokio::spawn(async move {
             for _ in 0..200 {
                 for (id, status) in FAKE_ORDER_IDS.iter().flat_map(|id| {
@@ -587,6 +608,7 @@ impl ObserverFactory for FakeObserver {
                         "canceled",
                     ]
                     .into_iter()
+                    .filter(move |s| publish_canceled || *s != "canceled")
                     .map(move |s| (*id, s))
                 }) {
                     let event = EventBuilder::new(Kind::Custom(38383), "")
@@ -610,6 +632,16 @@ async fn run(
     adapter: Arc<FakeAdapter>,
     options: RunOptions,
     confirm: bool,
+) -> Result<RunSummary, String> {
+    run_with_observer(world, adapter, options, confirm, &FakeObserver::default()).await
+}
+
+async fn run_with_observer(
+    world: &World,
+    adapter: Arc<FakeAdapter>,
+    options: RunOptions,
+    confirm: bool,
+    observer: &dyn ObserverFactory,
 ) -> Result<RunSummary, String> {
     let ui = FakeUi(adapter.flags.clone());
     let docker = Arc::new(FakeDocker::default());
@@ -637,7 +669,7 @@ async fn run(
         adapter: adapter as Arc<dyn AppAdapter>,
         env: &env,
         wallets: &wallets,
-        observer: &FakeObserver,
+        observer,
     };
     let result = run_scenarios(&world.config, &options, &deps).await;
     assert!(docker.running.lock().unwrap().is_empty(), "relay torn down");

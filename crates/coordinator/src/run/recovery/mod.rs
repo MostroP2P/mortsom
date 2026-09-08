@@ -131,6 +131,29 @@ pub(super) async fn resume_actor(
     ctx: &mortsom_app_contract::DeviceContext<'_>,
     journal: &FileJournal,
 ) -> Result<ActorSetup, String> {
+    let result = reopen_actor(world, ctx, journal).await;
+    if result.is_err() {
+        // The screen at the refusal is the only diagnostic a live recovery
+        // leaves behind: the client closes right after this and the retained
+        // profile is not reopened until the operator acts.
+        world
+            .recorder
+            .checkpoint(
+                world.artifacts,
+                ctx.actor.as_str(),
+                "recovery-identity-failed",
+                ctx.ui,
+            )
+            .await;
+    }
+    result
+}
+
+async fn reopen_actor(
+    world: &World<'_>,
+    ctx: &mortsom_app_contract::DeviceContext<'_>,
+    journal: &FileJournal,
+) -> Result<ActorSetup, String> {
     ctx.ui.activate_app().await.map_err(|e| e.to_string())?;
     let identity = world
         .deps

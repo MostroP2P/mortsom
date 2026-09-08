@@ -69,7 +69,7 @@ async fn teardown_with_evidence_failure(leaf: Option<&str>) -> (RunSummary, bool
         adapter: Arc::new(FakeAdapter::full()),
         env: &env,
         wallets: &no_wallets,
-        observer: &FakeObserver,
+        observer: &FakeObserver::default(),
     };
     let mut world = super::super::World::new(
         &fixture.config,
