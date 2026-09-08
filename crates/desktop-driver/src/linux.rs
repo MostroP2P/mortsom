@@ -18,7 +18,15 @@ struct Runtime {
     env: std::collections::BTreeMap<String, String>,
     services: Vec<Box<dyn ChildProcess>>,
     app: Option<Box<dyn ChildProcess>>,
-    native: Native,
+    native: Option<Native>,
+}
+
+impl Runtime {
+    fn native(&self) -> Result<&Native, AppiumError> {
+        self.native
+            .as_ref()
+            .ok_or_else(|| error("accessibility session not ready"))
+    }
 }
 
 /// Native app session. Each actor receives an independent runtime directory.
@@ -40,42 +48,39 @@ impl LinuxSession {
         }
     }
 
-    async fn prepare(&self) -> Result<Runtime, AppiumError> {
+    async fn prepare(&self, slot: &mut Option<Runtime>) -> Result<(), AppiumError> {
         use std::os::unix::fs::DirBuilderExt;
         let root = std::env::temp_dir().join(format!("mortsom-{}", mortsom_common::RunId::new()));
         std::fs::DirBuilder::new()
             .mode(0o700)
             .create(&root)
             .map_err(error)?;
-        let mut services = Vec::new();
-        let result = self.prepare_services(&root, &mut services).await;
-        match result {
-            Ok((env, native)) => Ok(Runtime {
-                root,
-                env,
-                native,
-                services,
-                app: None,
-            }),
-            Err(cause) => {
-                let mut failures = Vec::new();
-                for process in services.iter().rev() {
-                    if let Err(e) = process.kill().await {
-                        failures.push(e.to_string());
-                    }
-                }
-                if let Err(e) = std::fs::remove_dir_all(root) {
-                    failures.push(e.to_string());
-                }
-                if failures.is_empty() {
-                    Err(cause)
-                } else {
-                    Err(error(format!(
-                        "{cause}; cleanup failures: {}",
-                        failures.join("; ")
-                    )))
-                }
+        *slot = Some(Runtime {
+            root,
+            env: Default::default(),
+            native: None,
+            services: Vec::new(),
+            app: None,
+        });
+        let runtime = slot
+            .as_mut()
+            .ok_or_else(|| error("missing startup ownership"))?;
+        match self
+            .prepare_services(&runtime.root, &mut runtime.services)
+            .await
+        {
+            Ok((env, native)) => {
+                runtime.env = env;
+                runtime.native = Some(native);
+                Ok(())
             }
+            Err(cause) => match stop(runtime).await {
+                Ok(()) => {
+                    *slot = None;
+                    Err(cause)
+                }
+                Err(cleanup) => Err(error(format!("{cause}; startup cleanup failed: {cleanup}"))),
+            },
         }
     }
 
@@ -109,6 +114,9 @@ impl LinuxSession {
             let mut tick = tokio::time::interval(Duration::from_millis(100));
             loop {
                 tick.tick().await;
+                if !services[0].is_alive().await {
+                    return Err(error("Xvfb exited before display readiness"));
+                }
                 let value = std::fs::read_to_string(&display_file).map_err(error)?;
                 if let Some(number) = value
                     .lines()
@@ -223,7 +231,7 @@ impl LinuxSession {
             .await
             .as_ref()
             .ok_or_else(|| error("session not prepared"))?
-            .native
+            .native()?
             .find(id)
             .await?
             .ok_or_else(|| AppiumError::WaitTimeout {
@@ -325,22 +333,31 @@ async fn connect_bus(address: &str) -> Result<zbus::Connection, AppiumError> {
     .map_err(error)?
 }
 
-async fn stop(mut runtime: Runtime) -> Result<(), AppiumError> {
+async fn stop(runtime: &mut Runtime) -> Result<(), AppiumError> {
     let mut failures = Vec::new();
-    if let Some(app) = runtime.app.take()
-        && let Err(e) = app.kill().await
-    {
-        failures.push(e);
+    if let Some(app) = &runtime.app {
+        match app.kill().await {
+            Ok(()) => runtime.app = None,
+            Err(cause) => failures.push(cause.to_string()),
+        }
     }
-    for process in runtime.services.iter().rev() {
-        if let Err(e) = process.kill().await {
-            failures.push(e);
+    for index in (0..runtime.services.len()).rev() {
+        match runtime.services[index].kill().await {
+            Ok(()) => {
+                runtime.services.remove(index);
+            }
+            Err(cause) => failures.push(cause.to_string()),
         }
     }
     if !failures.is_empty() {
-        return Err(error("runtime cleanup failed"));
+        return Err(error(failures.join("; ")));
     }
-    std::fs::remove_dir_all(&runtime.root).map_err(error)
+    runtime.native = None;
+    match std::fs::remove_dir_all(&runtime.root) {
+        Ok(()) => Ok(()),
+        Err(cause) if cause.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(cause) => Err(error(cause)),
+    }
 }
 
 #[async_trait]
@@ -350,7 +367,7 @@ impl UiSession for LinuxSession {
         Ok(guard
             .as_ref()
             .ok_or_else(|| error("session not prepared"))?
-            .native
+            .native()?
             .find(id)
             .await?
             .is_some())
@@ -368,7 +385,7 @@ impl UiSession for LinuxSession {
             .await
             .as_ref()
             .ok_or_else(|| error("session not prepared"))?
-            .native
+            .native()?
             .click(&node)
             .await
     }
@@ -379,7 +396,7 @@ impl UiSession for LinuxSession {
             .await
             .as_ref()
             .ok_or_else(|| error("session not prepared"))?
-            .native
+            .native()?
             .type_text(&node, text)
             .await
     }
@@ -395,7 +412,7 @@ impl UiSession for LinuxSession {
             .await
             .as_ref()
             .ok_or_else(|| error("session not prepared"))?
-            .native
+            .native()?
             .text_value(&node)
             .await
     }
@@ -406,7 +423,7 @@ impl UiSession for LinuxSession {
             .await
             .as_ref()
             .ok_or_else(|| error("session not prepared"))?
-            .native
+            .native()?
             .enabled(&node)
             .await
     }
@@ -429,13 +446,13 @@ impl UiSession for LinuxSession {
             .as_ref()
             .ok_or_else(|| error("session not prepared"))?;
         let mut xml = String::from("<hierarchy>");
-        for node in runtime.native.nodes().await? {
+        for node in runtime.native()?.nodes().await? {
             if let Some((id, value)) = label(&node.name) {
                 xml.push_str(&format!(
                     "<node resource-id=\"{}\" content-desc=\"{}\" focused=\"{}\"/>",
                     crate::xml_escape(id),
                     crate::xml_escape(value),
-                    runtime.native.focused(&node).await?
+                    runtime.native()?.focused(&node).await?
                 ));
             }
         }
@@ -447,9 +464,10 @@ impl UiSession for LinuxSession {
     }
     async fn terminate_app(&self) -> Result<(), AppiumError> {
         if let Some(runtime) = self.runtime.lock().await.as_mut()
-            && let Some(app) = runtime.app.take()
+            && let Some(app) = &runtime.app
         {
             app.kill().await?;
+            runtime.app = None;
         }
         Ok(())
     }
@@ -458,8 +476,18 @@ impl UiSession for LinuxSession {
         let runtime = guard
             .as_mut()
             .ok_or_else(|| error("session not prepared"))?;
-        if runtime.app.is_some() {
-            return Ok(());
+        runtime.native()?;
+        for service in &runtime.services {
+            if !service.is_alive().await {
+                return Err(error("owned desktop service exited before app launch"));
+            }
+        }
+        if let Some(app) = &runtime.app {
+            if app.is_alive().await {
+                return Ok(());
+            }
+            app.kill().await?;
+            runtime.app = None;
         }
         let mut cmd = Command::new(&self.executable, &[]);
         cmd.env = runtime.env.clone();
@@ -472,11 +500,11 @@ impl UiSession for LinuxSession {
     }
     async fn clear_app(&self) -> Result<(), AppiumError> {
         let mut guard = self.runtime.lock().await;
-        if let Some(runtime) = guard.take() {
+        if let Some(runtime) = guard.as_mut() {
             stop(runtime).await?;
+            *guard = None;
         }
-        *guard = Some(self.prepare().await?);
-        Ok(())
+        self.prepare(&mut guard).await
     }
     async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
         Err(error("Linux network capability not implemented"))
@@ -488,9 +516,15 @@ impl UiSession for LinuxSession {
         Ok(())
     }
     async fn end(&self) -> Result<(), AppiumError> {
-        if let Some(runtime) = self.runtime.lock().await.take() {
+        let mut guard = self.runtime.lock().await;
+        if let Some(runtime) = guard.as_mut() {
             stop(runtime).await?;
+            *guard = None;
         }
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "linux_lifecycle_tests.rs"]
+mod lifecycle_tests;

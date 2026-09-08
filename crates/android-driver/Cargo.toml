@@ -18,6 +18,9 @@ async-trait = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+rustix = { workspace = true, features = ["process"] }
+
 [features]
 # Exposes the scripted process runner to other crates' tests.
 testing = []
