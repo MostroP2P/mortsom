@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 18 completed, 7 in progress and 40 pending.
+current evidence separately. Section 17 tracks 65 tasks: 19 completed, 7 in progress and 39 pending.
 Live checkpoint acceptance remains Linux 0/2 and Web 0/2.
 
 ## 1. Objective and completion criteria
@@ -637,12 +637,12 @@ contract tests.
 - [ ] **TODO — P2.9 Inject desktop session construction.** Add a factory seam to `RunDeps` returning
   independent `Arc<dyn UiSession>` handles and owned server resources. Remove hardcoded real runners from
   `Farm::desktop`; test second-actor failure, sibling survival and teardown through fakes.
-- [ ] **TODO — P2.10 Enforce fresh actors for the checkpoint; defer in-process reset.** The active
-  requirement is to reject desktop multi-scenario invocations and use separate fresh-actor commands.
-  The later full-reset implementation must close old sessions, create new storage/credentials,
-  rerun bootstrap and rebuild actor context while retaining the run budget and persistent stack. Test that
-  previous IDs, subscriptions and profiles cannot be reused accidentally. For the current checkpoint,
-  require separate single-scenario invocations with fresh actors and reject desktop multi-scenario runs.
+- [x] **P2.10 DONE — Enforce fresh actors for the checkpoint; defer in-process reset.** The CLI resolves
+  names/tags and rejects desktop selections containing more than one distinct scenario before loading
+  stack/configuration or building clients; the coordinator repeats this guard before creating artifacts.
+  Separate commands allocate fresh actor storage. Offline CLI regressions cover Linux/Web named batches
+  and tag expansion; unit checks preserve duplicate-name deduplication and existing Android batching.
+  Independent review passed. Full in-process profile/subscription reset remains deferred.
 - [ ] **IN PROGRESS — P2.11 Finish app contract coordination.** Linux name prefixes and desktop sidebar
   navigation fixes exist. Review and test all direct `Semantics` nodes, production-label isolation, visible
   readouts and test-relay restrictions. Run the app's prescribed checks before committing.

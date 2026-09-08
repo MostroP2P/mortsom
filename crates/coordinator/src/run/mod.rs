@@ -15,7 +15,9 @@ mod farm;
 pub use farm::DesktopOptions;
 use farm::Farm;
 mod relay_control;
+mod selection;
 mod sink;
+pub use selection::select_for_run;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -42,7 +44,7 @@ use mortsom_scenario_kit::context::NodeWallet;
 use mortsom_scenario_kit::context::{ActorSession, Context, MainnetClearance, RecoveryTiming};
 use mortsom_scenario_kit::outcome::{Outcome, ScenarioResult};
 use mortsom_scenario_kit::recovery::{NoRelayControl, RelayControl};
-use mortsom_scenario_kit::registry::{ManualPayments, ScenarioDef, required_on, select};
+use mortsom_scenario_kit::registry::{ManualPayments, ScenarioDef, required_on};
 use mortsom_scenario_kit::timeline::{Timeline, TimelineKind};
 use relay_control::LiveRelayControl;
 use tracing::{error, info, warn};
@@ -133,7 +135,11 @@ pub async fn run_scenarios(
     if options.desktop.is_none() {
         config.require_android().map_err(|e| e.to_string())?;
     }
-    let selected = select(&options.scenarios, options.tag.as_deref())?;
+    let selected = select_for_run(
+        &options.scenarios,
+        options.tag.as_deref(),
+        options.desktop.is_some(),
+    )?;
     let clearance = clear_value_moving(config, deps, &selected)?;
     let mainnet = match clearance {
         Clearance::Mainnet(c) => Some(c),

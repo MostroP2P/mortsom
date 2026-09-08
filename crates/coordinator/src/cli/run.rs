@@ -11,6 +11,14 @@ pub(super) async fn run_command(
     xvfb: PathBuf,
 ) -> ExitCode {
     mortsom_scenarios::link();
+    if let Err(error) = crate::run::select_for_run(
+        &scenarios,
+        tag.as_deref(),
+        platform != mortsom_desktop_driver::Platform::Android,
+    ) {
+        eprintln!("{error}");
+        return ExitCode::from(2);
+    }
     let loaded = if platform == mortsom_desktop_driver::Platform::Android {
         Config::load(config_path)
             .map(|config| (config, None))
