@@ -1,162 +1,72 @@
-<p align="center">
-  <img src="./mortsom.jpg" alt="Mortsom logo" width="240">
-</p>
-
 # Mortsom
 
-Mortsom is a Rust end-to-end harness for [Mostro app v2](https://github.com/MostroP2P/app).
-It operates two independent clients through their public UI: **Alice is the seller and Bob is the buyer**.
-It checks what both screens show, what the Nostr relay publishes, and what the dedicated Lightning wallets
-actually paid. An order created by the harness is created through the app, never through a protocol shortcut.
+End-to-end test harness for the Mostro app v2. It drives two real copies of the app, Alice and Bob, through a
+complete Lightning trade against a local regtest stack, and proves the trade from the outside: what each
+user saw, what the daemon published and what each wallet actually paid or received.
 
-**Linux is the default. Web is selectable. Android remains available as the legacy path, with no new Android
-work in this checkpoint.** The shared regtest environment is managed by the sibling Ortsom CLI and survives
-client runs.
+Clients run on **Linux** (default) or **Web**, both built from the same Flutter source. Android emulators are a
+frozen, selectable option. [spec.md](spec.md) is normative; this file is the operator guide.
 
-- [Quick start](#quick-start)
-- [Current implementation status](#current-implementation-status)
-- [Requirements and project layout](#requirements-and-project-layout)
-- [Configure Mortsom](#configure-mortsom)
-- [Start, inspect and update the stack](#start-inspect-and-update-the-stack)
-- [Check prerequisites with doctor](#check-prerequisites-with-doctor)
-- [Build app v2 and reuse artifacts](#build-app-v2-and-reuse-artifacts)
-- [Run scenarios on Linux or Web](#run-scenarios-on-linux-or-web)
-- [Read results and inspect progress](#read-results-and-inspect-progress)
-- [Recover a failed run](#recover-a-failed-run)
-- [Troubleshooting](#troubleshooting)
-- [Commands and development checks](#commands-and-development-checks)
+## Status
+
+Accepted live cells: **Linux 0/2, Web 0/2**. See [docs/acceptance-ledger.md](docs/acceptance-ledger.md) for
+attempts and [docs/HANDOFF.md](docs/HANDOFF.md) for the current plan.
+
+**Transitional dependency.** The spec requires `mortsom stack up` to build the regtest stack on its own. The
+current implementation still delegates to a sibling [Ortsom](https://github.com/MostroP2P/ortsom) checkout
+at `../ortsom`, built in release or debug. Until the stack implementation lands, that checkout is required for
+`stack up`, `stack status` and every run. It is the one item in this guide that contradicts the spec.
 
 ## Quick start
 
-Run these commands from the Mortsom repository. They assume the sibling checkouts and the tools described
-below are installed. Use app and Ortsom revisions containing the coordinated automation/public-stack
-contracts; the local working revisions are recorded in [the archived spec](docs/history/spec-v0.3.md#18-current-implementation-evidence).
-
 ```sh
-cd ~/dev/mortsom
-
-# Build the sibling CLI and this harness.
-# Mortsom prefers an Ortsom release binary, so refresh that binary explicitly.
-cargo build --manifest-path ../ortsom/Cargo.toml --release --bin ortsom
 cargo build -p mortsom-coordinator --bin mortsom
 
-# Create the persistent regtest stack and pull the current mostrod image.
-./target/debug/mortsom stack up
-./target/debug/mortsom stack status
+./target/debug/mortsom stack up          # regtest chain, LND alice/bob/carol, relay, mostrod
+./target/debug/mortsom stack status      # exits non-zero until usable
 
-# Check Linux tools, the app build pipeline and the running environment.
-./target/debug/mortsom doctor --platform linux
+./target/debug/mortsom doctor --platform linux   # prerequisites only; no order, no payment
 
-# Build app v2, start independent Alice/Bob clients, and run one scenario.
-./target/debug/mortsom run happy_sell
-```
-
-To select Web:
-
-```sh
-./target/debug/mortsom doctor --platform web
-./target/debug/mortsom run happy_sell --platform web
-```
-
-To run the buy-order journey:
-
-```sh
-./target/debug/mortsom run happy_buy --platform linux
+./target/debug/mortsom run happy_sell    # builds app v2, starts Alice and Bob, runs one trade
 ./target/debug/mortsom run happy_buy --platform web
 ```
 
-**These are the supported invocations, not a claim of completed trade acceptance.** The current checkpoint
-is exactly `happy_sell` and `happy_buy` on both platforms; all four live acceptance cells remain pending.
-The implementation is being validated and the current blocker is described below. Run one scenario per
-command. A desktop batch or tag selecting several scenarios is refused before clients start.
+Every `run` creates fresh Alice and Bob identities, runs one scenario, resolves every order it created and
+removes its clients. Results land in `artifacts/<run-id>/`. The exit status is non-zero when the run fails.
 
-You do not need to start a relay, configure Alice/Bob keys, or launch Android emulators separately.
-`stack up` prepares the environment; each scenario invocation prepares its own client identities.
-When finished with the entire regtest environment, `./target/debug/mortsom stack down` explicitly destroys
-its services and generated state. Resolve pending runs before doing that.
+## Requirements
 
-## Current implementation status
-
-Status recorded on 2026-09-08; [spec.md](spec.md) is the normative specification; the task plan and evidence ledger are archived in [docs/history/spec-v0.3.md](docs/history/spec-v0.3.md).
-
-| Area | Verified state |
-|---|---|
-| Persistent stack | Ortsom delegation, public readiness/ownership checks and immutable mostrod image verification implemented |
-| mostrod update | `stack up` pulls `mostrop2p/mostro:latest`; the observed development image is v0.18.7, not a permanent version pin |
-| Linux/Web app preparation | Both source builds and complete bundle capture passed |
-| Alice/Bob isolation | Fresh onboarding, restart and original-identity recovery through new handles passed on both platforms |
-| UI drivers | Native AT-SPI and WebDriver input/readback, owned process shutdown and failure-path tests passed |
-| Recovery | Private journals/profiles, original stack/bundle/origin checks, UI cleanup and tracked wallet verification implemented |
-| Scenario narratives | `happy_sell` and `happy_buy` implemented, including their different invoice/funding order |
-| Live trade acceptance | Linux **0/2**, Web **0/2**; no funded happy-path pass yet |
-| Resource comparison | Deferred until the four-case review checkpoint is accepted |
-
-The final pause verification passed **613 workspace tests**, formatting and strict clippy. Tests
-cover the native tab/relay fixes, recovery evidence ordering and direct invoice routes. App v2 verification passed 338
-Flutter tests and 412 Rust tests; the current armed Linux accessibility suite has five passing tests.
-These checks establish implementation evidence, not successful live trades.
-
-Three Linux `happy_sell` attempts are recorded in
-[the live attempt ledger](docs/history/spec-v0.3.md#1814-live-checkpoint-attempt-ledger). The latest reached creation and take,
-then timed out because the app opened the buyer-invoice form directly while the adapter expected an
-order-detail status node. Source commits `e846715` (harness) and `0ed7efb` (app) correct that transition;
-44 adapter tests and five focused app tests passed. Both client bundles must be rebuilt before the live
-retry. All three attempts ended without invoices/payments and with verified cleanup; no reset was needed.
-
-**Work is paused for the operator's remaining weekly allowance.** Read [the continuation record](docs/HANDOFF.md)
-for exact repository revisions, environment state, completed checks and the next commands. Acceptance is
-still Linux0/2 and Web0/2.
-
-The other eighteen scenarios and CPU/RSS measurements are deferred. Android development is frozen.
-
-## Requirements and project layout
-
-The default checkout layout is:
+Default layout:
 
 ```text
 ~/dev/
-  mortsom/       Rust harness and reports
-  ortsom/        Sibling CLI that owns the persistent regtest stack
-  mobilev2/      Checkout of MostroP2P/app with the automation contract
+  mortsom/     this repository
+  mobilev2/    checkout of MostroP2P/app with the automation contract
+  ortsom/      transitional; see Status
 ```
 
-An app directory named `app` is also fine: configure `mobile.source_dir` accordingly. Mortsom needs the
-coordinated app contract in that checkout, not the deprecated `MostroP2P/mobile` app. No sibling runner or
-source code is imported into Mortsom.
-
-| Used for | Requirements |
+| For | Requirements |
 |---|---|
-| Harness | Rust stable compatible with the workspace MSRV (1.89), Cargo, Git, Docker Engine/Compose and permission to operate Docker |
-| Source builds | Flutter on PATH, app-owned `scripts/frb-generate.sh`, its matching `flutter_rust_bridge_codegen`, shell tools checked by doctor |
-| Linux build | clang, CMake, Ninja, pkg-config, GTK 3 development files, libsecret >=0.18.4 development files |
-| Linux runtime | Xvfb, D-Bus, GNOME Keyring, AT-SPI bus/registry and ImageMagick's `import` screenshot command |
-| Web build | App-owned `scripts/build-web.sh`, wasm-pack, Python 3, rustup nightly toolchain with rust-src |
-| Web runtime | Compatible Chromium and ChromeDriver executables |
+| Harness | Rust stable (MSRV 1.89), Cargo, Git, Docker Engine and Compose with permission to use them |
+| Source builds | Flutter on PATH, the app's `scripts/frb-generate.sh` and matching `flutter_rust_bridge_codegen` |
+| Linux build | clang, CMake, Ninja, pkg-config, GTK 3 and libsecret >= 0.18.4 development files |
+| Linux runtime | Xvfb, D-Bus, GNOME Keyring, AT-SPI bus and registry, ImageMagick `import` |
+| Web build | The app's `scripts/build-web.sh`, wasm-pack, Python 3, rustup nightly with rust-src |
+| Web runtime | Matching Chromium and ChromeDriver |
 
-Doctor checks the actual selected path and reports missing tools; it does not install them. Follow the
-app checkout's toolchain instructions for its Rust bridge version. Keep the matching browser and driver
-available together. Source builds and cached Rust/Flutter outputs need substantially more disk space than
-running an already built client.
+`doctor` reports what is missing for the selected platform; it installs nothing. Runs never open windows on
+your desktop: Linux clients live on private virtual displays, Web clients in headless browser profiles.
 
-Linux runs use separate virtual displays, accessibility buses and keyrings. Web runs use separate Chromium
-profiles in headless mode and a run-owned loopback server. Current CLI runs do not open interactive client
-windows on your desktop; inspect screenshots and UI artifacts as described below.
+## Configuration
 
-## Configure Mortsom
-
-The default file is [`config/desktop.example.toml`](config/desktop.example.toml). For the default directory
-layout, it already selects app v2, local regtest and the stack's two LND wallets.
-
-For a private configuration:
+The default file is [config/desktop.example.toml](config/desktop.example.toml). For a private copy:
 
 ```sh
 cp config/desktop.example.toml mortsom.local.toml
-# Edit paths and explicit caps in mortsom.local.toml.
-./target/debug/mortsom --config mortsom.local.toml doctor --platform linux
 ./target/debug/mortsom --config mortsom.local.toml run happy_sell
 ```
 
-Useful settings from the example:
+Key settings:
 
 ```toml
 [mobile]
@@ -164,270 +74,113 @@ profile = "mobile-v2"
 source_dir = "../mobilev2"
 
 [run]
-lane = "local"
 amount_sats = 1000
-max_order_sats = 5000
-max_run_spend_sats = 50000
-jobs = 1
-cleanup = true
-allow_mainnet = false
-infra_retries = 0
-artifacts_dir = "./artifacts"
-fiat_code = "ARS"
-fiat_amount = 1000
-payment_method = "cash"
+max_order_sats = 5000        # per-order cap; required
+max_run_spend_sats = 50000   # cumulative cap; required
 state_timeout_secs = 90
 settle_timeout_secs = 120
 ```
 
-This is an excerpt, not a complete configuration: retain the wallet, relay, daemon and remaining sections
-from the copied example. Amounts and caps are sats. The payment reservation accounts for the actual escrow
-invoice plus the enforced routing-fee ceiling; the buyer's invoice can be lower than the advertised trade
-amount because of daemon fees. Missing caps are errors. Desktop runs use one scenario and one job.
+Caps are mandatory. Secrets are `env:` references resolved in memory; never paste macaroons, keys or
+credentials into TOML. `*.local.toml`, `mortsom.toml`, `.env*` and `artifacts/` are gitignored. A config also
+merges its optional `<name>.local.toml` overlay.
 
-A config also merges its optional `<name>.local.toml` overlay. For example, `mortsom.toml` merges
-`mortsom.local.toml`, and `config/desktop.example.toml` merges `config/desktop.example.local.toml`.
-Paths in the examples assume the current working directory is the Mortsom repository.
-
-The default `env:MORTSOM_*` references are resolved from the validated Ortsom connection descriptor in
-memory. Do not paste generated macaroons, private keys or wallet credentials into TOML. Keep their protected
-files or environment references. Private `*.local.toml`, `mortsom.toml`, `.env*` and artifacts are gitignored.
-The desktop checkpoint requires both dedicated external LND wallets; desktop NWC recovery is deferred.
-
-If Ortsom is elsewhere, pass the same checkout to every applicable command:
-
-```sh
-./target/debug/mortsom --ortsom-dir /absolute/path/to/ortsom stack status
-./target/debug/mortsom --ortsom-dir /absolute/path/to/ortsom --config mortsom.local.toml run happy_sell
-```
-
-## Start, inspect and update the stack
+## Stack
 
 ```sh
 ./target/debug/mortsom stack up
 ./target/debug/mortsom stack status
-```
-
-`stack up` pulls the published mostrod `latest` image, resolves its immutable identity, delegates to
-`ortsom stack up`, and verifies that the running container uses the selected image. The public status
-includes the daemon identity, relay, wallet connection references and declared limits. Mortsom consumes
-that public contract instead of reading private app or daemon databases.
-
-Use `stack status` to inspect an existing environment. Do not call `stack up` before every scenario:
-it is a setup/update operation and can regenerate the daemon identity. Client runs leave the shared stack
-running. To update mostrod deliberately, first finish/recover outstanding runs, run `stack up`, verify
-status and rebuild clients for the resulting identity.
-
-An explicit clean reset is:
-
-```sh
 ./target/debug/mortsom stack down
-./target/debug/mortsom stack up
 ```
 
-This destroys regtest state and generated credentials. It is not proof that an old order was canceled or a
-payment refunded. Preserve failure evidence and resolve owned orders first. Do not reuse a client bundle
-compiled for the previous daemon identity.
+`stack up` pulls the daemon image, builds or updates the stack and verifies the running container matches
+the pulled digest. Do not run it before every scenario: it can regenerate the daemon identity, after which
+both clients must be rebuilt. `stack down` destroys the environment and its credentials; it is never
+evidence that an order was cancelled or a payment refunded.
 
-## Check prerequisites with doctor
+## Building the app
 
-```sh
-./target/debug/mortsom doctor --platform linux
-./target/debug/mortsom doctor --platform web
-./target/debug/mortsom doctor --platform linux --json
-./target/debug/mortsom doctor --platform linux --no-network
-```
-
-Doctor creates no order and makes no payment. Normal checks inspect host/build tools, stack identity and
-readiness, the public relay/daemon, wallet network/capabilities and explicit configuration. `--no-network`
-skips connection probes; it is not a substitute for validating the running stack before a trade. Desktop
-configuration still depends on an existing valid stack descriptor.
-
-With an existing artifact, doctor validates runtime prerequisites and the complete artifact instead of
-requiring the source-build tools:
-
-```sh
-./target/debug/mortsom doctor --platform linux \
-  --app-artifact ../mobilev2/build/linux/x64/release/bundle/mostro
-./target/debug/mortsom doctor --platform web --app-artifact ../mobilev2/build/web
-```
-
-Fix every failed prerequisite before a live run. An expected NWC setup skip during a run with external LND
-wallets is not a skipped scenario; the app intentionally has no connected NWC wallet on that path.
-
-## Build app v2 and reuse artifacts
-
-Without `--app-artifact`, `mortsom run` builds the selected target from `mobile.source_dir`. It invokes the
-app-owned bridge generation, the app's Web/WASM build when needed, and Flutter's Mortsom entry point with
-the current test environment, daemon key and host relay. The app must visibly identify the test environment.
-
-To build and validate without launching clients or creating an order/payment, use the development example:
+Without `--app-artifact`, `run` builds the selected target from `mobile.source_dir`. To build and verify
+without launching clients:
 
 ```sh
 cargo run -p mortsom-coordinator --example prepare_client -- linux
 cargo run -p mortsom-coordinator --example prepare_client -- web
 ```
 
-That example uses `config/desktop.example.toml` and `../ortsom`; it does not accept the CLI's `--config`
-or `--ortsom-dir` options. It reports source/build provenance, verifies the captured bundle, removes its
-temporary copy, and leaves Flutter's normal build outputs in the app checkout.
-
-Reuse those outputs to avoid rebuilding on every diagnostic attempt:
+Build Linux and Web sequentially: bridge generation writes shared source files. Then reuse the outputs:
 
 ```sh
 ./target/debug/mortsom run happy_sell --platform linux \
   --app-artifact ../mobilev2/build/linux/x64/release/bundle/mostro
-./target/debug/mortsom run happy_buy --platform web \
-  --app-artifact ../mobilev2/build/web
+./target/debug/mortsom run happy_buy --platform web --app-artifact ../mobilev2/build/web
 ```
 
-For Linux, supply the executable inside the **complete bundle**, including its `lib/` and `data/`
-neighbors. For Web, supply the complete output directory, including JavaScript, WASM and assets.
-Mortsom captures the complete bundle and verifies its content hash before launch. A supplied artifact has
-known content identity but explicitly unknown source/build history in the run report. Keep the source-build
-log when tracing it back to a revision. Rebuild after runtime app changes or a changed stack identity.
+For Linux, point at the executable inside the complete bundle. For Web, point at the complete output
+directory. Mortsom hashes the whole bundle and records it. Rebuild after any app change or a changed daemon
+identity.
 
-## Run scenarios on Linux or Web
+## Running scenarios
 
-| Scenario | Maker | Taker | Funding order |
+| Scenario | Maker | Taker | Order of funding |
 |---|---|---|---|
-| `happy_sell` | Alice creates a sell | Bob buys | Bob provides the buyer invoice; Alice funds the seller hold |
-| `happy_buy` | Bob creates a buy | Alice sells | Alice funds the seller hold first; Bob then provides the buyer invoice |
+| `happy_sell` | Alice sells | Bob buys | Bob provides the payout invoice, then Alice pays the hold |
+| `happy_buy` | Bob buys | Alice sells | Alice pays the hold first, then Bob provides the payout invoice |
 
-Both flows then have Bob mark fiat sent and Alice release. Passing requires both clients' final completed
-state, matching relay evidence, the seller's settled hold and the buyer's settled payout. Escrow settlement
-alone is a nonterminal payout-pending state. Exact amounts, fees and actual ledger records are checked;
-repeated observations or multipath HTLC attempts are not counted as duplicate payments.
+Both continue with Bob marking fiat sent and Alice releasing. A pass requires both clients' completed state,
+matching relay evidence, the hold settled once on Alice's node and the payout settled once on Bob's.
 
-```sh
-./target/debug/mortsom run happy_sell                     # Linux default
-./target/debug/mortsom run happy_buy --platform linux
-./target/debug/mortsom run happy_sell --platform web
-./target/debug/mortsom run happy_buy --platform web
-```
-
-Each command creates fresh isolated Alice/Bob profiles, runs one narrative and performs cleanup. The
-current desktop checkpoint refuses several selected scenarios in one invocation, including a tag that
-expands to both happy paths. Desktop infrastructure failures are not automatically retried with the same
-identities. Use `mortsom list` to inspect registration; the larger catalogue is not an acceptance claim.
-
-Custom tool locations:
+Tool overrides:
 
 ```sh
-./target/debug/mortsom run happy_sell --xvfb /absolute/path/to/Xvfb
-export MORTSOM_BROWSER=/absolute/path/to/chromium
-export MORTSOM_CHROMEDRIVER=/absolute/path/to/chromedriver
-./target/debug/mortsom run happy_sell --platform web
+./target/debug/mortsom run happy_sell --xvfb /path/to/Xvfb
+export MORTSOM_BROWSER=/path/to/chromium
+export MORTSOM_CHROMEDRIVER=/path/to/chromedriver
 ```
 
-Doctor expects Xvfb on PATH; the run command additionally supports `--xvfb`. Recovery accepts
-`MORTSOM_XVFB` when the original run used a custom Xvfb location.
+Android: `--platform android` with an explicit legacy configuration. Instructions are archived in
+[docs/history/legacy-android.md](docs/history/legacy-android.md).
 
-Android is selected with `--platform android` and an explicit legacy configuration. The historical
-setup, NWC/Polar examples, Appium and emulator instructions are in
-[the legacy Android guide](docs/legacy-android.md). They are outside this checkpoint.
+## Reading results
 
-## Read results and inspect progress
-
-A run prints its ID, checks, scenario outcome and artifact directory. Artifacts default to
-`artifacts/<run-id>/`. The process exit status is nonzero when the run fails. A healthy setup table does
-not override a failed scenario printed below it.
-
-| Artifact | What it tells you |
+| Artifact | Contents |
 |---|---|
-| `summary.json` | Scenario result, failure category, checks, lane, versions and fingerprints |
-| `environment.json` | Public stack/client identity and run context |
-| `timeline.md`, `timeline.json` | UI steps, observed states, relay events and wallet assertions |
-| `relay-events.jsonl` | Run-scoped public relay evidence |
+| `summary.json` | Outcome, failure category, checks, versions, fingerprints |
+| `timeline.md` | UI steps, observed states, relay events, wallet assertions |
+| `alice/steps/`, `bob/steps/` | Screenshots and accessibility trees per step |
+| `relay-events.jsonl` | Public relay evidence scoped to the run |
 | `wallet-payments.json` | Payment observations and budget totals |
-| `cleanup.json` | Order cleanup, client shutdown and protected recovery retention |
-| `recovery.json` | Original run ownership, public journal events and retention state |
-| `alice/steps/`, `bob/steps/` | Screenshots and public UI trees captured at recorded steps |
-| `run.log` | Runtime diagnostics |
+| `cleanup.json`, `recovery.json` | Order resolution, client shutdown, retained storage |
+| `environment.json` | Stack and client identity |
+| `run.log` | Redacted runtime diagnostics; `tail -f` it during a run |
 
-For an active run, replace the example ID with the printed ID:
+A healthy checks table above a failed scenario is still a failed run.
 
-```sh
-tail -f artifacts/<run-id>/run.log
-```
-
-Some phase checks are printed only after completion. The appearance of new step artifacts and activity in
-the owned app/build processes help distinguish a bounded wait from a stopped process. Do not treat a quiet
-log alone as proof of a hang or kill unrelated browser processes. UI/state/payment waits are bounded.
-
-A pass requires the requested scenario to pass and cleanup/evidence checks to succeed. Skipped scenarios,
-failed attempts, unfunded form probes and a regtest reset never count as a happy-path pass. See the
-[parity ledger](docs/acceptance-ledger.md) and [spec attempt ledger](docs/history/spec-v0.3.md#1814-live-checkpoint-attempt-ledger)
-for actual accepted results.
-
-## Recover a failed run
-
-Start by reading `summary.json`, the last UI artifacts, `cleanup.json` and `recovery.json`.
-If the original run already completed cleanup, the closed journal records that fact. Otherwise:
+## Recovering a failed run
 
 ```sh
 ./target/debug/mortsom cleanup <run-id>
-# Include the same --config and --ortsom-dir if the originals were customized.
 ```
 
-Protected profiles, the captured client bundle and a durable journal live under
-`$HOME/.local/state/mortsom/recovery/<original-run-id>`, outside shareable artifacts. Recovery verifies the
-original stack/bundle, reopens the same public Alice/Bob identities and the same Web origin, discovers
-uncertain submissions and uses ordinary UI cancellation controls. It never creates a replacement identity,
-retries a payment or releases escrow as a cleanup shortcut.
+Recovery reopens the same Alice and Bob identities from protected storage under
+`$HOME/.local/state/mortsom/recovery/<run-id>`, cancels through ordinary UI controls and deletes the profiles
+only after verified resolution. It never creates a new identity, retries a payment or releases escrow. A new
+run is refused while a journal is unresolved. Details and failure categories are in
+[docs/runbook.md](docs/runbook.md).
 
-Tracked payment outcomes must agree with terminal UI state. Unused tracked buyer invoices can be canceled
-through the dedicated LND wallet. Unknown outgoing payment state does not prove a refund or no spend;
-uncertainty keeps recovery open. Profiles are deleted only after verified resolution and client shutdown.
-An unresolved journal blocks a new desktop run even if a different artifact directory is selected.
-
-There are two reporting cases:
-
-- A journal with no business-action intents, or one already durably marked resolved, can finish inactive
-  storage removal without reopening the UI or stack. This offline path prints its result and updates the
-  original journal; it does not create a new scenario report.
-- A normal UI recovery attempt writes a new report referring to the original run. It does not rewrite a
-  failed scenario as a pass. Required recovery evidence is written before deletion. If final reporting
-  fails after verified deletion, the closed durable manifest remains authoritative; an earlier public
-  retained=true report can be conservative.
-
-An abrupt kill leaves a durable active-runtime marker. Automatic reconciliation of orphaned client
-processes is not implemented: first reconcile the owned processes before reusing the profiles. Do not
-remove markers, reset the stack or delete the private directory just to bypass an unresolved-run refusal.
-The [runbook](docs/runbook.md) has further failure and secret-rotation guidance.
-
-## Troubleshooting
-
-| Symptom | Action |
-|---|---|
-| Stack not configured or not ready | Use `stack status`; complete `stack up` before building/running clients |
-| Unsupported/incomplete public stack status | Rebuild Ortsom with the public metadata contract; Mortsom prefers its release binary |
-| Missing Flutter/bridge/native/Web tools | Run the selected platform's doctor and fix the named prerequisite |
-| Browser session cannot start | Check executable overrides and browser/driver compatibility |
-| App connects to an old daemon identity | Rebuild against the current stack; do not reuse the old artifact |
-| New run refused by retained recovery | Inspect the original report and run `cleanup <original-run-id>` |
-| Recovery reports changed stack or bundle | Preserve the original state/evidence and restore the matching environment or resolve it explicitly |
-| `automation-contract` failure | Inspect the actor's last screenshot/UI tree; fix the app contract or adapter, then repeat with fresh actors |
-| Healthy checks but failed scenario | Read the separate scenario outcome and cleanup result; infrastructure readiness is not trade acceptance |
-| Cleanup/report write failure | Fix artifact permissions/disk space; inspect the durable recovery journal before assuming profiles remain |
-
-## Commands and development checks
+## Commands
 
 | Command | Purpose |
 |---|---|
-| `stack up`, `stack status`, `stack down` | Persistent regtest setup/update, inspection and explicit destruction |
-| `doctor [--platform linux\|web]` | Read-only prerequisite and readiness checks |
-| `list` | Registered scenario names, tags and requirements |
-| `run <scenario> [--platform linux\|web\|android]` | One desktop scenario with isolated clients, observers, caps and cleanup |
-| `cleanup <run-id>` | Original-identity desktop recovery or legacy resource cleanup |
-| `publish <run-id> --out <dir>` | Build a sanitized publication bundle from existing artifacts |
-| `accounting [--lane local\|ci\|canary]` | Summarize recorded outcomes and spend |
-| `parity <run-a> <run-b>` | Compare existing profile run reports |
-| `device`, `app`, `relay` | Existing legacy Android/app/relay operations |
+| `stack up`, `stack status`, `stack down` | Regtest environment lifecycle |
+| `doctor --platform linux\|web` | Read-only prerequisite and readiness checks |
+| `run <scenario> [--platform linux\|web\|android]` | One scenario with isolated clients, caps and cleanup |
+| `cleanup <run-id>` | Recover a run's identities and orders |
+| `list` | Registered scenarios |
+| `publish <run-id> --out <dir>` | Redacted evidence bundle |
+| `accounting`, `parity` | Spend trends and run comparison |
 
-Run `./target/debug/mortsom <command> --help` for exact options. `--config` and `--ortsom-dir` are global.
-Mainnet use requires explicit confirmation and caps; the current desktop checkpoint operates only against
-its verified local regtest environment.
+## Development
 
 ```sh
 cargo fmt --all --check
@@ -436,9 +189,5 @@ cargo test --workspace --all-targets
 cargo llvm-cov --workspace --all-targets --fail-under-lines 80
 ```
 
-The coverage requirement remains part of final delivery; it has not yet been claimed complete for this
-checkpoint. App-owned Flutter/Rust tests live in the app repository. Independent reviews are recorded in
-the spec. Existing Android CI workflows do not establish Linux/Web live scenario acceptance.
-
-Everything committed here is written in English. Read [AGENTS.md](AGENTS.md), the normative
-[spec](spec.md) and [crate rationale](docs/stack.md) before contributing.
+Everything in this repository is written in English. Read [AGENTS.md](AGENTS.md) and [spec.md](spec.md)
+before contributing.

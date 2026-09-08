@@ -185,7 +185,7 @@ through user actions, and wait for interactability with bounded predicates inste
 ### 6.3 Android (frozen)
 
 The emulator-based path from the first version remains selectable. It receives no new features in this
-version. Its operating instructions are in [docs/legacy-android.md](docs/legacy-android.md).
+version. Its operating instructions are in [docs/history/legacy-android.md](docs/history/legacy-android.md).
 
 ## 7. Client builds and automation contract
 
@@ -338,10 +338,7 @@ Documented as roadmap, not required by this version:
 | Document | Purpose |
 |---|---|
 | [README.md](README.md) | Installation, quick start and command reference |
-| [docs/HANDOFF.md](docs/HANDOFF.md) | Where execution stopped and how to resume |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | Current state, open work and how to resume |
 | [docs/acceptance-ledger.md](docs/acceptance-ledger.md) | Per-platform acceptance ledger |
 | [docs/runbook.md](docs/runbook.md) | Failure categories and operator responses |
-| [docs/stack.md](docs/stack.md) | Workspace and crate rationale |
-| [docs/mobile-v2-inventory.md](docs/mobile-v2-inventory.md) | App v2 screens and controls relevant to automation |
-| [docs/legacy-android.md](docs/legacy-android.md) | Frozen Android emulator path |
-| [docs/history/spec-v0.3.md](docs/history/spec-v0.3.md) | Previous specification, task plan and attempt ledger |
+| [docs/history/](docs/history/) | Archived material: spec v0.3 with its plan and attempt ledger, the Android guide, the app v2 inventory and the crate rationale |

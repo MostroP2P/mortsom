@@ -1,4 +1,4 @@
-# Stack selection (archived spec §12, Phase 0.1; see docs/history/spec-v0.3.md)
+# Crate selection rationale (archived; written against spec v0.3 §12)
 
 Mortsom is Rust only. Linux/Web with app v2 and the persistent Ortsom regtest stack are the current
 default workflow; Android services below describe the preserved legacy path. This document records which crates fill each role and

@@ -5,16 +5,16 @@ Guidance for AI agents and human contributors working on Mortsom.
 ## Project
 
 Mortsom is a black-box, end-to-end test harness for Mostro app v2. It drives
-independent Alice/Bob clients on Linux (default) or Web against a persistent
-Ortsom-owned local stack. Android remains the selectable legacy path and is
-not being extended in the current checkpoint. Read `spec.md` before touching
-anything; it is normative, and each phase has an exit gate. When resuming
-interrupted work, also read `docs/HANDOFF.md`. The immediate acceptance target
-is happy_sell and happy_buy on both Linux and Web, then stop for operator review.
+independent Alice/Bob clients on Linux (default) or Web against a local regtest
+stack that Mortsom itself owns. Android remains the selectable frozen path and
+is not being extended. Read `spec.md` before touching anything; it is
+normative. When resuming interrupted work, also read `docs/HANDOFF.md`. The
+immediate acceptance target is happy_sell and happy_buy on both Linux and Web.
 
-Ortsom (`../ortsom`) is the sibling harness for the daemon and protocol. The
-two projects share concepts and selected artifacts, never source code or a
-runner.
+Ortsom (`../ortsom`) is the sibling harness for the daemon and protocol. It is
+reading material for how a regtest stack is built; Mortsom must not depend on
+it at runtime and never copies its source. The current code still delegates
+`stack` commands to it; that is a known gap tracked in `docs/HANDOFF.md`.
 
 ## Language policy
 
