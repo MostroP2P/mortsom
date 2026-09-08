@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 26 completed, 5 in progress and 34 pending.
+current evidence separately. Section 17 tracks 65 tasks: 27 completed, 4 in progress and 34 pending.
 Live checkpoint acceptance remains Linux 0/2 and Web 0/2.
 
 ## 1. Objective and completion criteria
@@ -704,10 +704,11 @@ observers.
   treating that state as AlreadyClosed.
   Verify a positive terminal state plus payment outcome or a completed cooperative cancellation and refund;
   surface unresolved cleanup as failure. This task and G3 remain unaccepted.
-- [ ] **IN PROGRESS — P4.2 Add happy_buy.** Keep Alice seller/Bob buyer while reversing maker/taker creation. Follow
+- [x] **P4.2 DONE — Add happy_buy.** Keep Alice seller/Bob buyer while reversing maker/taker creation. Follow
   the buy-order prerequisites: Alice pays the seller hold first, then maker Bob submits the buyer payout
   invoice. Share final settlement assertions without forcing the sell-order invoice sequence or duplicating
-  platform-specific flow code.
+  platform-specific flow code. Four injected behavioral tests and the full workspace checks pass;
+  independent review passed. This completes the narrative implementation, not live acceptance (P3.6/P3.7).
 - [ ] **TODO — P3.6 Accept both Linux happy paths from fresh actors.** Run happy_sell and happy_buy as
   separate invocations; record correlated evidence and complete cleanup under distinct run IDs.
 - [ ] **TODO — P3.7 Accept both happy paths on Web.** Run the same business assertions, with their correct
@@ -970,19 +971,19 @@ absence of spend; this deliberately retains profiles for reconciliation.
 
 | Task | Implemented files / behavior | Verified so far | Remaining acceptance |
 |---|---|---|---|
-| P2.5 | `desktop-driver/native.rs`, `native_retry.rs`: typed stale-object retries for reads/focus/text; business taps are never replayed after invocation | Native regression tests and real Linux form readback | Final combined checks/review |
+| P2.5 | `desktop-driver/native.rs`, `native_retry.rs`: typed stale-object retries for reads/focus/text; business taps are never replayed after invocation | Native regression tests, real Linux form readback and final combined checks/review passed | G2 complete; later book-tab merge regression corrected during G3 |
 | P2.11 | App v2 `e83cd8f`; coordinated semantic names, sidebar, payout state/polling and manual invoice readouts | Full app checks and independent commit review passed | No outstanding implementation task; trade behavior still needs G3 |
-| P2.12 | `desktop-driver/storage.rs`, Linux/Web lifecycle: private Fresh/Resume profiles and durable active-runtime markers | Forty driver tests; both real two-actor cross-handle recovery probes | Final combined checks and commit review |
-| P2.12 | `coordinator/recovery_store.rs`, `fingerprint/capture.rs`, `run/recovery/`, `cli/recover.rs`: atomic journal, persistent captured bundle, exact identities/origin/stack, UI cleanup and verified deletion | Reopen/tamper/write-failure tests; ten coordinator recovery regressions including payout-pending completion, duplicate settlement refusal and Bob-owned orders | Final evidence-write tests, combined checks and review |
+| P2.12 | `desktop-driver/storage.rs`, Linux/Web lifecycle: private Fresh/Resume profiles and durable active-runtime markers | Forty driver tests; both real two-actor cross-handle recovery probes; combined checks/review passed | G2 complete |
+| P2.12 | `coordinator/recovery_store.rs`, `fingerprint/capture.rs`, `run/recovery/`, `cli/recover.rs`: atomic journal, persistent captured bundle, exact identities/origin/stack, UI cleanup and verified deletion | Reopen/tamper/write-failure tests; ten coordinator recovery regressions including payout-pending completion, duplicate settlement refusal and Bob-owned orders | G2 complete; post-commit recovery.json ordering correction also tested |
 | P3.1–P3.2 | V2 `screens/orders.rs`, `scenario-kit/actions.rs`, `journal.rs`: form readback, durable submission intent, a single submit, public discovery after uncertainty | Real form probes; write-failure and single-publication regressions | Successful creation/discovery in the four target runs |
-| P3.3–P3.4 | `actions/buyer_invoice.rs`, `actions/hold.rs`, `environment/lnd/`, `run/recovery/payments.rs`: exact invoice amount/hash, bounded in-flight observation, escrow-plus-fee reservation, terminal UI and ledger verification | Invoice/readback tests, 75 environment tests, recovery payment regressions | Final hold ownership regression and all live funded paths |
-| P3.5 | `run/execute.rs`, `world_execution.rs`, `run/report.rs`: payout-pending wait, truthful cancellation, protected retention, public cleanup status, fail-closed evidence writes | Reopened cleanup and identity/stack mismatch regressions | Evidence-write failure regression, live cleanup and final review |
+| P3.3–P3.4 | `actions/buyer_invoice.rs`, `actions/hold.rs`, `environment/lnd/`, `run/recovery/payments.rs`: exact invoice amount/hash, bounded in-flight observation, escrow-plus-fee reservation, terminal UI and ledger verification | Invoice/readback tests, 75 environment tests, recovery payment regressions | Hold ownership regression passed; all live funded paths remain pending |
+| P3.5 | `run/execute.rs`, `world_execution.rs`, `run/report.rs`: payout-pending wait, truthful cancellation, protected retention, public cleanup status, fail-closed evidence writes | Reopened cleanup and identity/stack mismatch regressions | Evidence-write regressions passed; first unfunded live UI cleanup passed; funded live cleanup remains pending |
 | P4.2 | `scenarios/src/smoke/happy_buy.rs`, shared `flow.rs`: Bob creates buy, Alice funds first, Bob invoices next | Four injected flow tests including wrong ordering/cap/payment failures | Linux and Web happy_buy live passes |
 | P7.6 | README desktop quickstart and runbook recovery instructions | Commands checked against current CLI/config | Confirm commands against four passing live runs |
 
-Next, in order: finish the two outstanding failure-path regressions; run formatting, workspace clippy and
-relevant tests; close G2 with independent review; run happy_sell and happy_buy separately on Linux, then
-on Web, fixing failures and preserving their evidence; finish coverage/reviews and record the four successful
+Next, in order: verify the corrected native book-tab selector in happy_sell, then run happy_buy on Linux;
+run both scenarios separately on Web, fixing failures and preserving their evidence; finish coverage/reviews
+and record the four successful
 run IDs. Stop at that checkpoint. No deferred scenario or resource-benchmark run is authorized by this plan.
 
 Final combined verification for G2 passed: `cargo fmt --all`,
@@ -992,3 +993,30 @@ Final combined verification for G2 passed: `cargo fmt --all`,
 app commit and evidence-write reviews found no remaining blocker for G2. Prepayment and pending-hold
 ownership regressions now pass; ambiguous NWC UI errors also retain InFlight budget because they do not
 prove no payment occurred. This is an accounting safety correction, not Android feature work.
+
+First G3 live attempt: Linux `happy_sell`, run `20260908T160318Z-e617fd03c704`, created order
+`911fcef1-b3eb-497b-8018-3f3c2d97071d` through UI and observed its public pending event. Bob's take journey
+then failed because `order.book.tab.buy` was absent from the native semantic lookup even though the tab
+was visibly present. No invoice or payment occurred. Cleanup canceled the order through Alice's UI,
+verified terminal state, stopped both clients and removed profiles; no stack reset was needed. Log:
+`/tmp/mortsom-checkpoint-happy-sell-linux.log`; full evidence remains in `artifacts/<run-id>/`.
+This is a failed scenario (Linux 0/2, Web 0/2), and the tab semantic merge is under diagnosis.
+
+Post-commit review of recovery commit `bf2e86e` found that `recovery.json` was written after storage deletion.
+A narrow correction/test is underway to persist resolution evidence before deletion. Final reporting
+cannot be one atomic transaction with profile deletion: after verified resolution, a final report-write
+failure may leave the closed durable manifest and a conservative earlier retained=true report.
+The run must fail reporting acceptance in that case; it must never claim evidence writes succeeded.
+
+The first Linux take failure was reproduced in a native parser regression. Flutter's public TabBar node
+name is `Tab 2 of 2\n[mortsom:order.book.tab.sell]\nSell BTC`, so a beginning-of-name-only parser missed
+both tabs. Native lookup now accepts one valid marker at a line boundary and refuses ambiguous multiple
+markers or embedded prose matches. A coordinated app widget test verifies the actual merged label and
+public tap action (five armed Linux accessibility tests now pass). This changes harness lookup and the
+written contract only; existing app binaries remain valid. Native task commit `914f758` and happy-buy
+narrative commit `a556560` passed independent post-commit review.
+
+The recovery.json ordering regression also passed after recording evidence before deletion. Three focused
+coordinator tests include six invalid evidence leaves, clean deletion, and a final summary-write failure
+whose closed durable manifest stays authoritative. Strict coordinator clippy passed. Evidence logs are
+`/tmp/mortsom-recovery-evidence-order-{red,green,clippy}.log`.

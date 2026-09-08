@@ -5,6 +5,10 @@ what to do when a run fails, how to recover a host, how secrets are rotated
 and how incidents are handled. Every command below is `mortsom …`; nothing
 here bypasses the safety switches described in `README.md`.
 
+The active target is app v2 on Linux/Web with the persistent Ortsom stack. Follow the desktop commands
+at the top of [`README.md`](../README.md). Android/emulator sections below describe the legacy path.
+Desktop runs never automatically retry an infrastructure failure with the same actor profiles.
+
 ## 1. Read the failure category first
 
 `summary.json` and the published `publish.json` classify every scenario:
@@ -13,8 +17,8 @@ here bypasses the safety switches described in `README.md`.
 |---|---|---|
 | `product` | the app misbehaved: wrong state, wrong copy, illegal transition, repeated protocol message | never retried; file an app bug with the timeline and screenshots |
 | `automation-contract` | a stable id or bootstrap hook the app promised is missing | never retried; fix the app branch (`docs/automation-contract.md` in the mobile repo) or the adapter |
-| `test-infrastructure` | emulator, Appium, adb, Docker or host tooling failed | retried once by the runner, unless the attempt already moved sats |
-| `relay` | the run relay failed or evidence never arrived | retried once as above; check the container log |
+| `test-infrastructure` | emulator, Appium, adb, Docker or host tooling failed | Android: retried once unless the attempt moved sats; desktop: no automatic retry |
+| `relay` | the run relay failed or evidence never arrived | Android: retried once as above; desktop: no automatic retry; check the container log |
 | `wallet` | a dedicated wallet failed, rejected or timed out | never retried; see §4 |
 | `environment-misconfiguration` | configuration, secrets or prerequisites wrong or missing | fix and rerun `doctor` |
 
@@ -87,20 +91,39 @@ After any interrupted or failed run:
 mortsom cleanup <run-id>
 ```
 
-It removes that run's relay container, shuts down Mortsom's own emulators
-(never a foreign AVD on the same slot) and prints the orders the run's own
-sweep left open, taken from `cleanup.json`. It **cannot** cancel orders: for
-each `UNRESOLVED order`, open the maker's app (Alice) on a device, cancel
-it, and if the order is funded ask the counterpart (Bob) to accept the
-cooperative cancel. If `cleanup.json` is missing the run died before its
-sweep and the orders are `UNKNOWN`: check both apps' trade lists.
+For a desktop journal with no business-action intents, or one already durably marked resolved before
+storage deletion was interrupted, cleanup only verifies stopped runtime markers and finishes removal.
+This offline path needs no stack, bundle rebuild or UI sessions and prints its result without a new run
+report. The original journal records completion.
 
-The next run starts with `mortsom doctor`; a clean host shows no
-`mortsom-relay-*` container and no `mortsom-*` emulator running.
+Otherwise, for Linux/Web, the command opens the original protected recovery journal and checks that the current
+stack and captured client bundle match. It restores the same Alice/Bob public identities without clearing
+storage or generating keys, discovers uncertain submissions through their trade lists, and uses ordinary
+cancellation controls. Completed orders require both clients' terminal state and exact wallet settlement
+proof. Canceled orders require verified outgoing failure/refund and cancellation of tracked unused buyer
+invoices. It never retries a payment or releases an escrow as part of cleanup.
+
+Check `cleanup.json`, `recovery.json`, `wallet-payments.json` and the timeline. Retained profiles live outside
+artifacts at `$HOME/.local/state/mortsom/recovery/<original-run-id>`. They are deleted only after verified
+resolution and complete client shutdown. A cleanup attempt writes a new report that references the original
+run; it does not rewrite the failed scenario into a pass. A new desktop run is refused while a journal is
+unresolved, even when another config or artifact directory is selected.
+
+A killed coordinator leaves an active-runtime marker. Do not delete that marker or the profiles merely to
+bypass the refusal: first reconcile the owned client processes. Automatic orphan reconciliation is pending.
+An intent recorded just before an interrupted payment call can remain unknown and requires reconciliation;
+unknown never means refunded. Stack mismatch or missing/changed protected files also refuses cleanup.
+Keep the original stack available. An explicit regtest `stack down`/`stack up` discards that environment;
+it is not proof of UI cancellation or refund, and fresh app builds are needed for its new identity.
+
+Historical Android runs retain the earlier behavior: cleanup removes owned relay/emulator resources and
+reports unresolved orders from `cleanup.json`. That path cannot reopen deleted profiles or cancel their
+orders automatically. Inspect both apps if the original run never wrote a cleanup report.
 
 ## 7. Secret rotation
 
-Secrets are only ever `env:` references: the wallet credentials each backend
+Configured secrets use `env:` references; desktop stack bindings additionally use validated Ortsom
+credential-file references without copying their contents into config or artifacts. Wallet credentials each backend
 needs (`MORTSOM_*_NWC` for NWC, or the host, macaroon and certificate of an
 LND node), plus `MORTSOM_MOSTRO_SETTINGS_FILE` and `MORTSOM_MAINNET_CONFIRM`.
 

@@ -71,3 +71,8 @@ digest, running daemon digest, declared limits, correlated evidence locations
 and cleanup result. Include any retained failed attempts; a later clean run
 must not erase their diagnosis. Advance a specification task only when its
 stated verification is satisfied.
+
+Linux checkpoint attempt `20260908T160318Z-e617fd03c704` created sell order
+`911fcef1-b3eb-497b-8018-3f3c2d97071d` and observed pending, then failed on Bob's missing native
+`order.book.tab.buy` selector. No payments or invoices occurred. UI cancellation and complete client/profile
+cleanup passed; the persistent stack survived. This is not an accepted happy_sell run.

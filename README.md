@@ -8,17 +8,61 @@ End-to-end test harness for the [Mostro](https://github.com/MostroP2P) mobile
 application. *Mortsom* is *Mostro Mobile* written backwards: it watches a real
 trade from the user's side of the screen.
 
-Mortsom drives two installations of the app (Alice and Bob) on independent
-Android emulators against a locally operated Mostro daemon and a run-owned
-Nostr relay, using only what a user can see and do. It is written entirely in
-Rust; Appium with UiAutomator2 runs as an external service reached through the
-W3C WebDriver protocol.
+Mortsom drives independent Alice and Bob clients of [Mostro app v2](https://github.com/MostroP2P/app)
+through their public UI against a persistent Ortsom regtest stack. Linux is the default target; Web uses
+separate Chromium profiles. Android remains selectable as the existing legacy path and is not being
+extended in this checkpoint. The harness is written in Rust.
 
 See [`spec.md`](./spec.md) for the design document, [`AGENTS.md`](./AGENTS.md)
 for contributor policy, and [`docs/stack.md`](./docs/stack.md) for the crate
 selection.
 
-## Getting started
+## Linux and Web checkpoint
+
+The implementation and live acceptance status are tracked in [`spec.md`](./spec.md), especially sections
+1.1, 17 and 18.12. The current review checkpoint is **happy_sell and happy_buy on Linux and Web**.
+The four live scenario cells are still pending; passing build or recovery probes does not mean a trade passed.
+
+```sh
+cargo build -p mortsom-coordinator
+# Delegates to ../ortsom: ortsom stack up, then verifies its public status.
+./target/debug/mortsom stack up
+./target/debug/mortsom stack status
+./target/debug/mortsom doctor --platform linux
+./target/debug/mortsom doctor --platform web
+# Each invocation creates fresh, independent Alice/Bob clients.
+./target/debug/mortsom run happy_sell
+./target/debug/mortsom run happy_buy --platform linux
+./target/debug/mortsom run happy_sell --platform web
+./target/debug/mortsom run happy_buy --platform web
+```
+
+The default config is `config/desktop.example.toml`. It selects `mobile-v2`, source `../mobilev2` and
+explicit local spend caps. Set `mobile.source_dir` in a private config if the app checkout is elsewhere;
+pass it with `--config`. Stack connection references resolve in memory. Keep credentials in their original
+protected files or environment references. Both actor wallets must be the configured external LND wallets.
+The stack survives client runs; `stack down` explicitly destroys its regtest state.
+
+Source builds require the app's Flutter/Rust bridge build tools. Linux also needs Xvfb, AT-SPI, D-Bus and
+libsecret/keyring support; Web needs matching Chromium and ChromeDriver. Doctor checks the actual selected
+path. For runs, select Xvfb with `--xvfb`; Web tool overrides are `MORTSOM_CHROMEDRIVER` and
+`MORTSOM_BROWSER`. Recovery also accepts `MORTSOM_XVFB`.
+Use `--app-artifact /absolute/path/to/bundle/mostro` on Linux or `--app-artifact /absolute/path/to/build/web`
+to reuse a complete build. Builds must target the current stack identity; rebuild after a stack reset.
+A supplied build has a verified content fingerprint but explicitly unknown source history in its run report.
+
+Failed desktop runs can retain private actor profiles and a captured bundle under
+`$HOME/.local/state/mortsom/recovery/<run-id>`. `mortsom cleanup <run-id>` reopens those identities against
+the original stack and performs supported cancellation through UI, then verifies tracked wallet outcomes.
+Unresolved ownership blocks a new desktop run. `cleanup.json` and `recovery.json` record retention; no
+profile credentials enter artifacts. An abrupt process kill leaves an active-runtime marker and requires
+owned-process reconciliation before reuse; automatic orphan reconciliation is not implemented.
+
+## Legacy Android setup
+
+The following instructions describe the existing Android workflow. Select `--platform android` and the
+legacy configuration explicitly for scenario runs or doctor; this workflow is outside the current checkpoint.
+
 
 ### What Mortsom is doing, in one picture
 
@@ -436,10 +480,9 @@ cached path with `hash -r`.
 
 ## Safety
 
-Mortsom moves real sats on mainnet through the wallets the operator provides.
-It refuses value-moving scenarios unless `run.allow_mainnet = true` **and**
-`MORTSOM_MAINNET_CONFIRM=I_ACCEPT_MAINNET_SPEND` are both present, and it
-never runs without per-order and per-run spend caps.
+Mortsom requires explicit per-order and per-run spend caps on every lane. Mainnet use additionally
+requires `run.allow_mainnet = true` and `MORTSOM_MAINNET_CONFIRM=I_ACCEPT_MAINNET_SPEND`.
+The desktop checkpoint uses the verified local regtest stack and its dedicated LND wallets.
 
 ## Commands
 
@@ -452,17 +495,15 @@ never runs without per-order and per-run spend caps.
 | `mortsom device smoke` | Boots both emulators, installs the app, opens Appium sessions. | no |
 | `mortsom app setup` | Onboards Alice and Bob through the UI, connects wallets, relay and node. | no |
 | `mortsom run [--tag <tag>] [scenario…]` | Runs scenarios end to end with observers, caps and cleanup. | per scenario |
-| `mortsom cleanup <run-id>` | Removes the run's relay container and Mortsom's emulators; reports orders the run left open. | no |
+| `mortsom cleanup <run-id>` | Recovers desktop identities/orders or cleans legacy Android resources. | no |
 | `mortsom publish <run-id> --out <dir> [--screenshots all\|none]` | Sanitized bundle for CI: redacted text evidence, screenshots by policy, manifest with retry classification. | no |
 | `mortsom accounting [--lane <lane>]` | Spend and outcome trend across runs (`accounting.md/json` in the artifacts dir). | no |
 | `mortsom parity <run-a> <run-b> [--intentional <toml>]` | Cross-app parity of two runs against different profiles (outcome, state path, relay, wallet, cleanup, contract). | no |
 
-`mortsom cleanup` reads `<artifacts_dir>/<run-id>/cleanup.json` and prints any
-order the run's own sweep could not close. It cannot cancel orders itself
-(that needs a device session), so it says so instead of reporting success.
-An emulator on a Mortsom slot is only shut down when it is Mortsom's AVD.
-`mortsom run` takes a host-wide lock (`<artifacts_dir>/.mortsom-run.lock`)
-and refuses to start while another run holds it.
+Desktop cleanup behavior is described above and in the runbook. Historical Android cleanup reads the
+artifact report and removes owned emulator/relay resources; it cannot cancel orders itself.
+Runs and stack mutations take a host-wide lock under the canonical
+`$HOME/.local/state/mortsom` directory, independent of artifact/configuration paths.
 
 ## CI and canary
 
@@ -488,20 +529,19 @@ recovery, secret rotation and incident response.
 `network.mostro.app`, `mortsom.toml.example`) or `mobile-v2` (`../mobilev2`,
 package `foundation.mostro.app`, `config/mobile-v2.example.toml`). Both
 adapters expose the same `AppAdapter` contract; scenarios never see either
-app's identifiers or copy. The v2 inventory and the automation contract the
-v2 app must adopt are in [`docs/mobile-v2-inventory.md`](./docs/mobile-v2-inventory.md);
-until it does, a v2 run fails at onboarding with an `automation-contract`
-failure rather than a false pass. Scenarios tagged `parity` run against
-both profiles in separate jobs and `mortsom parity` compares them.
+app's identifiers or copy. [`docs/mobile-v2-inventory.md`](./docs/mobile-v2-inventory.md) records the original
+inventory; the coordinated app contract is maintained in the app repository. Current Linux/Web builds
+pass onboarding and identity recovery; the trade acceptance ledger remains in `spec.md`.
+The existing parity command compares separate profile reports.
 
 ## Scenario catalogue
 
 `mortsom list` is authoritative. Scenarios marked *value* pay a real hold
-invoice and always finish (or cooperatively cancel) their trade.
+invoice and must finish or safely cancel their trade; failed cleanup remains an explicit failure.
 
 | Suite | Scenarios |
 |---|---|
-| smoke | `happy_sell` (value) |
+| smoke | `happy_sell`, `happy_buy` (value) |
 | recovery / restart | `restart_at_pending`, `restart_at_taken`, `restart_at_active` (value), `restart_at_fiat_sent` (value), `restart_at_completed` (value) — force-stop and relaunch, same state restored, no repeated protocol message |
 | recovery / interruption | `background_at_taken`, `network_loss_at_taken`, `rotation_at_taken`, `relay_restart_at_taken`, `duplicate_events_at_taken`, `stale_event_at_taken` |
 | recovery / wallet | `nwc_cancel_payment`, `wallet_unavailable_then_pay` (value) |
