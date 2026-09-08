@@ -1,11 +1,12 @@
 //! Platform-neutral ownership of actor sessions.
+use super::{DesktopFactory, DesktopServer};
 use mortsom_android_driver::{
     avd::Actor,
     farm::{DeviceFarm, TeardownItem},
-    process::{CommandRunner, TokioRunner},
+    process::CommandRunner,
     ui::UiSession,
 };
-use mortsom_desktop_driver::{Platform, linux::LinuxSession, server::WebServer, web::WebSession};
+use mortsom_desktop_driver::Platform;
 use std::{path::PathBuf, sync::Arc};
 
 /// Built client artifact and selected runtime.
@@ -54,40 +55,42 @@ pub(super) enum Farm {
     Android(DeviceFarm),
     Desktop {
         sessions: Vec<(Actor, Arc<dyn UiSession>)>,
-        server: Option<WebServer>,
+        server: Option<Box<dyn DesktopServer>>,
         bundle: Arc<crate::fingerprint::CapturedBundle>,
         app_version: Option<String>,
     },
 }
 
 impl Farm {
-    pub(super) async fn desktop(options: &DesktopOptions) -> Result<Self, String> {
+    pub(super) async fn desktop(
+        options: &DesktopOptions,
+        factory: &dyn DesktopFactory,
+    ) -> Result<Self, String> {
         options.verify().await?;
-        let server = if options.platform == Platform::Web {
-            Some(
-                WebServer::start_owned(&options.artifact, Arc::clone(&options.bundle))
-                    .await
-                    .map_err(|e| e.to_string())?,
-            )
+        let mut server = if options.platform == Platform::Web {
+            Some(factory.server(options).await?)
         } else {
             None
         };
         let mut sessions = Vec::new();
         for actor in Actor::ALL {
-            let session: Arc<dyn UiSession> = match &server {
-                Some(server) => Arc::new(WebSession::new(
-                    Arc::new(TokioRunner),
-                    server.url().into(),
-                    options.chromedriver.clone(),
-                    options.browser.clone(),
-                )),
-                None => Arc::new(LinuxSession::new(
-                    Arc::new(TokioRunner),
-                    options.artifact.clone(),
-                    options.xvfb.clone(),
-                )),
-            };
-            sessions.push((actor, session));
+            match factory.session(actor, options, server.as_ref().map(|server| server.url())) {
+                Ok(session) => sessions.push((actor, session)),
+                Err(cause) => {
+                    let mut failures = vec![cause];
+                    for (actor, session) in &sessions {
+                        if let Err(cause) = end_session(session.as_ref()).await {
+                            failures.push(format!("{actor} cleanup: {cause}"));
+                        }
+                    }
+                    if let Some(server) = server.as_mut()
+                        && let Err(cause) = server.stop().await
+                    {
+                        failures.push(format!("Web server cleanup: {cause}"));
+                    }
+                    return Err(failures.join("; "));
+                }
+            }
         }
         Ok(Self::Desktop {
             sessions,
@@ -126,14 +129,14 @@ impl Farm {
             } => {
                 let mut items = Vec::new();
                 for (actor, session) in sessions {
-                    let result = session.end().await;
+                    let result = end_session(session.as_ref()).await;
                     items.push(TeardownItem {
                         resource: format!("{actor} desktop"),
                         ok: result.is_ok(),
                         error: result.err().map(|e| e.to_string()),
                     });
                 }
-                if let Some(server) = server {
+                if let Some(mut server) = server {
                     let result = server.stop().await;
                     items.push(TeardownItem {
                         resource: "Web bundle server".into(),
@@ -146,3 +149,18 @@ impl Farm {
         }
     }
 }
+
+async fn end_session(session: &dyn UiSession) -> Result<(), String> {
+    if let Err(first) = session.end().await {
+        tracing::warn!(reason = %mortsom_common::Redactor::default().redact(&first.to_string()), "retrying owned desktop shutdown");
+        session
+            .end()
+            .await
+            .map_err(|last| format!("first shutdown: {first}; retry: {last}"))?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "farm_tests.rs"]
+mod tests;

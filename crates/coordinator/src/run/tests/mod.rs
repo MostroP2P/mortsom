@@ -582,6 +582,7 @@ async fn run(
         })
     }
     let deps = RunDeps {
+        desktop_factory: &crate::run::RealDesktopFactory,
         net: None,
         runner: &runner,
         ui: &ui,

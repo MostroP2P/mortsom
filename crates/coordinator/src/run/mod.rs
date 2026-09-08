@@ -11,6 +11,8 @@ mod report;
 pub use observer::{LiveObserver, ObserverFactory};
 pub use report::RunSummary;
 use report::finish;
+mod desktop_factory;
+pub use desktop_factory::{DesktopFactory, DesktopServer, RealDesktopFactory};
 mod farm;
 pub use farm::DesktopOptions;
 use farm::Farm;
@@ -106,6 +108,8 @@ pub type WalletFactory<'a> = dyn for<'b> Fn(&'b str, &'b WalletConfig) -> BoxFut
 
 /// Everything the runner needs from the outside world.
 pub struct RunDeps<'a> {
+    /// Desktop session/server construction boundary.
+    pub desktop_factory: &'a dyn DesktopFactory,
     /// Process runner.
     pub runner: &'a dyn CommandRunner,
     /// UI driver.
@@ -519,7 +523,7 @@ impl<'a> World<'a> {
 
     async fn bring_up_farm(&self, summary: &mut RunSummary) -> Result<Farm, String> {
         if let Some(options) = &self.desktop {
-            return Farm::desktop(options).await;
+            return Farm::desktop(options, self.deps.desktop_factory).await;
         }
         let apk = resolve_apk(self.config, self.deps)
             .await

@@ -70,6 +70,7 @@ pub(super) async fn run_command(
         config.mostro.health_timeout_secs,
     ));
     let deps = RunDeps {
+        desktop_factory: &crate::run::RealDesktopFactory,
         net: Some(&net),
         runner: &TokioRunner,
         ui: &ui,

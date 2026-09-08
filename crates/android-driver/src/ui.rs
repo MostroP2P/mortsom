@@ -217,9 +217,14 @@ pub mod tests_support {
         swallowed: Mutex<BTreeMap<String, u32>>,
         /// Controls the app has greyed out while it works.
         disabled: Mutex<Vec<String>>,
+        end_failures: Mutex<u32>,
     }
 
     impl ScriptedUi {
+        /// Injects transient shutdown failures while retaining this fake session.
+        pub fn fail_end_times(&self, failures: u32) {
+            *self.end_failures.lock().unwrap() = failures;
+        }
         /// Marks `ids` as present.
         pub fn present(&self, ids: &[&str]) {
             self.present
@@ -476,6 +481,15 @@ pub mod tests_support {
             Ok(())
         }
         async fn end(&self) -> Result<(), AppiumError> {
+            let mut failures = self.end_failures.lock().unwrap();
+            if *failures > 0 {
+                *failures -= 1;
+                self.calls.lock().unwrap().push("end failed".into());
+                return Err(AppiumError::WebDriver(
+                    crate::webdriver::WebDriverError::Transport("injected cleanup failure".into()),
+                ));
+            }
+            self.calls.lock().unwrap().push("end session".into());
             Ok(())
         }
     }
