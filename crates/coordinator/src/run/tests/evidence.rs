@@ -10,13 +10,14 @@ async fn failed_teardown_evidence_retains_profiles_and_fails_acceptance() {
         files::TIMELINE,
         files::TIMELINE_JSON,
         "relay-container.log",
+        "recovery.json",
     ] {
         let (summary, retained) = teardown_with_evidence_failure(Some(leaf)).await;
         assert!(!summary.passed, "{leaf}: missing evidence accepted");
         assert!(retained, "{leaf}: recovery profiles removed");
         assert!(
             summary.checks.checks.iter().any(|check| {
-                check.name == "teardown-evidence"
+                matches!(check.name.as_str(), "teardown-evidence" | "recovery-report")
                     && check.status == CheckStatus::Fail
                     && check.detail.contains(leaf)
             }),
@@ -36,6 +37,15 @@ async fn successful_teardown_evidence_allows_clean_profile_removal() {
     assert!(summary.passed, "{}", summary.checks.render());
     assert!(!retained);
     assert!(!summary.recovery.unwrap().retained);
+}
+
+#[tokio::test]
+async fn final_report_failure_keeps_the_durable_resolution_authoritative() {
+    let (summary, retained) = teardown_with_evidence_failure(Some(files::SUMMARY)).await;
+    assert!(!retained);
+    let recovery = summary.recovery.unwrap();
+    assert!(!recovery.retained);
+    assert!(recovery.resolution_verified);
 }
 
 async fn teardown_with_evidence_failure(leaf: Option<&str>) -> (RunSummary, bool) {
@@ -77,7 +87,27 @@ async fn teardown_with_evidence_failure(leaf: Option<&str>) -> (RunSummary, bool
     );
     attach_evidence_sources(&mut world, &fixture);
     world.tear_down(&mut summary).await;
-    let _report = super::super::report::finish(&artifacts, &mut summary);
+    let report = super::super::report::finish(&artifacts, &mut summary);
+    if leaf == Some(files::SUMMARY) {
+        assert!(
+            report.is_err(),
+            "final report failure must propagate to the caller"
+        );
+        let reopened = crate::recovery_store::FileJournal::open(journal.root()).unwrap();
+        assert!(reopened.snapshot().closed);
+        assert!(reopened.snapshot().resolution_verified);
+    }
+    if leaf != Some("recovery.json") {
+        let evidence: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(artifacts.file("recovery.json").unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(evidence["retained"], !journal.snapshot().closed);
+        assert_eq!(
+            evidence["resolution_verified"],
+            journal.snapshot().resolution_verified
+        );
+    }
     (summary, journal.root().join("actors").exists())
 }
 

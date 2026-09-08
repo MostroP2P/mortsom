@@ -166,6 +166,9 @@ mod payments;
 pub(super) use payments::verify_payments;
 
 pub(super) fn finish(journal: &FileJournal, summary: &mut RunSummary, artifacts: &RunArtifacts) {
+    // Persist the recovery facts while profiles still exist. Failure joins the
+    // other evidence checks and therefore prevents the deletion boundary.
+    write_recovery_evidence(&journal.snapshot(), summary, artifacts);
     let can_remove = summary
         .cleanup
         .as_ref()
@@ -189,14 +192,37 @@ pub(super) fn finish(journal: &FileJournal, summary: &mut RunSummary, artifacts:
         retained: !manifest.closed,
         resolution_verified: manifest.resolution_verified,
     });
-    if let Err(error) = artifacts.write_json("recovery.json", &serde_json::json!({"run_id": manifest.run_id, "retained": !manifest.closed, "events": manifest.events})) {
-        summary.checks.push("recovery-report", CheckStatus::Fail, error.to_string());
+    if can_remove {
+        // Filesystem deletion and public reports cannot be one atomic change.
+        // A failure here leaves the pre-deletion report conservatively retained;
+        // the durable journal remains authoritative for completed resolution.
+        write_recovery_evidence(&manifest, summary, artifacts);
     }
     if !manifest.closed {
         summary.checks.push(
             "recovery-storage",
             CheckStatus::Fail,
             "protected profiles retained; explicit recovery is required",
+        );
+    }
+}
+
+fn write_recovery_evidence(
+    manifest: &RecoveryManifest,
+    summary: &mut RunSummary,
+    artifacts: &RunArtifacts,
+) {
+    let evidence = serde_json::json!({
+        "run_id": manifest.run_id,
+        "retained": !manifest.closed,
+        "resolution_verified": manifest.resolution_verified,
+        "events": manifest.events,
+    });
+    if let Err(error) = artifacts.write_json("recovery.json", &evidence) {
+        summary.checks.push(
+            "recovery-report",
+            CheckStatus::Fail,
+            artifacts.redact(&format!("cannot persist recovery.json: {error}")),
         );
     }
 }
