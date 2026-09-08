@@ -37,11 +37,7 @@ pub fn label(name: &str) -> Option<(&str, &str)> {
         return None;
     }
     let (id, value) = name[index..].strip_prefix("[mortsom:")?.split_once(']')?;
-    if id.is_empty()
-        || !id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
-    {
+    if id.is_empty() || id.contains(['\n', '\r']) {
         return None;
     }
     Some((id, value))
@@ -385,6 +381,13 @@ mod tests {
         assert_eq!(label("copy [mortsom:order.book.tab.sell]"), None);
         assert_eq!(label("[mortsom:first]\n[mortsom:second]"), None);
         assert_eq!(label("[mortsom:]"), None);
+    }
+    #[test]
+    fn preserves_url_characters_in_dynamic_relay_identifiers() {
+        assert_eq!(
+            label("[mortsom:settings.relays.item.ws://127.0.0.1:7000]"),
+            Some(("settings.relays.item.ws://127.0.0.1:7000", ""))
+        );
     }
     #[test]
     fn identifies_exact_linux_contract_without_localized_copy() {

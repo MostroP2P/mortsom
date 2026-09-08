@@ -1020,3 +1020,11 @@ The recovery.json ordering regression also passed after recording evidence befor
 coordinator tests include six invalid evidence leaves, clean deletion, and a final summary-write failure
 whose closed durable manifest stays authoritative. Strict coordinator clippy passed. Evidence logs are
 `/tmp/mortsom-recovery-evidence-order-{red,green,clippy}.log`.
+
+Linux retry `20260908T161029Z-86b51b35d10b` failed during bootstrap, before any scenario attempt: the
+new native parser's character whitelist incorrectly rejected dynamic relay IDs containing `ws://`.
+The correction removes that unsupported whitelist while still refusing empty/newline IDs and ambiguous
+multiple marker lines. A URL-identifier regression reproduced the failure. No order, invoice or payment
+was created; both clients stopped, retained profiles were removed by the verified no-intent cleanup path,
+and the persistent stack remained unchanged. Logs: `/tmp/mortsom-checkpoint-happy-sell-linux-2.log` and
+`/tmp/mortsom-checkpoint-linux-2-cleanup.log`. This failed setup is not a scenario pass.
