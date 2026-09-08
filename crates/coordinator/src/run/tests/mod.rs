@@ -291,6 +291,11 @@ struct FakeAdapter {
     /// The UI flips a funded order to `cancelled` on the maker's request
     /// alone, while the daemon still holds the escrow.
     ui_claims_cancelled: bool,
+    /// App v2 behaviour observed live: the maker's own screen marks a funded
+    /// order `cancelled` on her request alone, while the daemon holds the
+    /// escrow and waits for the counterpart. Only Alice's view is affected.
+    maker_screen_lies: bool,
+    maker_lied_about: Mutex<Vec<String>>,
     /// The driver stops answering at the moment the scenario fails.
     silence_driver_on_failure: bool,
 }
@@ -313,6 +318,8 @@ impl FakeAdapter {
             created: Mutex::new(0),
             stubborn: false,
             ui_claims_cancelled: false,
+            maker_screen_lies: false,
+            maker_lied_about: Mutex::new(Vec::new()),
             silence_driver_on_failure: false,
         }
     }
@@ -479,6 +486,9 @@ impl AppAdapter for FakeAdapter {
     ) -> Result<CancelOutcome, AdapterError> {
         let mut orders = self.orders.lock().unwrap();
         let taker = device.actor == mortsom_android_driver::avd::Actor::Bob;
+        if !taker && self.maker_lied_about.lock().unwrap().contains(&order.id) {
+            return Ok(CancelOutcome::AlreadyClosed);
+        }
         match orders.get(&order.id).copied() {
             None => Ok(CancelOutcome::NotFound),
             Some(state) if state.is_terminal() => Ok(CancelOutcome::AlreadyClosed),
@@ -489,6 +499,11 @@ impl AppAdapter for FakeAdapter {
             Some(OrderState::Taken) if taker && !self.stubborn => {
                 orders.insert(order.id.clone(), OrderState::Pending);
                 Ok(CancelOutcome::Cancelled)
+            }
+            Some(OrderState::Active | OrderState::FiatSent) if !taker && self.maker_screen_lies => {
+                self.coop_pending.lock().unwrap().push(order.id.clone());
+                self.maker_lied_about.lock().unwrap().push(order.id.clone());
+                Ok(CancelOutcome::AlreadyClosed)
             }
             Some(OrderState::Active | OrderState::FiatSent) if self.ui_claims_cancelled => {
                 orders.insert(order.id.clone(), OrderState::Cancelled);
@@ -547,13 +562,19 @@ impl AppAdapter for FakeAdapter {
         {
             self.set(&order.id, OrderState::Completed);
         }
-        let state = self
+        let mut state = self
             .orders
             .lock()
             .unwrap()
             .get(&order.id)
             .copied()
             .ok_or_else(|| AdapterError::contract("unknown order"))?;
+        if device.actor == mortsom_android_driver::avd::Actor::Alice
+            && !state.is_terminal()
+            && self.maker_lied_about.lock().unwrap().contains(&order.id)
+        {
+            state = OrderState::Cancelled;
+        }
         Ok(AppOrderState {
             state,
             raw_label: state.as_str().into(),
@@ -581,11 +602,15 @@ const FAKE_ORDER_IDS: [&str; 12] = [
 /// never closes an order the UI claims is cancelled.
 struct FakeObserver {
     publish_canceled: bool,
+    /// When set, `canceled` is published for an order only after the
+    /// adapter recorded a daemon-accepted cancellation of it.
+    canceled_gate: Option<Arc<Mutex<Vec<String>>>>,
 }
 impl Default for FakeObserver {
     fn default() -> Self {
         Self {
             publish_canceled: true,
+            canceled_gate: None,
         }
     }
 }
@@ -596,6 +621,7 @@ impl ObserverFactory for FakeObserver {
         let keys = Keys::parse(NSEC).unwrap();
         let feeder = Arc::clone(&observer);
         let publish_canceled = self.publish_canceled;
+        let gate = self.canceled_gate.clone();
         tokio::spawn(async move {
             for _ in 0..200 {
                 for (id, status) in FAKE_ORDER_IDS.iter().flat_map(|id| {
@@ -611,6 +637,13 @@ impl ObserverFactory for FakeObserver {
                     .filter(move |s| publish_canceled || *s != "canceled")
                     .map(move |s| (*id, s))
                 }) {
+                    if status == "canceled"
+                        && gate
+                            .as_ref()
+                            .is_some_and(|g| !g.lock().unwrap().iter().any(|c| c == id))
+                    {
+                        continue;
+                    }
                     let event = EventBuilder::new(Kind::Custom(38383), "")
                         .tags([
                             Tag::parse(["d", id]).unwrap(),

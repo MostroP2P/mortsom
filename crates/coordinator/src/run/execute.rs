@@ -239,17 +239,24 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
         };
     }
     let outcome = match cancel_as(ctx, maker, order).await {
+        Ok(CancelOutcome::NotFound) => {
+            return CleanupResult::Done {
+                outcome: CancelOutcome::NotFound,
+            };
+        }
         Ok(outcome) => outcome,
         Err(message) => return CleanupResult::Failed { message },
     };
-    if outcome != CancelOutcome::Cancelled {
-        return CleanupResult::Done { outcome };
-    }
     // The maker's request alone closes an unfunded order; a funded one
-    // needs the counterpart's agreement.
+    // needs the counterpart's agreement. The maker's screen cannot tell
+    // the two apart: app v2 marks the order cancelled on the request itself,
+    // so a "closed" label is trusted only once the relay carries it.
     match observed_state(ctx, maker, order).await {
         Some(state) if state.is_terminal() => {
-            return confirm_closed(ctx, order, state, outcome).await;
+            match confirm_closed(ctx, order, state, outcome).await {
+                CleanupResult::Failed { .. } if state == OrderState::Cancelled => {}
+                confirmed => return confirmed,
+            }
         }
         Some(OrderState::Active | OrderState::FiatSent) => {}
         Some(state) => {
