@@ -19,6 +19,11 @@ A requirement below describes the intended result, not a claim that it is implem
 current evidence separately. Section 17 tracks 65 tasks: 27 completed, 4 in progress and 34 pending.
 Live checkpoint acceptance remains Linux 0/2 and Web 0/2.
 
+**Latest verified status (2026-09-08, 16:16 UTC):** G2 is accepted; all four live happy-path cells remain
+pending. Three Linux happy_sell attempts failed and were cleaned without payments. The current blocker is
+normal navigation after taking a sell: app v2 opens the buyer-invoice form directly, while the adapter
+expects an order-detail status node. See sections 18.12–18.14 for evidence and remaining work.
+
 ## 1. Objective and completion criteria
 
 Mortsom must launch two independent copies of app v2, Alice and Bob, against a persistent local stack managed
@@ -1028,3 +1033,40 @@ multiple marker lines. A URL-identifier regression reproduced the failure. No or
 was created; both clients stopped, retained profiles were removed by the verified no-intent cleanup path,
 and the persistent stack remained unchanged. Logs: `/tmp/mortsom-checkpoint-happy-sell-linux-2.log` and
 `/tmp/mortsom-checkpoint-linux-2-cleanup.log`. This failed setup is not a scenario pass.
+
+### 18.14 Live checkpoint attempt ledger
+
+| Run ID | Target / scenario | Last verified progress | Result and cleanup |
+|---|---|---|---|
+| `20260908T160318Z-e617fd03c704` | Linux / happy_sell | Created sell `911fcef1-b3eb-497b-8018-3f3c2d97071d`; public pending event | Failed on native book-tab lookup; UI cancellation and complete cleanup verified; no invoices/payments |
+| `20260908T161029Z-86b51b35d10b` | Linux / happy_sell | Fresh launch/onboarding | Bootstrap failed on URL-containing relay selector; no scenario attempt or order/payment; explicit no-intent cleanup removed retained profiles |
+| `20260908T161350Z-259115af1b1c` | Linux / happy_sell | Created sell `11284250-f982-43ba-8c2b-33aadbede145`; Bob found and took it | Failed waiting for order.status because app opened buyer-invoice form; UI cancellation and full cleanup verified; no invoice issued/payment |
+
+The third run's public invoice form exposed `invoice.order_id` matching the created order and
+`invoice.amount = 995`, reflecting the buyer's amount for the 1000-sat trade. It remained empty: the harness
+never issued or submitted a Lightning invoice and never paid escrow. Evidence is retained under
+`artifacts/20260908T161350Z-259115af1b1c`, with log
+`/tmp/mortsom-checkpoint-happy-sell-linux-3.log`. The persistent stack was not reset for these attempts.
+
+Immediate next implementation task: make the take journey and state observation handle the app's actual
+normal invoice/payment routes, binding any form-derived state to its exact public order identifier. Cover
+sell and buy sequencing with regressions, coordinate the written app contract, then repeat only the four
+requested happy-path cells. This blocker does not justify adding an order through a protocol side channel,
+changing app storage directly or weakening terminal payment assertions.
+
+Current commits since the G2 implementation started:
+
+| Commit | Completed change |
+|---|---|
+| `914f758` | Bounded native stale-object retries without replaying business taps |
+| `bf2e86e` | Protected desktop identity/bundle recovery, durable action intents, wallet verification and teardown evidence |
+| `a556560` | happy_buy narrative with seller funding before buyer invoicing and shared strict settlement |
+| `b6bec7c` | Native lookup recognizes Flutter's merged TabBar contract line |
+| `fbf42b3` | Recovery evidence is persisted before profile removal |
+| `c0f5b92` | G2/checkpoint progress and current desktop setup/recovery documentation |
+| `dd77f75` | Preserve URL characters in dynamic native relay identifiers |
+
+App commits are `e83cd8f` (runtime/contract fixes described above) and `ee6e4bd` (merged TabBar regression
+and documentation only; no rebuild required). Independent reviews covered the committed native, recovery,
+app and happy-buy changes; the later discovered recovery-report and URL-identifier regressions were
+corrected with failing-then-passing tests. Coverage and final delivery audit remain pending.

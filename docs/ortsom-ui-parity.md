@@ -76,3 +76,8 @@ Linux checkpoint attempt `20260908T160318Z-e617fd03c704` created sell order
 `911fcef1-b3eb-497b-8018-3f3c2d97071d` and observed pending, then failed on Bob's missing native
 `order.book.tab.buy` selector. No payments or invoices occurred. UI cancellation and complete client/profile
 cleanup passed; the persistent stack survived. This is not an accepted happy_sell run.
+
+Linux checkpoint retry `20260908T161350Z-259115af1b1c` progressed through creation and take of sell
+`11284250-f982-43ba-8c2b-33aadbede145`. Bob's public invoice form showed the exact order ID and 995 sats,
+but the adapter expected an order-detail status node and timed out. No invoice/payment was issued.
+UI cancellation, both client shutdowns and profile removal passed; happy_sell remains unaccepted.
