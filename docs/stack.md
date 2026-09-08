@@ -1,4 +1,4 @@
-# Stack selection (spec §12, Phase 0.1)
+# Stack selection (archived spec §12, Phase 0.1; see docs/history/spec-v0.3.md)
 
 Mortsom is Rust only. Linux/Web with app v2 and the persistent Ortsom regtest stack are the current
 default workflow; Android services below describe the preserved legacy path. This document records which crates fill each role and
@@ -23,7 +23,7 @@ stable releases at the time of writing; see `Cargo.toml` for the exact pins.
 
 ## Crate layout
 
-The workspace mirrors the package tree in spec §12:
+The workspace mirrors the package tree in the archived spec §12:
 
 ```
 crates/common              mortsom-common              secrets, run ids, errors, clock, logging

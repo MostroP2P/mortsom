@@ -30,7 +30,7 @@ client runs.
 
 Run these commands from the Mortsom repository. They assume the sibling checkouts and the tools described
 below are installed. Use app and Ortsom revisions containing the coordinated automation/public-stack
-contracts; the local working revisions are recorded in [the spec](spec.md#18-current-implementation-evidence).
+contracts; the local working revisions are recorded in [the archived spec](docs/history/spec-v0.3.md#18-current-implementation-evidence).
 
 ```sh
 cd ~/dev/mortsom
@@ -77,7 +77,7 @@ its services and generated state. Resolve pending runs before doing that.
 
 ## Current implementation status
 
-Status recorded on 2026-09-08; [spec.md](spec.md) is the detailed implementation plan and evidence ledger.
+Status recorded on 2026-09-08; [spec.md](spec.md) is the normative specification; the task plan and evidence ledger are archived in [docs/history/spec-v0.3.md](docs/history/spec-v0.3.md).
 
 | Area | Verified state |
 |---|---|
@@ -97,7 +97,7 @@ Flutter tests and 412 Rust tests; the current armed Linux accessibility suite ha
 These checks establish implementation evidence, not successful live trades.
 
 Three Linux `happy_sell` attempts are recorded in
-[the live attempt ledger](spec.md#1814-live-checkpoint-attempt-ledger). The latest reached creation and take,
+[the live attempt ledger](docs/history/spec-v0.3.md#1814-live-checkpoint-attempt-ledger). The latest reached creation and take,
 then timed out because the app opened the buyer-invoice form directly while the adapter expected an
 order-detail status node. Source commits `e846715` (harness) and `0ed7efb` (app) correct that transition;
 44 adapter tests and five focused app tests passed. Both client bundles must be rebuilt before the live
@@ -357,7 +357,7 @@ log alone as proof of a hang or kill unrelated browser processes. UI/state/payme
 
 A pass requires the requested scenario to pass and cleanup/evidence checks to succeed. Skipped scenarios,
 failed attempts, unfunded form probes and a regtest reset never count as a happy-path pass. See the
-[parity ledger](docs/ortsom-ui-parity.md) and [spec attempt ledger](spec.md#1814-live-checkpoint-attempt-ledger)
+[parity ledger](docs/ortsom-ui-parity.md) and [spec attempt ledger](docs/history/spec-v0.3.md#1814-live-checkpoint-attempt-ledger)
 for actual accepted results.
 
 ## Recover a failed run

@@ -1,7 +1,7 @@
 # Ortsom UI parity acceptance ledger
 
-The normative plan and task checklists are in [spec.md](../spec.md), sections
-10 and 17. Source definitions are in `../ortsom/docs/scenarios.md` and
+The normative scenario rules are in [spec.md](../spec.md), section 8; the historical
+task checklists and twenty-scenario catalogue are in [docs/history/spec-v0.3.md](history/spec-v0.3.md). Source definitions are in `../ortsom/docs/scenarios.md` and
 `../ortsom/crates/ortsom/src/scenarios/`. This ledger records actual acceptance,
 not registration or unit-test coverage.
 

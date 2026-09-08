@@ -113,7 +113,7 @@ artifacts. Coverage >=80% and final delivery audit are still pending.
 
 ## Live failures already diagnosed
 
-Full detail is in spec section 18.14 and `docs/ortsom-ui-parity.md`.
+Full detail is in the archived spec (`docs/history/spec-v0.3.md`, section 18.14) and `docs/ortsom-ui-parity.md`.
 
 | Run | Result |
 |---|---|

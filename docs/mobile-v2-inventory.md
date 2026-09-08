@@ -41,7 +41,7 @@ Back navigation; its exact commit/build/live status is recorded in `docs/HANDOFF
 | Test-environment marker | `env.marker`, shown by `lib/main_mortsom.dart` builds | Adopted (below). |
 | Accessibility identifiers | `lib/core/automation/automation_ids.dart` | Adopted (below). |
 
-## Application-facing changes for v2 (spec §17)
+## Application-facing changes for v2 (archived spec §17, docs/history/spec-v0.3.md)
 
 The v2 app adopted the same mechanism the classic app carries (its
 PR #650); the pieces are:
