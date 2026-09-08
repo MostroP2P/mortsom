@@ -9,9 +9,51 @@
 **Language policy:** English is used for code, comments, identifiers,
 documentation, commit messages, issues, logs, and error strings.
 
-**Initial target application:** `MostroP2P/mobile`, the established
-Flutter/Dart client. `mobilev2` is not an initial implementation target, but
-Mortsom is designed to support it through a separate adapter.
+**Current target application:** `MostroP2P/app`, the second-generation
+Flutter/Rust client (local checkout `../mobilev2`). Linux is the default
+execution target; Web is the alternative. Android remains selectable but
+its existing implementation is frozen during the resource comparison.
+
+### September 2026 execution amendment
+
+This amendment supersedes the Android-only topology, legacy-first ordering,
+and per-run relay ownership described below. Those sections document the
+existing implementation and still apply to the frozen Android path.
+
+The operator first runs `ortsom stack up` in the sibling checkout. Ortsom
+owns the persistent regtest chain, three LND nodes, relay and daemon. Mortsom
+may invoke that CLI through `mortsom stack up`; it must not import Ortsom's
+runner or copy its source. Stack lifecycle and scenario execution are separate
+commands. A scenario run attaches to the configured stack and never removes
+its containers. Explicit stack cleanup is performed through the Ortsom CLI.
+
+`mortsom run --platform linux|web|android` selects the same target for Alice
+and Bob, defaulting to Linux and the v2 profile. Linux actors have independent
+processes, XDG storage and accessibility sessions. Web actors have independent
+browser profiles and storage, driven through the rendered Flutter semantics
+DOM using W3C WebDriver. Linux uses the public desktop accessibility API.
+Neither driver may invoke application internals or advance orders outside UI.
+The app owns any required accessibility contract additions.
+
+The Web build includes the app's supported Rust/WASM build and cross-origin
+isolation headers. Both targets use the same daemon identity and local relay,
+with production fallback disabled. Existing lane selection, secret handling,
+caps, wallet accounting and cleanup requirements remain mandatory. Regtest
+clearance requires observed wallet networks; a local hostname is insufficient.
+
+Implementation gates for this migration are sequential:
+
+1. Attach to a ready Ortsom stack without mutating its lifecycle during a run;
+   validate platform selection and configuration with fakes and CLI tests.
+2. Launch two isolated v2 clients and prove onboarding and identity persistence
+   through accessibility on Linux, then Web; clean partial startup reliably.
+3. Complete `happy_sell` with UI, relay and wallet evidence and clean teardown.
+4. Replicate at least 20 distinct, important Ortsom scenarios through the app's
+   available UI. Document each source scenario, assertions and actual result.
+   Unsupported features, skipped cases and fake-driven tests do not count as
+   successful live replications. Fix failures and rerun from clean actor state.
+5. Record comparable CPU/RSS measurements for Linux and Web on the same suite,
+   and independently review the implementation commits.
 
 ---
 
