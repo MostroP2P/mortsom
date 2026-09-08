@@ -27,9 +27,24 @@ pub fn error(cause: impl std::fmt::Display) -> AppiumError {
     ))
 }
 
-/// Extracts the stable contract identifier and optional readout.
+/// Extracts a unique contract line, allowing Flutter's merged tab-position label.
 pub fn label(name: &str) -> Option<(&str, &str)> {
-    name.strip_prefix("[mortsom:")?.split_once(']')
+    let mut markers = name
+        .match_indices("[mortsom:")
+        .filter(|(index, _)| *index == 0 || name.as_bytes()[index - 1] == b'\n');
+    let (index, _) = markers.next()?;
+    if markers.next().is_some() {
+        return None;
+    }
+    let (id, value) = name[index..].strip_prefix("[mortsom:")?.split_once(']')?;
+    if id.is_empty()
+        || !id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'_'))
+    {
+        return None;
+    }
+    Some((id, value))
 }
 
 /// Public AT-SPI connection. Its bus belongs only to one actor.
@@ -361,6 +376,16 @@ impl crate::text_entry::TextEntry for Native {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn finds_a_unique_contract_line_after_flutter_tab_position_semantics() {
+        assert_eq!(
+            label("Tab 2 of 2\n[mortsom:order.book.tab.sell]\nSell BTC"),
+            Some(("order.book.tab.sell", "\nSell BTC"))
+        );
+        assert_eq!(label("copy [mortsom:order.book.tab.sell]"), None);
+        assert_eq!(label("[mortsom:first]\n[mortsom:second]"), None);
+        assert_eq!(label("[mortsom:]"), None);
+    }
     #[test]
     fn identifies_exact_linux_contract_without_localized_copy() {
         assert_eq!(
