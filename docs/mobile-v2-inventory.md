@@ -1,11 +1,28 @@
 # `mobilev2` inventory and automation contract
 
-Phase 7.1 of `spec.md`: what the second-generation application
+This document preserves the original app inventory and contract adoption notes. Current Linux/Web behavior
+and acceptance are recorded in `spec.md`, the README and the app's own `docs/automation-contract.md`.
+The dated inventory below is historical, not a claim that later contract/state fixes are missing.
+
+The second-generation application
 (`../mobilev2`, package `foundation.mostro.app`, Flutter + Rust core through
 `flutter_rust_bridge`, `mostro-core 0.14.x` inside the app) exposes for each
 capability of the shared `AppAdapter` contract, and what it must add for
 Mortsom to drive it. Mortsom never calls the app's Rust core; it only uses
-the UI and public Android behaviour, exactly as with the classic app.
+the UI and public platform behavior. Native Linux uses AT-SPI; Web uses Chromium/WebDriver semantics.
+
+## Current desktop contract additions (2026-09-08)
+
+App runtime commit `e83cd8f` supplies test-only Linux semantic name markers, corrected sidebar routing,
+manual buyer invoice amount/order-ID readouts and final payout semantics. `ee6e4bd` adds a merged TabBar
+label/action regression: native contract markers can begin a subsequent line after Flutter's tab-position
+label. Relay identifiers contain URLs and must preserve those characters.
+
+Escrow settlement is nonterminal `payout-pending`; only final Success maps to Completed. Polling and rating
+navigation respect that distinction. Both targets passed fresh and restored identity probes. Live happy
+paths remain unaccepted. Taking a sell opens the buyer-invoice form; taking a buy opens the seller-payment
+form. The current coordinated correction binds those forms to their public order IDs and preserves ordinary
+Back navigation; its exact commit/build/live status is recorded in `docs/HANDOFF.md` from the repository root.
 
 ## Inventory (as of `mobilev2` `main`, 7625b24)
 

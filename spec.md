@@ -16,13 +16,14 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 27 completed, 4 in progress and 34 pending.
+current evidence separately. Section 17 tracks 65 tasks: 27 completed, 6 in progress and 32 pending.
 Live checkpoint acceptance remains Linux 0/2 and Web 0/2.
 
-**Latest verified status (2026-09-08, 16:16 UTC):** G2 is accepted; all four live happy-path cells remain
-pending. Three Linux happy_sell attempts failed and were cleaned without payments. The current blocker is
-normal navigation after taking a sell: app v2 opens the buyer-invoice form directly, while the adapter
-expects an order-detail status node. See sections 18.12–18.14 for evidence and remaining work.
+**Latest checkpoint (2026-09-08):** work paused to preserve the operator's remaining weekly allowance.
+G2 is accepted; all four live happy-path cells remain pending. Three Linux happy_sell attempts failed and
+were cleaned without payments. The latest invoice-route mismatch is corrected in source (`e846715` harness,
+`0ed7efb` app), with reviewed passing focused tests. Rebuild both client targets before the next live retry.
+See [docs/HANDOFF.md](docs/HANDOFF.md) for exact continuation instructions.
 
 ## 1. Objective and completion criteria
 
@@ -693,7 +694,7 @@ observers.
 - [ ] **IN PROGRESS — P3.2 Handle uncertain submission safely.** Capture known order IDs and observer cursor before
   submit; register provisional cleanup, resolve any new run-owned order after timeout, and never blindly
   republish.
-- [ ] **TODO — P3.3 Validate discover/take and invoice steps live.** Match the exact order ID in Bob's book
+- [ ] **IN PROGRESS — P3.3 Validate discover/take and invoice steps live.** Match the exact order ID in Bob's book
   and take it. For a sell order, Bob first generates and submits the buyer payout invoice through normal UI;
   only then does Alice read and pay the seller hold invoice. Reserve spend before initiating payment and track
   both hashes.
@@ -844,7 +845,7 @@ integration, tests, README/runbooks and `docs/resource-comparison.md` (to be cre
 - [ ] **TODO — P7.5 Complete verification and coverage.** Run all required Rust checks and the >=80% line
   coverage gate, plus relevant app Flutter/Rust checks. Close desktop lifecycle, redaction, state and budget
   regression gaps.
-- [ ] **TODO — P7.6 Finish operator documentation.** Document actual working setup/build/run/reset/cleanup
+- [ ] **IN PROGRESS — P7.6 Finish operator documentation.** Document actual working setup/build/run/reset/cleanup
   commands and dependencies, supported platform capabilities, failure diagnosis and unresolved-escrow
   handling.
 - [ ] **TODO — P7.7 Review completed commits and audit acceptance.** Independent review must confirm every
@@ -1070,3 +1071,27 @@ App commits are `e83cd8f` (runtime/contract fixes described above) and `ee6e4bd`
 and documentation only; no rebuild required). Independent reviews covered the committed native, recovery,
 app and happy-buy changes; the later discovered recovery-report and URL-identifier regressions were
 corrected with failing-then-passing tests. Coverage and final delivery audit remain pending.
+
+README expanded at the operator's request: a prominent quick start, project/tool requirements, private
+configuration and overlays, persistent stack setup/update/reset, doctor, source-only preparation and
+prebuilt artifacts, Linux/Web scenario commands, actor roles and invoice sequencing, report interpretation,
+progress inspection, recovery behavior, troubleshooting and development checks. The historical Android
+instructions were moved to `docs/legacy-android.md` to keep the default workflow clear. The README explicitly
+states 0/4 live acceptance and the current invoice-route blocker; it does not present the example commands
+as successful scenario evidence. P7.6 remains in progress until the final working commands and results are
+confirmed by the four accepted runs.
+
+Final pause checkpoint: harness commit `e846715` and app commit `0ed7efb` implement the direct invoice-route
+correction with exact public order binding, foreign-form refusal and ordinary Back navigation. Independent
+review approved; 44 v2 adapter tests, five focused app invoice tests, Flutter analysis and strict workspace
+clippy passed. No new client bundle or live trade was started after this correction. Both app bundles and
+the coordinator binary must be rebuilt on resumption. The detailed README/quick start, historical Android
+guide, architecture/inventory notes, contributor entry point and `docs/HANDOFF.md` were updated for safe
+continuation. The current four-case target remains wholly unaccepted; coverage and final delivery remain
+pending. Preserve the healthy persistent stack rather than resetting it before resuming.
+
+Final pause verification completed: **613 workspace tests passed, zero failed, one existing ignored test**;
+formatting and strict workspace/all-targets clippy passed. Logs:
+`/tmp/mortsom-handoff-final-tests.log` and `/tmp/mortsom-handoff-final-clippy.log`.
+No scenario, test, app client, Xvfb or ChromeDriver process remained after this check. The persistent
+regtest stack remains running intentionally. Coverage was not run at this pause checkpoint.

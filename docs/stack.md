@@ -1,6 +1,7 @@
 # Stack selection (spec §12, Phase 0.1)
 
-Mortsom is Rust only. This document records which crates fill each role and
+Mortsom is Rust only. Linux/Web with app v2 and the persistent Ortsom regtest stack are the current
+default workflow; Android services below describe the preserved legacy path. This document records which crates fill each role and
 why, so the choice is deliberate and reviewable. Versions are the latest
 stable releases at the time of writing; see `Cargo.toml` for the exact pins.
 
@@ -28,7 +29,8 @@ The workspace mirrors the package tree in spec §12:
 crates/common              mortsom-common              secrets, run ids, errors, clock, logging
 crates/coordinator         mortsom-coordinator         config, runner, budgets, cleanup, reporting, `mortsom` binary
 crates/app-contract        mortsom-app-contract        AppAdapter trait, normalized states, capabilities
-crates/android-driver      mortsom-android-driver      WebDriver client, AVD/emulator/adb primitives
+crates/android-driver      mortsom-android-driver      shared UI/process traits, WebDriver, legacy Android primitives
+crates/desktop-driver      mortsom-desktop-driver      native AT-SPI, Chromium, private server and actor lifecycle
 crates/environment         mortsom-environment         Docker relay, daemon readiness, wallet provisioning
 crates/observers           mortsom-observers           UI, notification, relay, wallet, artifact observers
 crates/scenario-kit        mortsom-scenario-kit        domain actions, waits, assertions, registry
@@ -40,10 +42,10 @@ scenarios                  mortsom-scenarios           smoke, regression, recove
 (secret redaction, run identifiers, the failure taxonomy) that every other
 crate needs without creating a dependency cycle through the coordinator.
 
-External services (not Rust dependencies): Docker Engine, Android SDK
-(`emulator`, `adb`, `avdmanager`, `sdkmanager`), Appium 2 with the
-UiAutomator2 driver, Java 17, Flutter, and a locally operated Mostro daemon
-connected to a mainnet Lightning node.
+Current external services are Docker/Ortsom, Flutter, Xvfb/AT-SPI/D-Bus/keyring for Linux, and
+Chromium/ChromeDriver for Web. The local regtest stack supplies mostrod, relay and dedicated LND nodes.
+Legacy Android additionally uses the Android SDK, Appium/UiAutomator2 and a JDK; it retains its existing
+wallet/mainnet guards.
 
 ## Linux and Web execution (September 2026)
 
@@ -82,13 +84,31 @@ its stable version was verified with `cargo info` on 2026-09-08.
 The Web server owns its request tasks and keeps the captured bundle alive until
 shutdown has canceled and drained them. Task failures are reported through the
 existing `tracing` 0.1.44 dependency (stable version checked on 2026-09-08).
-These content and ownership checks do not yet record source/build provenance.
+Source builds also record the app revision, dirty state, source hash, tool versions and executed build
+plan. Supplied artifacts explicitly retain unknown source history. Desktop recovery makes a durable
+protected copy before business actions; temporary ownership alone is insufficient for an unresolved run.
 
 `accounting` and `parity` read only artifact settings. `cleanup` additionally
-reads legacy resource settings but routes by the recorded run platform; desktop
-recovery remains explicitly unsupported. `publish` resolves configured credential
+routes by recorded platform and protected recovery journal. Desktop recovery restores original identities,
+stack/bundle identity and exact Web origin, performs UI cleanup and verifies tracked wallet outcomes.
+Missing/tampered storage or unverified shutdown fails closed; automatic SIGKILL orphan reconciliation is
+unsupported. `publish` resolves configured credential
 redaction values without starting Docker or connecting to wallets. Recorded
 Android runs retain environment-only credentials; Linux/Web resolve reserved
 Ortsom credential paths as the run did. Missing custom credentials or inconsistent
 platform metadata prevent publication. Strict trading configuration and spend
 caps remain mandatory for `run`.
+
+
+### Durable desktop action and payment ownership
+
+Before order submission, a private atomic journal records the actor and known public order IDs. A lost
+confirmation triggers public UI discovery rather than a blind retry. Payment intents record exact hash,
+direction, wallet and invoice amount before invocation. The existing caps apply to actual escrow plus the
+enforced fee ceiling; uncertain invoked payments retain budget ownership.
+
+Linux preserves private XDG/keyring data; Web preserves its profile and original loopback origin. Runtime
+markers are fsynced before processes start and removed only after verified shutdown. Recovery evidence is
+persisted before profile deletion. Final report writes after verified resolution can fail; the durable
+closed manifest remains authoritative and the failure is reported. See the runbook and HANDOFF.md for the
+current operator flow and limitations.

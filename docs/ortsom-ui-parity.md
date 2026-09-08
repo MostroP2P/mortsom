@@ -81,3 +81,7 @@ Linux checkpoint retry `20260908T161350Z-259115af1b1c` progressed through creati
 `11284250-f982-43ba-8c2b-33aadbede145`. Bob's public invoice form showed the exact order ID and 995 sats,
 but the adapter expected an order-detail status node and timed out. No invoice/payment was issued.
 UI cancellation, both client shutdowns and profile removal passed; happy_sell remains unaccepted.
+
+At the pause checkpoint, commits `e846715` (harness) and `0ed7efb` (app) correct direct take-to-invoice routes
+with exact order binding. Focused tests/review passed; both app targets require rebuilding before live retry.
+No fourth run was started and no acceptance cell changed. See [HANDOFF.md](HANDOFF.md).
