@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 19 completed, 7 in progress and 39 pending.
+current evidence separately. Section 17 tracks 65 tasks: 20 completed, 6 in progress and 39 pending.
 Live checkpoint acceptance remains Linux 0/2 and Web 0/2.
 
 ## 1. Objective and completion criteria
@@ -624,10 +624,13 @@ contract tests.
   AT-SPI actions/text/state. Add focus and scroll handling, verify actual editable values and visible form
   feedback, and handle transient stale nodes without hiding permanent transport errors. Reproduce the
   empty-field failure before fixing it.
-- [ ] **IN PROGRESS — P2.6 Finish Web interaction correctness.** Existing `web.rs` supports exact escaped IDs
-  and input/readout lookup. Add bounded user scrolling and re-find after focus/rebuild. Reproduce the clipped
-  sats field; test non-interactable and stale nodes without fixed delay or duplicate submit. Do not toggle
-  fixed/market mode merely because a field is offscreen.
+- [x] **P2.6 DONE — Verify Web text entry and readback.** Public DOM scrolling and W3C editing now
+  re-find fields after scroll, focus and clear, retry only named transient element errors within a deadline,
+  and verify the actual value property. Regressions reproduce ignored edits, stale/non-interactable nodes,
+  permanent errors and input redaction. The real Web form accepted fiat 10, method Cash and fixed sats 100;
+  no order was submitted and client/server/captured-bundle cleanup passed. Fifteen desktop tests, formatting
+  and strict workspace clippy passed with independent review. Submit uncertainty remains P3.2; lifecycle
+  remains P2.8. The same no-submit form probe also passed on Linux.
 - [ ] **IN PROGRESS — P2.7 Close Linux lifecycle review findings.** Private XDG/DBus/AT-SPI/keyring and
   automatic display allocation exist. Validate the new unlocked-keyring readiness predicate, child health,
   aggregate cleanup, retained retry handles and absence of leaked mounts/processes after failure.
@@ -879,6 +882,11 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
 - Metadata verification passed 179 coordinator and seven CLI tests; independent review closed the source
   toolchain context and fresh-directory durability findings. Log:
   `/tmp/mortsom-directory-durability-green.log`.
+- Bounded Web field editing and value readback passed the original offscreen fixed-sats form step, plus
+  fiat and method fields. Native readback passed the same probe. Both created no orders or payments and
+  released their client/server/bundle resources. Logs: `/tmp/mortsom-web-form-readback-live.log` and
+  `/tmp/mortsom-linux-form-readback-live.log`. Fifteen desktop tests passed, including stale and
+  non-interactable element retries, ignored edits and input redaction. These are form probes, not trades.
 - The current two-case Linux/Web matrix remains unaccepted. The other eighteen cases and CPU/RSS
   comparison are deferred until operator review, per the explicit scope change on 2026-09-08.
 

@@ -64,3 +64,5 @@ pub mod web;
 
 /// Focus and read-back verified text entry.
 pub mod text_entry;
+
+mod web_input;

@@ -1,5 +1,4 @@
 //! W3C WebDriver automation of Flutter's public semantics DOM.
-use crate::native::error;
 use async_trait::async_trait;
 use mortsom_android_driver::{
     appium::AppiumError,
@@ -10,6 +9,14 @@ use mortsom_android_driver::{
 use serde_json::json;
 use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
+
+pub(crate) fn error(cause: impl std::fmt::Display) -> AppiumError {
+    AppiumError::WebDriver(
+        mortsom_android_driver::webdriver::WebDriverError::Transport(
+            mortsom_common::Redactor::default().redact(&format!("Web automation: {cause}")),
+        ),
+    )
+}
 
 struct Runtime {
     session: Session,
@@ -197,22 +204,17 @@ impl UiSession for WebSession {
             .await?)
     }
     async fn type_text(&self, id: &str, text: &str) -> Result<(), AppiumError> {
-        let session = self.session().await?;
-        let selector = selector(id)?;
-        let input = session
-            .find_element(
-                Locator::XPath,
-                &format!("{selector}/descendant-or-self::*[self::input or self::textarea]"),
-            )
-            .await?;
-        // Flutter keeps off-screen semantics nodes in the DOM. A user click
-        // scrolls the field into view before WebDriver can edit it.
-        session.click(&input).await?;
-        session.clear(&input).await?;
-        Ok(session.send_keys(&input, text).await?)
+        crate::web_input::enter(&self.session().await?, id, text, Duration::from_secs(5)).await
     }
     async fn text_of(&self, id: &str) -> Result<String, AppiumError> {
-        Ok(self.session().await?.text(&self.element(id).await?).await?)
+        let session = self.session().await?;
+        match crate::web_input::read(&session, id).await {
+            Ok(value) => Ok(value),
+            Err(AppiumError::WebDriver(cause)) if cause.is_no_such_element() => {
+                Ok(session.text(&self.element(id).await?).await?)
+            }
+            Err(cause) => Err(cause),
+        }
     }
     async fn label_of(&self, id: &str) -> Result<String, AppiumError> {
         let session = self.session().await?;
