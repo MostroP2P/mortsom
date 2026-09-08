@@ -74,6 +74,8 @@ pub async fn prepare(
         _ => bundle.root().to_path_buf(),
     };
     Ok(DesktopOptions {
+        recovery: None,
+        resume: false,
         bundle: std::sync::Arc::new(bundle),
         provenance,
         platform,

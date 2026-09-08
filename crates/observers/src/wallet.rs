@@ -106,6 +106,13 @@ pub fn amount_sats_of(invoice: &Secret) -> Result<Option<u64>, WalletObserverErr
     Ok(parsed.amount_milli_satoshis().map(|msat| msat / 1000))
 }
 
+/// Exact millisatoshi amount encoded in a BOLT11 invoice, without rounding.
+pub fn amount_msats_of(invoice: &Secret) -> Result<Option<u64>, WalletObserverError> {
+    let parsed = Bolt11Invoice::from_str(invoice.expose().trim())
+        .map_err(|_| WalletObserverError::InvalidInvoice)?;
+    Ok(parsed.amount_milli_satoshis())
+}
+
 /// Read-only wallet lookups; the real implementation speaks NWC.
 #[async_trait]
 pub trait WalletReader: Send + Sync {
@@ -382,6 +389,15 @@ mod tests {
         );
         assert_eq!(amount_sats_of(&secret).unwrap(), Some(250_000));
         assert!(payment_hash_of(&Secret::new("garbage")).is_err());
+    }
+
+    #[test]
+    fn exact_invoice_amount_does_not_round_sub_satoshi_values() {
+        let invoice = Secret::new(
+            "lnbc100p1psj9jhxdqud3jxktt5w46x7unfv9kz6mn0v3jsnp4q0d3p2sfluzdx45tqcsh2pu5qc7lgq0xs578ngs6s0s68ua4h7cvspp5q6rmq35js88zp5dvwrv9m459tnk2zunwj5jalqtyxqulh0l5gflssp5nf55ny5gcrfl30xuhzj3nphgj27rstekmr9fw3ny5989s300gyus9qyysgqcqpcrzjqw2sxwe993h5pcm4dxzpvttgza8zhkqxpgffcrf5v25nwpr3cmfg7z54kuqq8rgqqqqqqqq2qqqqq9qq9qrzjqd0ylaqclj9424x9m8h2vcukcgnm6s56xfgu3j78zyqzhgs4hlpzvznlugqq9vsqqqqqqqlgqqqqqeqq9qrzjqwldmj9dha74df76zhx6l9we0vjdquygcdt3kssupehe64g6yyp5yz5rhuqqwccqqyqqqqlgqqqqjcqq9qrzjqf9e58aguqr0rcun0ajlvmzq3ek63cw2w282gv3z5uupmuwvgjtq2z55qsqqg6qqqyqqqrtnqqqzq3cqygrzjqvphmsywntrrhqjcraumvc4y6r8v4z5v593trte429v4hredj7ms5z52usqq9ngqqqqqqqlgqqqqqqgq9qrzjq2v0vp62g49p7569ev48cmulecsxe59lvaw3wlxm7r982zxa9zzj7z5l0cqqxusqqyqqqqlgqqqqqzsqygarl9fh38s0gyuxjjgux34w75dnc6xp2l35j7es3jd4ugt3lu0xzre26yg5m7ke54n2d5sym4xcmxtl8238xxvw5h5h5j5r6drg6k6zcqj0fcwg",
+        );
+        assert_eq!(amount_sats_of(&invoice).unwrap(), Some(0));
+        assert_eq!(amount_msats_of(&invoice).unwrap(), Some(10));
     }
 
     struct Scripted(Mutex<Vec<Option<(u64, u64, PaymentState)>>>);

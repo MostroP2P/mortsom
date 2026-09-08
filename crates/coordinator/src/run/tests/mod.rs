@@ -272,6 +272,9 @@ impl UiSession for FakeSession {
 
 /// A fake app: order state advances with each business action.
 struct FakeAdapter {
+    recovery_calls: Mutex<Vec<String>>,
+    observed_actors: Mutex<Vec<mortsom_android_driver::avd::Actor>>,
+    complete_after_observations: Option<usize>,
     /// Shared with the fake UI: connectivity, and whether the driver has
     /// gone silent.
     flags: Flags,
@@ -292,6 +295,9 @@ struct FakeAdapter {
 impl FakeAdapter {
     fn full() -> Self {
         Self {
+            recovery_calls: Mutex::new(Vec::new()),
+            observed_actors: Mutex::new(Vec::new()),
+            complete_after_observations: None,
             flags: Flags {
                 online: Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 silent_driver: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -330,6 +336,10 @@ impl AppAdapter for FakeAdapter {
         device: &DeviceContext<'_>,
         _: &TestEnvironment,
     ) -> Result<Identity, AdapterError> {
+        self.recovery_calls
+            .lock()
+            .unwrap()
+            .push(format!("onboard:{}", device.actor));
         Ok(Identity {
             public_key: format!("npub1{}", device.actor),
         })
@@ -344,10 +354,36 @@ impl AppAdapter for FakeAdapter {
     }
     async fn configure_node_and_relay(
         &self,
-        _: &DeviceContext<'_>,
+        device: &DeviceContext<'_>,
         _: &TestEnvironment,
     ) -> Result<(), AdapterError> {
+        self.recovery_calls
+            .lock()
+            .unwrap()
+            .push(format!("configure:{}", device.actor));
         Ok(())
+    }
+    async fn existing_identity(
+        &self,
+        device: &DeviceContext<'_>,
+    ) -> Result<Identity, AdapterError> {
+        self.recovery_calls
+            .lock()
+            .unwrap()
+            .push(format!("existing:{}", device.actor));
+        let public_key = device
+            .ui
+            .text_of("identity")
+            .await
+            .map_err(|e| AdapterError::infrastructure(e.to_string()))?;
+        Ok(Identity { public_key })
+    }
+    async fn owned_orders(&self, device: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
+        self.recovery_calls
+            .lock()
+            .unwrap()
+            .push(format!("owned:{}", device.actor));
+        Ok(self.orders.lock().unwrap().keys().cloned().collect())
     }
     async fn configure_nwc(
         &self,
@@ -442,6 +478,9 @@ impl AppAdapter for FakeAdapter {
         match orders.get(&order.id).copied() {
             None => Ok(CancelOutcome::NotFound),
             Some(state) if state.is_terminal() => Ok(CancelOutcome::AlreadyClosed),
+            Some(OrderState::PayoutPending) => Err(AdapterError::contract(
+                "payout-pending has no cancel control",
+            )),
             // Mostro republishes an unfunded order the taker walks away from.
             Some(OrderState::Taken) if taker && !self.stubborn => {
                 orders.insert(order.id.clone(), OrderState::Pending);
@@ -489,9 +528,16 @@ impl AppAdapter for FakeAdapter {
     }
     async fn observe_order(
         &self,
-        _: &DeviceContext<'_>,
+        device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<AppOrderState, AdapterError> {
+        self.observed_actors.lock().unwrap().push(device.actor);
+        if self
+            .complete_after_observations
+            .is_some_and(|count| self.observed_actors.lock().unwrap().len() >= count)
+        {
+            self.set(&order.id, OrderState::Completed);
+        }
         let state = self
             .orders
             .lock()
@@ -610,5 +656,7 @@ fn opts(names: &[&str]) -> RunOptions {
 
 mod behavior;
 mod desktop;
+mod evidence;
+mod recovery;
 
 mod phase5;

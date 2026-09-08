@@ -22,9 +22,11 @@ pub(crate) fn error(cause: impl std::fmt::Display) -> AppiumError {
 }
 
 struct Runtime {
+    active: Option<crate::storage::ActiveRuntime>,
     session: Option<Session>,
     driver: Option<Box<dyn ChildProcess>>,
     root: PathBuf,
+    profile: PathBuf,
 }
 
 /// Each actor owns a browser process and an independent browser profile.
@@ -33,6 +35,7 @@ pub struct WebSession {
     url: String,
     driver: PathBuf,
     browser: PathBuf,
+    storage: Option<crate::storage::ActorStorage>,
     runtime: Mutex<Option<Runtime>>,
 }
 
@@ -49,8 +52,15 @@ impl WebSession {
             url,
             driver,
             browser,
+            storage: None,
             runtime: Mutex::new(None),
         }
+    }
+
+    /// Retains caller-owned browser data across process shutdown and recovery.
+    pub fn with_storage(mut self, storage: crate::storage::ActorStorage) -> Self {
+        self.storage = Some(storage);
+        self
     }
 
     async fn session(&self) -> Result<Session, AppiumError> {
@@ -93,6 +103,12 @@ impl WebSession {
     }
     async fn create(&self, slot: &mut Option<Runtime>) -> Result<(), AppiumError> {
         use std::os::unix::fs::DirBuilderExt;
+        let storage = self
+            .storage
+            .as_ref()
+            .map(|storage| storage.prepare(crate::Platform::Web))
+            .transpose()
+            .map_err(error)?;
         let root =
             std::env::temp_dir().join(format!("mortsom-browser-{}", mortsom_common::RunId::new()));
         std::fs::DirBuilder::new()
@@ -100,13 +116,20 @@ impl WebSession {
             .create(&root)
             .map_err(error)?;
         *slot = Some(Runtime {
+            active: None,
             session: None,
             driver: None,
+            profile: storage.as_ref().unwrap_or(&root).join("profile"),
             root,
         });
         let runtime = slot
             .as_mut()
             .ok_or_else(|| error("missing startup ownership"))?;
+        runtime.active = storage
+            .as_deref()
+            .map(crate::storage::ActiveRuntime::begin)
+            .transpose()
+            .map_err(error)?;
         if let Err(cause) = self.start(runtime).await {
             return match stop(runtime).await {
                 Ok(()) => {
@@ -136,7 +159,7 @@ impl WebSession {
         let port = driver_port(driver.as_ref(), &log).await?;
         let endpoint = format!("http://127.0.0.1:{port}");
         let capabilities = json!({"browserName":"chrome", "goog:chromeOptions": {
-            "binary": self.browser, "args": ["--headless=new", "--window-size=1280,960", "--disable-background-networking", "--no-first-run", format!("--user-data-dir={}", runtime.root.join("profile").display())]
+            "binary": self.browser, "args": ["--headless=new", "--window-size=1280,960", "--disable-background-networking", "--no-first-run", format!("--user-data-dir={}", runtime.profile.display())]
         }});
         runtime.session =
             Some(Session::create(&endpoint, capabilities, Duration::from_secs(30)).await?);
@@ -246,6 +269,17 @@ impl UiSession for WebSession {
         Ok(())
     }
     async fn activate_app(&self) -> Result<(), AppiumError> {
+        {
+            let mut slot = self.runtime.lock().await;
+            if slot.is_none()
+                && self
+                    .storage
+                    .as_ref()
+                    .is_some_and(|storage| storage.is_resume())
+            {
+                return self.create(&mut slot).await;
+            }
+        }
         self.session()
             .await?
             .post("url", &json!({"url":self.url}))
@@ -253,6 +287,13 @@ impl UiSession for WebSession {
         Ok(())
     }
     async fn clear_app(&self) -> Result<(), AppiumError> {
+        if self
+            .storage
+            .as_ref()
+            .is_some_and(|storage| storage.is_resume())
+        {
+            return Err(error("cannot clear protected recovery storage"));
+        }
         self.end().await?;
         self.create(&mut *self.runtime.lock().await).await
     }

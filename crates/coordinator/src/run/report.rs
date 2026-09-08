@@ -58,6 +58,9 @@ pub struct RunSummary {
     pub checks: DoctorReport,
     /// Cleanup report.
     pub cleanup: Option<CleanupReport>,
+    /// Durable identity retention and the original recovery run.
+    #[serde(default)]
+    pub recovery: Option<RecoveryStatus>,
     /// Budget totals.
     pub budget: Option<Totals>,
     /// Farm teardown.
@@ -67,6 +70,17 @@ pub struct RunSummary {
     /// True when every check passed and every selected scenario passed or
     /// was skipped with a reason.
     pub passed: bool,
+}
+
+/// Public recovery lifecycle evidence, without filesystem or credential contents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryStatus {
+    /// Run whose identities and orders are owned by the journal.
+    pub original_run_id: RunId,
+    /// Whether protected client profiles remain available for cleanup.
+    pub retained: bool,
+    /// Whether order and wallet resolution was durably verified.
+    pub resolution_verified: bool,
 }
 
 /// Persists public build/stack facts and cleanup routing before clients can start.
@@ -94,6 +108,7 @@ pub(super) fn finish(artifacts: &RunArtifacts, summary: &mut RunSummary) -> Resu
     summary.passed = summary.checks.is_healthy() && scenarios_ok && clean;
     let cleanup = serde_json::json!({
         "orders": summary.cleanup,
+        "recovery": summary.recovery,
         "farm": summary.farm_teardown,
         "relay": summary.relay_teardown,
     });
@@ -167,6 +182,7 @@ pub(super) fn initial_summary(
         results: Vec::new(),
         checks: DoctorReport::default(),
         cleanup: None,
+        recovery: None,
         budget: None,
         farm_teardown: Vec::new(),
         relay_teardown: None,

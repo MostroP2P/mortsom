@@ -6,6 +6,8 @@ fn desktop_options(world: &World) -> RunOptions {
     std::fs::create_dir_all(&source).unwrap();
     std::fs::write(source.join("mostro"), b"fixture").unwrap();
     options.desktop = Some(crate::run::DesktopOptions {
+        recovery: None,
+        resume: false,
         provenance: crate::provenance::BuildProvenance::prebuilt(),
         platform: mortsom_desktop_driver::Platform::Linux,
         artifact: world.dir.path().join("missing-app"),

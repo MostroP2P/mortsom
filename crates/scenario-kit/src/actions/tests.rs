@@ -1,0 +1,302 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
+use std::sync::{Arc, Mutex};
+
+use super::*;
+use crate::test_support::{StateAdapter, context};
+
+#[tokio::test]
+async fn expect_state_holds_watches_the_whole_window() {
+    let adapter = Arc::new(StateAdapter(Mutex::new(OrderState::Active)));
+    let ctx = context(adapter.clone());
+    let order = OrderReference::new("o1");
+    expect_state_holds(
+        &ctx,
+        Actor::Bob,
+        &order,
+        OrderState::Active,
+        Duration::from_millis(30),
+    )
+    .await
+    .unwrap();
+
+    let flipper = adapter.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        *flipper.0.lock().unwrap() = OrderState::Cancelled;
+    });
+    let err = expect_state_holds(
+        &ctx,
+        Actor::Bob,
+        &order,
+        OrderState::Active,
+        Duration::from_millis(500),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("left active (`cancelled`)"), "{err}");
+}
+
+#[tokio::test]
+async fn wait_app_state_fails_fast_on_a_foreign_terminal_state() {
+    let adapter = Arc::new(StateAdapter(Mutex::new(OrderState::Cancelled)));
+    let ctx = context(adapter);
+    let order = OrderReference::new("o1");
+    let started = std::time::Instant::now();
+
+    let err = wait_app_state(&ctx, Actor::Alice, &order, OrderState::Active)
+        .await
+        .unwrap_err();
+
+    assert!(err.message.contains("terminal `cancelled`"));
+    assert!(
+        started.elapsed() < Duration::from_millis(250),
+        "must not wait out the deadline"
+    );
+}
+
+#[tokio::test]
+async fn wait_app_state_keeps_waiting_through_earlier_states_and_times_out() {
+    let adapter = Arc::new(StateAdapter(Mutex::new(OrderState::Pending)));
+    let ctx = context(adapter.clone());
+    let order = OrderReference::new("o1");
+    let err = wait_app_state(&ctx, Actor::Alice, &order, OrderState::Taken)
+        .await
+        .unwrap_err();
+    assert!(err.message.contains("did not reach taken"));
+    assert!(
+        err.message.contains("last showed `pending`"),
+        "the deadline must name what the app actually showed: {err}"
+    );
+
+    *adapter.0.lock().unwrap() = OrderState::Taken;
+    let raw = wait_app_state(&ctx, Actor::Alice, &order, OrderState::Taken)
+        .await
+        .unwrap();
+    assert_eq!(raw, "taken");
+}
+
+/// A wait that ends without its state has to distinguish the app showing
+/// something else from the app never being read: the first is the
+/// product, the second is the harness, and a message that says neither
+/// sends the reader to the wrong half of the system.
+#[test]
+fn a_state_deadline_says_what_the_last_observation_was() {
+    let order = OrderReference::new("o1");
+    let timeout = Duration::from_secs(180);
+
+    let mut seen = LastSeen::default();
+    seen.read("waiting-payment".into());
+    let showed = state_timeout_message(&order, "pending", Actor::Alice, timeout, &seen);
+    assert!(showed.contains("last showed `waiting-payment`"), "{showed}");
+
+    let mut seen = LastSeen::default();
+    seen.failed("trades.item.o1 not found".into());
+    let blind = state_timeout_message(&order, "pending", Actor::Alice, timeout, &seen);
+    assert!(
+        blind.contains("was never read: trades.item.o1 not found"),
+        "{blind}"
+    );
+    assert!(
+        !blind.contains("last showed"),
+        "an unread app is not a state the app showed: {blind}"
+    );
+
+    let never = state_timeout_message(
+        &order,
+        "pending",
+        Actor::Alice,
+        timeout,
+        &LastSeen::default(),
+    );
+    assert!(never.contains("the app was never read"), "{never}");
+}
+
+/// A read that fails after a successful one does not unsee it. Calling
+/// such a wait blind sends the reader after a navigation bug that never
+/// happened -- the app was read, repeatedly, and showed the wrong state;
+/// only the last poll went unanswered. The deadline owes both halves.
+#[test]
+fn a_failed_read_does_not_erase_the_status_the_app_did_show() {
+    let order = OrderReference::new("o1");
+    let timeout = Duration::from_secs(180);
+
+    let mut seen = LastSeen::default();
+    seen.read("waiting-payment".into());
+    seen.failed("webdriver transport error".into());
+
+    let both = state_timeout_message(&order, "pending", Actor::Alice, timeout, &seen);
+    assert!(
+        both.contains("last showed `waiting-payment`"),
+        "a status read before the failure is still what the app showed: {both}"
+    );
+    assert!(
+        both.contains("could not be read: webdriver transport error"),
+        "the read that failed last is why the wait has nothing newer: {both}"
+    );
+    assert!(
+        !both.contains("was never read:"),
+        "an app read many times was not never read: {both}"
+    );
+}
+
+/// The other direction: a blip the next poll answered is not what the
+/// deadline is about, so a successful read clears the failure before it.
+#[test]
+fn a_read_that_succeeds_clears_the_failure_before_it() {
+    let order = OrderReference::new("o1");
+    let mut seen = LastSeen::default();
+    seen.failed("webdriver transport error".into());
+    seen.read("waiting-payment".into());
+
+    let msg = state_timeout_message(
+        &order,
+        "pending",
+        Actor::Alice,
+        Duration::from_secs(180),
+        &seen,
+    );
+    assert_eq!(
+        msg,
+        format!(
+            "order o1 did not reach pending on alice within {:?}; the app last showed `waiting-payment`",
+            Duration::from_secs(180)
+        ),
+        "a failure the next poll answered has no place in the verdict: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn value_moving_actions_require_clearance_before_touching_the_wallet() {
+    let ctx = context(Arc::new(StateAdapter(Mutex::new(OrderState::Taken))));
+    let err = pay_hold_invoice(&ctx, Actor::Alice, &OrderReference::new("o1"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        err.category,
+        mortsom_common::FailureCategory::EnvironmentMisconfiguration
+    );
+    assert!(
+        ctx.budget.lock().unwrap().ledger().is_empty(),
+        "nothing reserved without clearance"
+    );
+}
+/// Without a pending hold (the NWC path) release and cancel have no
+/// deferred settlement to resolve; both must be clean no-ops.
+#[tokio::test]
+async fn hold_resolution_is_a_no_op_without_a_pending_hold() {
+    let ctx = context(Arc::new(StateAdapter(Mutex::new(OrderState::Completed))));
+    let order = OrderReference::new("o1");
+
+    assert_eq!(settle_hold_payment(&ctx, &order).await.unwrap(), None);
+    expect_hold_refunded(&ctx, &order).await.unwrap();
+    assert!(ctx.budget.lock().unwrap().ledger().is_empty());
+}
+
+/// After release the pending hold must settle and its reservation is
+/// committed against the budget, fee included; after a cancellation
+/// the payment must fail and the reservation is freed.
+#[tokio::test]
+async fn a_pending_hold_settles_after_release_and_refunds_after_cancel() {
+    use crate::budget::EntryStatus;
+    use crate::context::PendingHold;
+
+    let mut ctx = context(Arc::new(StateAdapter(Mutex::new(OrderState::Completed))));
+    ctx.wallets = Arc::new(mortsom_observers::wallet::WalletObserver::new(vec![(
+        "alice".into(),
+        Arc::new(SettledWallet) as Arc<dyn mortsom_observers::wallet::WalletReader>,
+    )]));
+    let order = OrderReference::new("o1");
+    let reservation = ctx.budget.lock().unwrap().reserve("o1", 5).unwrap();
+    ctx.record_pending_hold(
+        "o1",
+        PendingHold {
+            actor: Actor::Alice,
+            wallet_label: "alice".into(),
+            payment_hash: "aa".into(),
+            reservation,
+        },
+    );
+
+    let obs = settle_hold_payment(&ctx, &order).await.unwrap().unwrap();
+
+    assert_eq!(obs.state, PaymentState::Settled);
+    {
+        let budget = ctx.budget.lock().unwrap();
+        assert_eq!(budget.ledger()[0].status, EntryStatus::Settled);
+        assert_eq!(budget.ledger()[0].fee_sats, 1);
+    }
+
+    // A second call finds nothing: the hold was consumed.
+    assert_eq!(settle_hold_payment(&ctx, &order).await.unwrap(), None);
+
+    // Cancellation path: the payment fails and the budget is freed.
+    ctx.wallets = Arc::new(mortsom_observers::wallet::WalletObserver::new(vec![(
+        "alice".into(),
+        Arc::new(FailedWallet) as Arc<dyn mortsom_observers::wallet::WalletReader>,
+    )]));
+    // 6 of the 10-sat run cap are already settled (5 + fee 1).
+    let order2 = OrderReference::new("o2");
+    let reservation = ctx.budget.lock().unwrap().reserve("o2", 3).unwrap();
+    ctx.record_pending_hold(
+        "o2",
+        PendingHold {
+            actor: Actor::Alice,
+            wallet_label: "alice".into(),
+            payment_hash: "bb".into(),
+            reservation,
+        },
+    );
+
+    expect_hold_refunded(&ctx, &order2).await.unwrap();
+
+    let budget = ctx.budget.lock().unwrap();
+    assert_eq!(budget.ledger()[1].status, EntryStatus::Released);
+}
+
+struct SettledWallet;
+#[async_trait::async_trait]
+impl mortsom_observers::wallet::WalletReader for SettledWallet {
+    async fn lookup(&self, _: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
+        Ok(Some((5, 1, PaymentState::Settled)))
+    }
+}
+
+struct FailedWallet;
+#[async_trait::async_trait]
+impl mortsom_observers::wallet::WalletReader for FailedWallet {
+    async fn lookup(&self, _: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
+        Ok(Some((5, 0, PaymentState::Failed)))
+    }
+}
+
+/// The sats left the wallet even when the ledger refuses the amount, so
+/// the reservation may not stay `Reserved` and drop out of the spend.
+#[test]
+fn a_refused_settlement_is_still_accounted_for() {
+    use crate::budget::{Budget, EntryStatus, SpendCaps};
+    use mortsom_observers::wallet::{PaymentObservation, PaymentState};
+
+    let mut budget = Budget::new(SpendCaps::new(100, 100).unwrap());
+    let reservation = budget.reserve("o1", 10).unwrap();
+    let observation = PaymentObservation {
+        wallet: "alice".into(),
+        order_id: "o1".into(),
+        payment_hash: "aa".into(),
+        amount_sats: 50,
+        fee_sats: 1,
+        state: PaymentState::Settled,
+        observed_at: 1,
+    };
+
+    let refused = commit_settlement(&mut budget, &reservation, &observation, "aa").unwrap_err();
+
+    assert!(matches!(
+        refused,
+        crate::budget::BudgetError::Overspend { .. }
+    ));
+    let entry = &budget.ledger()[0];
+    assert_eq!(entry.status, EntryStatus::InFlight, "{entry:?}");
+    assert_eq!(entry.payment_hash.as_deref(), Some("aa"));
+    assert!(budget.totals().reserved_sats > 0, "still counted as spend");
+}

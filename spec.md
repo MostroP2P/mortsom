@@ -16,7 +16,7 @@ historical; its Android implementation remains available, with no new Android wo
 Everything in this repository is written in English.
 
 A requirement below describes the intended result, not a claim that it is implemented. Section 18 records the
-current evidence separately. Section 17 tracks 65 tasks: 23 completed, 4 in progress and 38 pending.
+current evidence separately. Section 17 tracks 65 tasks: 26 completed, 5 in progress and 34 pending.
 Live checkpoint acceptance remains Linux 0/2 and Web 0/2.
 
 ## 1. Objective and completion criteria
@@ -620,7 +620,7 @@ contract tests.
 - [x] **P2.4 DONE — Prove actual onboarding and restart identities.** Linux run
   `20260908T100217Z-a9eaf0273a29` and Web run `20260908T100434Z-7f107aaadcd8` passed both actors'
   bootstrap/identity checks. Their trade assertions failed and are explicitly not part of this completion.
-- [ ] **IN PROGRESS — P2.5 Finish native interaction correctness.** Existing `native.rs` and `linux.rs` expose
+- [x] **P2.5 DONE — Finish native interaction correctness.** Existing `native.rs` and `linux.rs` expose
   AT-SPI actions/text/state. Add focus and scroll handling, verify actual editable values and visible form
   feedback, and handle transient stale nodes without hiding permanent transport errors. Reproduce the
   empty-field failure before fixing it.
@@ -657,16 +657,23 @@ contract tests.
   Separate commands allocate fresh actor storage. Offline CLI regressions cover Linux/Web named batches
   and tag expansion; unit checks preserve duplicate-name deduplication and existing Android batching.
   Independent review passed. Full in-process profile/subscription reset remains deferred.
-- [ ] **IN PROGRESS — P2.11 Finish app contract coordination.** Linux name prefixes and desktop sidebar
-  navigation fixes exist. Review and test all direct `Semantics` nodes, production-label isolation, visible
-  readouts and test-relay restrictions. Run the app's prescribed checks before committing.
-- [ ] **TODO — P2.12 Implement protected recovery storage.** Add durable manifest and actor-storage ownership
+- [x] **P2.11 DONE — Finish app contract coordination.** Reviewed app v2 commit `e83cd8f` adds test-only
+  native semantic prefixes (including direct nodes), fixes desktop sidebar navigation, exposes the manual
+  invoice's requested amount/order reference, and keeps escrow-settled payouts nonterminal until Success.
+  Production labels and test-relay restrictions are preserved. Full checks passed: 338 Flutter tests,
+  412 Rust tests, four armed Linux accessibility tests, Flutter analysis and strict Rust clippy.
+  Two unarmed platform tests and eighteen pre-existing Rust tests are intentionally skipped/ignored.
+  The shared automation contract documents these coordinated changes; live trade acceptance remains G3.
+- [x] **P2.12 DONE — Implement protected recovery storage.** Add durable manifest and actor-storage ownership
   records before a UI submission can create an order. Separate process shutdown from profile deletion; test a
   coordinator restart followed by UI-only cleanup with the original identities, missing storage, mismatched
   stack and successful final deletion.
 
 **Gate G2:** both platforms pass fresh two-actor bootstrap and restart plus input/navigation smoke, injected
-partial-failure tests and verified complete client cleanup. **Gate not yet accepted.**
+partial-failure tests and verified complete client cleanup. **Gate accepted on 2026-09-08:** independent
+review matched all gate requirements to the real Linux/Web probes and injected failure tests; final workspace
+checks passed (604 tests, no failures, one existing ignored integration test), formatting and strict clippy.
+Automatic orphan reconciliation after SIGKILL remains unsupported and fails closed, as documented below.
 
 ### 17.5 Phase 3 — Two fully correlated happy paths and review checkpoint
 
@@ -678,27 +685,26 @@ observers.
 - [ ] **IN PROGRESS — P3.1 Repair and verify creation.** Read back fiat, payment method, pricing mode and sats
   through public interfaces before submit; assert enabled state. Wait for a new order ID and public pending
   event. Preserve the failed Linux/Web form cases as meaningful regressions.
-- [ ] **TODO — P3.2 Handle uncertain submission safely.** Capture known order IDs and observer cursor before
+- [ ] **IN PROGRESS — P3.2 Handle uncertain submission safely.** Capture known order IDs and observer cursor before
   submit; register provisional cleanup, resolve any new run-owned order after timeout, and never blindly
   republish.
 - [ ] **TODO — P3.3 Validate discover/take and invoice steps live.** Match the exact order ID in Bob's book
   and take it. For a sell order, Bob first generates and submits the buyer payout invoice through normal UI;
   only then does Alice read and pay the seller hold invoice. Reserve spend before initiating payment and track
   both hashes.
-- [ ] **TODO — P3.4 Validate state and final settlement.** App review confirmed premature completion:
-  PurchaseCompleted maps to SettledHoldInvoice, polling stops there and the detail screen offers rating.
-  Correct the Rust action mapping, keep polling until Success, introduce a nonterminal payout-pending UI
-  state and coordinate harness normalization plus provider/widget regressions. Drive fiat-sent and release UI, distinguish
+- [ ] **IN PROGRESS — P3.4 Validate state and final settlement.** App review corrected premature completion:
+  PurchaseCompleted now maps to Success, escrow settlement remains payout-pending, and premature rating
+  navigation is blocked. Provider/widget regressions and harness normalization pass. Drive fiat-sent and release UI, distinguish
   intermediate payout states from completion, verify both clients' terminal state plus matching wallet
   amounts/outcomes and absence of duplicate settlement. Correct inaccurate product state mapping explicitly.
 - [ ] **IN PROGRESS — P3.5 Make cancellation/teardown truthful.** Fixed missing cancel control returning
   AlreadyClosed for active, loading or unknown states; the regression failed before the fix and all 30 v2
   adapter tests passed afterward, with independent review. Cancelled currently acknowledges the confirmation
-  tap; coordinator cleanup still verifies terminal state. App v2's hold-settled to pending-rating mapping
-  remains unsafe evidence of completed payout and can bypass cleanup observation through AlreadyClosed.
+  tap; coordinator cleanup still verifies terminal state. App v2's escrow-settled mapping is now nonterminal; the coordinator waits for final payout rather than
+  treating that state as AlreadyClosed.
   Verify a positive terminal state plus payment outcome or a completed cooperative cancellation and refund;
   surface unresolved cleanup as failure. This task and G3 remain unaccepted.
-- [ ] **TODO — P4.2 Add happy_buy.** Keep Alice seller/Bob buyer while reversing maker/taker creation. Follow
+- [ ] **IN PROGRESS — P4.2 Add happy_buy.** Keep Alice seller/Bob buyer while reversing maker/taker creation. Follow
   the buy-order prerequisites: Alice pays the seller hold first, then maker Bob submits the buyer payout
   invoice. Share final settlement assertions without forcing the sell-order invoice sequence or duplicating
   platform-specific flow code.
@@ -912,3 +918,77 @@ Snapshot as of 2026-09-08; this is a progress record, not phase acceptance:
 
 The maintained per-scenario evidence index is [Ortsom UI parity](docs/ortsom-ui-parity.md). Update this status
 when verified results change; never replace failed evidence with an unqualified success claim.
+
+### 18.12 Current reduced-checkpoint work (2026-09-08)
+
+The current target remains four accepted cells only: happy_sell/happy_buy on Linux/Web. None is yet accepted.
+The source builds have been refreshed against the current stack after the explicit regtest reset. Linux
+compiled the source later committed as app `e83cd8f`; Web compiled that clean commit. Source-build logs:
+`/tmp/mortsom-checkpoint-linux-rebuild.log` and `/tmp/mortsom-checkpoint-web-rebuild.log`.
+
+Real cross-handle recovery passed with no orders/payments on both targets:
+
+| Target | Recovery probe run | Verified outcome |
+|---|---|---|
+| Linux | `20260908T154215Z-53d3093b0ef8` | Both original public identities restored with new sessions; all owned processes stopped; profiles/bundle removed |
+| Web | `20260908T154752Z-b4c8168f49a0` | Both original public identities restored with new browsers and the exact original server origin; complete cleanup |
+
+Logs are `/tmp/mortsom-linux-recovery-smoke.log` and `/tmp/mortsom-web-recovery-smoke.log`. Private local
+result evidence is under `$HOME/.local/state/mortsom/recovery-probes/evidence/<run>/result.json`. The probes
+exercise ordinary UI identity readback, never private app state. They are G2 evidence, not trade passes.
+
+Durable coordinator recovery is under final review. A private, atomically replaced journal records actor
+ownership, captured bundle identity, original origin and pre-action order/payment intents. UI-only cleanup
+reopens original identities against the original stack. Four coordinator regressions cover actual reopened
+journals, failed then successful cleanup, identity mismatch and changed-stack refusal. Missing/changed
+storage fails closed. Payment recovery must prove exact amounts and one actual settled ledger row per hash;
+repeated observations and MPP attempts are not duplicate settlements. Unused tracked buyer invoices are
+canceled through the dedicated run-owned LND wallet, with a verified canceled state before deleting profiles.
+
+The desktop checkpoint requires both external LND wallets; NWC desktop recovery is deferred. Desktop
+infrastructure failures do not automatically retry a scenario with the same identities. Pre-submit write
+failure refuses creation, and a confirmation timeout never republishes the same order. Forty driver tests
+cover protected ownership, runtime markers, shutdown failures and typed native retries. Four captured-bundle
+tests cover owner-drop/resume and changed-content refusal. A durable active-runtime marker survives abrupt
+termination: SIGKILL recovery refuses to reuse or delete profiles until the owned processes have been
+reconciled. Automatic reconciliation of a killed coordinator's orphaned processes is not implemented.
+
+LND observation now includes in-flight updates so the hold-payment step can proceed before release. Exact
+principal accounting rejects fractional sats, reserves actual escrow plus the enforced routing-fee cap, and
+rounds fees upward. Seventy-five environment tests and strict environment clippy passed. Happy-buy has four
+injected flow regressions; full workspace tests passed before the latest recovery additions. Final checks,
+coverage, review and all four live happy-path cells remain pending.
+
+The final review also exposed failure-path gaps: pre-payment reservation leaks, removal of pending hold
+ownership before bounded settlement observation, and teardown artifact-write errors that were only logged.
+Corrections and regressions are in progress; these do not change the four pending acceptance cells.
+A payment intent durably recorded just before a call remains unresolved if the coordinator stops before
+learning whether the payment started. Unknown wallet state is never interpreted as proof of a refund or
+absence of spend; this deliberately retains profiles for reconciliation.
+
+### 18.13 Implementation map and immediate remaining work
+
+| Task | Implemented files / behavior | Verified so far | Remaining acceptance |
+|---|---|---|---|
+| P2.5 | `desktop-driver/native.rs`, `native_retry.rs`: typed stale-object retries for reads/focus/text; business taps are never replayed after invocation | Native regression tests and real Linux form readback | Final combined checks/review |
+| P2.11 | App v2 `e83cd8f`; coordinated semantic names, sidebar, payout state/polling and manual invoice readouts | Full app checks and independent commit review passed | No outstanding implementation task; trade behavior still needs G3 |
+| P2.12 | `desktop-driver/storage.rs`, Linux/Web lifecycle: private Fresh/Resume profiles and durable active-runtime markers | Forty driver tests; both real two-actor cross-handle recovery probes | Final combined checks and commit review |
+| P2.12 | `coordinator/recovery_store.rs`, `fingerprint/capture.rs`, `run/recovery/`, `cli/recover.rs`: atomic journal, persistent captured bundle, exact identities/origin/stack, UI cleanup and verified deletion | Reopen/tamper/write-failure tests; ten coordinator recovery regressions including payout-pending completion, duplicate settlement refusal and Bob-owned orders | Final evidence-write tests, combined checks and review |
+| P3.1–P3.2 | V2 `screens/orders.rs`, `scenario-kit/actions.rs`, `journal.rs`: form readback, durable submission intent, a single submit, public discovery after uncertainty | Real form probes; write-failure and single-publication regressions | Successful creation/discovery in the four target runs |
+| P3.3–P3.4 | `actions/buyer_invoice.rs`, `actions/hold.rs`, `environment/lnd/`, `run/recovery/payments.rs`: exact invoice amount/hash, bounded in-flight observation, escrow-plus-fee reservation, terminal UI and ledger verification | Invoice/readback tests, 75 environment tests, recovery payment regressions | Final hold ownership regression and all live funded paths |
+| P3.5 | `run/execute.rs`, `world_execution.rs`, `run/report.rs`: payout-pending wait, truthful cancellation, protected retention, public cleanup status, fail-closed evidence writes | Reopened cleanup and identity/stack mismatch regressions | Evidence-write failure regression, live cleanup and final review |
+| P4.2 | `scenarios/src/smoke/happy_buy.rs`, shared `flow.rs`: Bob creates buy, Alice funds first, Bob invoices next | Four injected flow tests including wrong ordering/cap/payment failures | Linux and Web happy_buy live passes |
+| P7.6 | README desktop quickstart and runbook recovery instructions | Commands checked against current CLI/config | Confirm commands against four passing live runs |
+
+Next, in order: finish the two outstanding failure-path regressions; run formatting, workspace clippy and
+relevant tests; close G2 with independent review; run happy_sell and happy_buy separately on Linux, then
+on Web, fixing failures and preserving their evidence; finish coverage/reviews and record the four successful
+run IDs. Stop at that checkpoint. No deferred scenario or resource-benchmark run is authorized by this plan.
+
+Final combined verification for G2 passed: `cargo fmt --all`,
+`cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace --all-targets`
+(604 passed, zero failed, one existing ignored test), and the coordinator binary build. Logs are
+`/tmp/mortsom-checkpoint-final-{clippy,tests,build}.log`. Independent native/storage, coordinator recovery,
+app commit and evidence-write reviews found no remaining blocker for G2. Prepayment and pending-hold
+ownership regressions now pass; ambiguous NWC UI errors also retain InFlight budget because they do not
+prove no payment occurred. This is an accounting safety correction, not Android feature work.

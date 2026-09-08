@@ -198,6 +198,8 @@ pub mod tests_support {
     pub struct ScriptedUi {
         present: Mutex<Vec<String>>,
         labels: Mutex<BTreeMap<String, String>>,
+        text: Mutex<BTreeMap<String, mortsom_common::Secret>>,
+        ignored_text: Mutex<Vec<String>>,
         calls: Mutex<Vec<String>>,
         on_tap: Mutex<BTreeMap<String, Vec<String>>>,
         /// Elements that disappear after `id` is tapped (navigation away).
@@ -221,6 +223,10 @@ pub mod tests_support {
     }
 
     impl ScriptedUi {
+        /// Acknowledges edits without accepting their values for this control.
+        pub fn ignore_text(&self, id: &str) {
+            self.ignored_text.lock().unwrap().push(id.into());
+        }
         /// Injects transient shutdown failures while retaining this fake session.
         pub fn fail_end_times(&self, failures: u32) {
             *self.end_failures.lock().unwrap() = failures;
@@ -432,10 +438,28 @@ pub mod tests_support {
                 .lock()
                 .unwrap()
                 .push(format!("type {id} ({} chars)", text.len()));
+            if !self
+                .ignored_text
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|ignored| ignored == id)
+            {
+                self.text
+                    .lock()
+                    .unwrap()
+                    .insert(id.into(), mortsom_common::Secret::new(text));
+            }
             Ok(())
         }
-        async fn text_of(&self, _: &str) -> Result<String, AppiumError> {
-            Ok(String::new())
+        async fn text_of(&self, id: &str) -> Result<String, AppiumError> {
+            Ok(self
+                .text
+                .lock()
+                .unwrap()
+                .get(id)
+                .map(|value| value.expose().to_owned())
+                .unwrap_or_default())
         }
         async fn is_enabled(&self, id: &str) -> Result<bool, AppiumError> {
             Ok(!self.disabled.lock().unwrap().iter().any(|d| d == id))

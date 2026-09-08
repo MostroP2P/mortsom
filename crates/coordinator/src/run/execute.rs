@@ -209,6 +209,30 @@ pub async fn sweep_cleanup(ctx: &Context) {
 }
 
 async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> CleanupResult {
+    if ctx.journal.enabled()
+        && let Ok(session) = ctx.actor(maker)
+        && ctx
+            .adapter
+            .observe_order(&session.device(ctx.ui_timeout), order)
+            .await
+            .is_ok_and(|state| state.state == OrderState::PayoutPending)
+    {
+        return match mortsom_scenario_kit::actions::wait_app_state(
+            ctx,
+            maker,
+            order,
+            OrderState::Completed,
+        )
+        .await
+        {
+            Ok(_) => CleanupResult::Done {
+                outcome: CancelOutcome::AlreadyClosed,
+            },
+            Err(error) => CleanupResult::Failed {
+                message: error.to_string(),
+            },
+        };
+    }
     let outcome = match cancel_as(ctx, maker, order).await {
         Ok(outcome) => outcome,
         Err(message) => return CleanupResult::Failed { message },

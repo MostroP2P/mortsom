@@ -167,3 +167,130 @@ async fn failed_navigation_deletes_session_then_stops_driver_and_profile() {
 async fn failed_driver_stop_retains_ownership_for_an_explicit_retry() {
     failed_start(true, true).await;
 }
+
+#[tokio::test]
+async fn persistent_profile_survives_end_and_resumes_without_clear_or_new_identity() {
+    use crate::storage::ActorStorage;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/session"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"value":{"sessionId":"owned"}})),
+        )
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/session/owned/url"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value":null})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/session/owned"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value":null})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let runner = Arc::new(Runner {
+        port: server.address().port(),
+        root: StdMutex::new(None),
+        attempts: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        fail_once: false,
+    });
+    let parent = tempfile::tempdir().unwrap();
+    let path = parent.path().join("alice");
+    let make_session = |storage| {
+        WebSession::new(
+            runner.clone(),
+            "http://127.0.0.1:9000".into(),
+            "driver".into(),
+            "browser".into(),
+        )
+        .with_storage(storage)
+    };
+    let fresh = make_session(ActorStorage::Fresh(path.clone()));
+    fresh.clear_app().await.unwrap();
+    assert!(path.join(".mortsom-active-runtime").exists());
+    let original_runtime = runner.root.lock().unwrap().clone().unwrap();
+    let identity = path.join("profile/identity-placeholder");
+    std::fs::write(&identity, b"retained identity").unwrap();
+    fresh.end().await.unwrap();
+    assert!(!path.join(".mortsom-active-runtime").exists());
+    assert!(!original_runtime.exists());
+    assert!(fresh.clear_app().await.is_err());
+    let resumed = make_session(ActorStorage::Resume(path.clone()));
+    assert!(resumed.clear_app().await.is_err());
+    resumed.activate_app().await.unwrap();
+    resumed.end().await.unwrap();
+    assert!(!runner.root.lock().unwrap().as_ref().unwrap().exists());
+    assert_eq!(std::fs::read(identity).unwrap(), b"retained identity");
+    let requests = server.received_requests().await.unwrap();
+    for request in requests
+        .iter()
+        .filter(|request| request.url.path() == "/session")
+    {
+        let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+        let args = body["capabilities"]["alwaysMatch"]["goog:chromeOptions"]["args"]
+            .as_array()
+            .unwrap();
+        assert!(args.contains(&json!(format!(
+            "--user-data-dir={}",
+            path.join("profile").display()
+        ))));
+    }
+    server.verify().await;
+}
+
+#[tokio::test]
+async fn absent_resume_storage_fails_before_starting_a_browser() {
+    let runner = Arc::new(MissingDriver::default());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("missing");
+    let session = WebSession::new(
+        runner.clone(),
+        "http://127.0.0.1:9000".into(),
+        "driver".into(),
+        "browser".into(),
+    )
+    .with_storage(crate::storage::ActorStorage::Resume(path.clone()));
+    assert!(session.activate_app().await.is_err());
+    assert!(runner.root.lock().unwrap().is_none());
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn crash_marker_refuses_resume_before_any_browser_process_starts() {
+    let runner = Arc::new(MissingDriver::default());
+    let parent = tempfile::tempdir().unwrap();
+    let path = parent.path().join("alice");
+    crate::storage::ActorStorage::Fresh(path.clone())
+        .prepare(crate::Platform::Web)
+        .unwrap();
+    drop(crate::storage::ActiveRuntime::begin(&path).unwrap());
+    let session = WebSession::new(
+        runner.clone(),
+        "http://127.0.0.1:9000".into(),
+        "driver".into(),
+        "browser".into(),
+    )
+    .with_storage(crate::storage::ActorStorage::Resume(path.clone()));
+    assert!(
+        session
+            .activate_app()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unverified prior shutdown")
+    );
+    assert!(runner.root.lock().unwrap().is_none());
+    session.end().await.unwrap();
+    assert!(
+        crate::storage::ensure_stopped(&path).is_err(),
+        "a new session must not clear an old runtime's marker"
+    );
+}

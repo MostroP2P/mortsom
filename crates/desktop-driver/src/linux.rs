@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 use crate::native::{Native, Node, error, label};
 
 struct Runtime {
+    active: Option<crate::storage::ActiveRuntime>,
     root: PathBuf,
     env: std::collections::BTreeMap<String, String>,
     services: Vec<Box<dyn ChildProcess>>,
@@ -34,6 +35,7 @@ pub struct LinuxSession {
     runner: Arc<dyn CommandRunner>,
     executable: PathBuf,
     xvfb: PathBuf,
+    storage: Option<crate::storage::ActorStorage>,
     runtime: Mutex<Option<Runtime>>,
 }
 
@@ -44,18 +46,32 @@ impl LinuxSession {
             runner,
             executable,
             xvfb,
+            storage: None,
             runtime: Mutex::new(None),
         }
     }
 
+    /// Retains caller-owned actor data across process shutdown and recovery.
+    pub fn with_storage(mut self, storage: crate::storage::ActorStorage) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
     async fn prepare(&self, slot: &mut Option<Runtime>) -> Result<(), AppiumError> {
         use std::os::unix::fs::DirBuilderExt;
+        let storage = self
+            .storage
+            .as_ref()
+            .map(|storage| storage.prepare(crate::Platform::Linux))
+            .transpose()
+            .map_err(error)?;
         let root = std::env::temp_dir().join(format!("mortsom-{}", mortsom_common::RunId::new()));
         std::fs::DirBuilder::new()
             .mode(0o700)
             .create(&root)
             .map_err(error)?;
         *slot = Some(Runtime {
+            active: None,
             root,
             env: Default::default(),
             native: None,
@@ -65,8 +81,17 @@ impl LinuxSession {
         let runtime = slot
             .as_mut()
             .ok_or_else(|| error("missing startup ownership"))?;
+        runtime.active = storage
+            .as_deref()
+            .map(crate::storage::ActiveRuntime::begin)
+            .transpose()
+            .map_err(error)?;
         match self
-            .prepare_services(&runtime.root, &mut runtime.services)
+            .prepare_services(
+                &runtime.root,
+                storage.as_deref().unwrap_or(&runtime.root),
+                &mut runtime.services,
+            )
             .await
         {
             Ok((env, native)) => {
@@ -87,6 +112,7 @@ impl LinuxSession {
     async fn prepare_services(
         &self,
         root: &Path,
+        storage: &Path,
         services: &mut Vec<Box<dyn ChildProcess>>,
     ) -> Result<(std::collections::BTreeMap<String, String>, Native), AppiumError> {
         let display_file = root.join("display");
@@ -134,11 +160,11 @@ impl LinuxSession {
             ("DISPLAY".into(), display),
             (
                 "XDG_DATA_HOME".into(),
-                root.join("data").display().to_string(),
+                storage.join("data").display().to_string(),
             ),
             (
                 "XDG_CONFIG_HOME".into(),
-                root.join("config").display().to_string(),
+                storage.join("config").display().to_string(),
             ),
             (
                 "XDG_CACHE_HOME".into(),
@@ -354,10 +380,15 @@ async fn stop(runtime: &mut Runtime) -> Result<(), AppiumError> {
     }
     runtime.native = None;
     match std::fs::remove_dir_all(&runtime.root) {
-        Ok(()) => Ok(()),
-        Err(cause) if cause.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(cause) => Err(error(cause)),
+        Ok(()) => {}
+        Err(cause) if cause.kind() == std::io::ErrorKind::NotFound => {}
+        Err(cause) => return Err(error(cause)),
     }
+    if let Some(active) = &runtime.active {
+        active.stopped().map_err(error)?;
+    }
+    runtime.active = None;
+    Ok(())
 }
 
 #[async_trait]
@@ -473,6 +504,14 @@ impl UiSession for LinuxSession {
     }
     async fn activate_app(&self) -> Result<(), AppiumError> {
         let mut guard = self.runtime.lock().await;
+        if guard.is_none()
+            && self
+                .storage
+                .as_ref()
+                .is_some_and(|storage| storage.is_resume())
+        {
+            self.prepare(&mut guard).await?;
+        }
         let runtime = guard
             .as_mut()
             .ok_or_else(|| error("session not prepared"))?;
@@ -499,6 +538,13 @@ impl UiSession for LinuxSession {
         Ok(())
     }
     async fn clear_app(&self) -> Result<(), AppiumError> {
+        if self
+            .storage
+            .as_ref()
+            .is_some_and(|storage| storage.is_resume())
+        {
+            return Err(error("cannot clear protected recovery storage"));
+        }
         let mut guard = self.runtime.lock().await;
         if let Some(runtime) = guard.as_mut() {
             stop(runtime).await?;

@@ -1,6 +1,7 @@
 //! `mortsom` command-line interface.
 
 mod maintenance;
+mod recover;
 mod run;
 use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};
 use run::run_command;
@@ -59,8 +60,8 @@ pub enum Command {
     },
     /// List registered scenarios with tags, requirements and value flag.
     List,
-    /// Remove what a crashed or interrupted run left on this host (its relay
-    /// container, Mortsom's emulators) and report orders it left open.
+    /// Recover retained desktop identities and orders, or clean legacy Android resources.
+    /// Refuses unresolved ownership and changed stack identities.
     Cleanup {
         /// Run id (the artifacts directory name).
         run: String,
@@ -269,7 +270,7 @@ pub async fn run(cli: Cli) -> ExitCode {
     match cli.command {
         Command::Stack { action } => stack_cli(&cli.ortsom_dir, action).await,
         Command::List => list_scenarios(),
-        Command::Cleanup { run } => cleanup_command(&cli.config, &run).await,
+        Command::Cleanup { run } => cleanup_command(&cli.config, &cli.ortsom_dir, &run).await,
         Command::Publish {
             run,
             out,

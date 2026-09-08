@@ -31,9 +31,15 @@ pub struct RealDesktopFactory;
 #[async_trait]
 impl DesktopFactory for RealDesktopFactory {
     async fn server(&self, options: &DesktopOptions) -> Result<Box<dyn DesktopServer>, String> {
-        let server = WebServer::start_owned(&options.artifact, Arc::clone(&options.bundle))
-            .await
-            .map_err(|cause| cause.to_string())?;
+        let origin = options
+            .recovery
+            .as_ref()
+            .and_then(|journal| journal.snapshot().origin);
+        let port = recovery_port(options.resume, origin.as_deref())?;
+        let server =
+            WebServer::start_owned_on_port(&options.artifact, Arc::clone(&options.bundle), port)
+                .await
+                .map_err(|cause| cause.to_string())?;
         Ok(Box::new(RealServer {
             url: server.url().into(),
             server: Some(server),
@@ -41,22 +47,42 @@ impl DesktopFactory for RealDesktopFactory {
     }
     fn session(
         &self,
-        _: Actor,
+        actor: Actor,
         options: &DesktopOptions,
         origin: Option<&str>,
     ) -> Result<Arc<dyn UiSession>, String> {
+        let storage = options.recovery.as_ref().map(|journal| {
+            let root = journal.root().join("actors").join(actor.as_str());
+            if options.resume {
+                mortsom_desktop_driver::storage::ActorStorage::Resume(root)
+            } else {
+                mortsom_desktop_driver::storage::ActorStorage::Fresh(root)
+            }
+        });
         match options.platform {
-            Platform::Web => Ok(Arc::new(WebSession::new(
-                Arc::new(TokioRunner),
-                origin.ok_or("Web server origin missing")?.into(),
-                options.chromedriver.clone(),
-                options.browser.clone(),
-            ))),
-            Platform::Linux => Ok(Arc::new(LinuxSession::new(
-                Arc::new(TokioRunner),
-                options.artifact.clone(),
-                options.xvfb.clone(),
-            ))),
+            Platform::Web => {
+                let session = WebSession::new(
+                    Arc::new(TokioRunner),
+                    origin.ok_or("Web server origin missing")?.into(),
+                    options.chromedriver.clone(),
+                    options.browser.clone(),
+                );
+                Ok(Arc::new(match storage {
+                    Some(storage) => session.with_storage(storage),
+                    None => session,
+                }))
+            }
+            Platform::Linux => {
+                let session = LinuxSession::new(
+                    Arc::new(TokioRunner),
+                    options.artifact.clone(),
+                    options.xvfb.clone(),
+                );
+                Ok(Arc::new(match storage {
+                    Some(storage) => session.with_storage(storage),
+                    None => session,
+                }))
+            }
             Platform::Android => Err("desktop factory cannot construct Android clients".into()),
         }
     }
@@ -76,5 +102,43 @@ impl DesktopServer for RealServer {
             self.server = None;
         }
         Ok(())
+    }
+}
+
+/// A recovered browser must bind its original origin before opening any profile.
+fn recovery_port(resume: bool, origin: Option<&str>) -> Result<u16, String> {
+    let Some(origin) = origin else {
+        return if resume {
+            Err("retained Web origin missing".into())
+        } else {
+            Ok(0)
+        };
+    };
+    let port = origin
+        .strip_prefix("http://127.0.0.1:")
+        .ok_or("invalid recovery Web origin")?
+        .parse::<u16>()
+        .map_err(|_| "invalid recovery Web port")?;
+    if port == 0 {
+        return Err("retained Web origin cannot use an ephemeral port".into());
+    }
+    Ok(port)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::recovery_port;
+    #[test]
+    fn resumed_browser_refuses_missing_or_nonpersistent_origins() {
+        assert_eq!(recovery_port(false, None), Ok(0));
+        assert_eq!(recovery_port(true, Some("http://127.0.0.1:8123")), Ok(8123));
+        for origin in [
+            None,
+            Some("http://127.0.0.1:0"),
+            Some("http://localhost:8123"),
+            Some("http://127.0.0.1:8123/path"),
+        ] {
+            assert!(recovery_port(true, origin).is_err());
+        }
     }
 }

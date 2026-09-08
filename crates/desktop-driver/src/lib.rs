@@ -67,4 +67,6 @@ pub mod text_entry;
 
 mod web_input;
 
+pub mod storage;
+
 mod native_retry;

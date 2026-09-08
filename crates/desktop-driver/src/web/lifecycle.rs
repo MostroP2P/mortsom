@@ -50,6 +50,10 @@ pub(super) async fn stop(runtime: &mut Runtime) -> Result<(), AppiumError> {
         failures.push(cause.to_string());
     }
     if failures.is_empty() {
+        if let Some(active) = &runtime.active {
+            active.stopped().map_err(error)?;
+        }
+        runtime.active = None;
         Ok(())
     } else {
         Err(error(failures.join("; ")))

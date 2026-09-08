@@ -9,7 +9,7 @@ use std::sync::{Arc, RwLock};
 use mortsom_common::{Redactor, RunId, Secret};
 use serde::Serialize;
 
-mod persist;
+pub(crate) mod persist;
 mod platform;
 use persist::{atomic_json, create_directory};
 pub(crate) use platform::recorded_platform;

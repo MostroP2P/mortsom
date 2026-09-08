@@ -22,8 +22,18 @@ impl WebServer {
         root: &Path,
         owner: Arc<T>,
     ) -> std::io::Result<Self> {
+        Self::start_owned_on_port(root, owner, 0).await
+    }
+
+    /// Rebinds the original loopback origin for recovery. A busy port is an error;
+    /// port zero requests a new ephemeral origin for a fresh run.
+    pub async fn start_owned_on_port<T: Send + Sync + 'static>(
+        root: &Path,
+        owner: Arc<T>,
+        port: u16,
+    ) -> std::io::Result<Self> {
         let root = root.canonicalize()?;
-        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, port)).await?;
         let url = format!("http://{}", listener.local_addr()?);
         let (stop, receiver) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(serve(listener, root, owner, receiver));
@@ -185,6 +195,36 @@ fn mime(path: &Path) -> &'static str {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    #[tokio::test]
+    async fn recovery_rebinds_the_exact_origin_and_refuses_a_busy_port() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("index.html"), b"ready").unwrap();
+        let server = WebServer::start(root.path()).await.unwrap();
+        let origin = server.url().to_owned();
+        let port = origin.rsplit(':').next().unwrap().parse().unwrap();
+        assert!(
+            WebServer::start_owned_on_port(root.path(), Arc::new(()), port)
+                .await
+                .is_err()
+        );
+        server.stop().await.unwrap();
+        let recovered = WebServer::start_owned_on_port(root.path(), Arc::new(()), port)
+            .await
+            .unwrap();
+        assert_eq!(recovered.url(), origin);
+        assert_eq!(
+            reqwest::get(&origin)
+                .await
+                .unwrap()
+                .bytes()
+                .await
+                .unwrap()
+                .as_ref(),
+            b"ready"
+        );
+        recovered.stop().await.unwrap();
+    }
+
     #[tokio::test]
     async fn cancelled_shutdown_retains_the_join_until_the_request_owner_finishes() {
         let (stop, receiver) = tokio::sync::oneshot::channel();

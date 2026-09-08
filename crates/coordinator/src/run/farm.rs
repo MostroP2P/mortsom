@@ -12,6 +12,10 @@ use std::{path::PathBuf, sync::Arc};
 /// Built client artifact and selected runtime.
 #[derive(Debug, Clone)]
 pub struct DesktopOptions {
+    /// Durable actor/bundle ownership for this invocation.
+    pub recovery: Option<Arc<crate::recovery_store::FileJournal>>,
+    /// Resume existing identities; never run first-launch bootstrap.
+    pub resume: bool,
     /// Linux or Web; Android uses the established device farm.
     pub platform: Platform,
     /// Native executable or Web build directory.
@@ -98,6 +102,13 @@ impl Farm {
             bundle: Arc::clone(&options.bundle),
             app_version: options.provenance.app_version.clone(),
         })
+    }
+
+    pub(super) fn origin(&self) -> Option<String> {
+        match self {
+            Self::Desktop { server, .. } => server.as_ref().map(|server| server.url().into()),
+            _ => None,
+        }
     }
 
     pub(super) fn sessions(&self) -> Vec<(Actor, Arc<dyn UiSession>)> {

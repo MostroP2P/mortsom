@@ -125,7 +125,16 @@ pub(super) fn accounting_command(config_path: &std::path::Path, lane: Option<&st
     }
 }
 
-pub(super) async fn cleanup_command(config_path: &std::path::Path, run_id: &str) -> ExitCode {
+pub(super) async fn cleanup_command(
+    config_path: &std::path::Path,
+    checkout: &std::path::Path,
+    run_id: &str,
+) -> ExitCode {
+    if let Ok(run) = run_id.parse::<mortsom_common::RunId>()
+        && let Some(result) = super::recover::cleanup_desktop(config_path, checkout, &run).await
+    {
+        return result;
+    }
     let config = match crate::config::MaintenanceConfig::load(config_path) {
         Ok(config) => config,
         Err(e) => {

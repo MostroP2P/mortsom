@@ -4,7 +4,8 @@ use super::*;
 /// An owned snapshot retained until both actor sessions have stopped.
 #[derive(Debug)]
 pub struct CapturedBundle {
-    root: tempfile::TempDir,
+    root: std::path::PathBuf,
+    _temporary: Option<tempfile::TempDir>,
     fingerprint: BundleFingerprint,
 }
 
@@ -23,14 +24,48 @@ impl CapturedBundle {
             return Err(io::Error::other("bundle changed during capture"));
         }
         Ok(Self {
-            root,
+            root: root.path().to_path_buf(),
+            _temporary: Some(root),
             fingerprint: captured,
         })
     }
 
+    /// Capture durable recovery bytes; the caller must explicitly remove them.
+    pub fn capture_persistent(source: &Path, target: &Path) -> io::Result<Self> {
+        use std::os::unix::fs::DirBuilderExt;
+        let expected = fingerprint(source, &RealBundleReader)?;
+        std::fs::DirBuilder::new().mode(0o700).create(target)?;
+        let entries = read_entries_with(open_root(source)?, |relative, file| {
+            copy_file(target, relative, file)
+        })?;
+        if fingerprint_entries(entries)? != expected {
+            return Err(io::Error::other("bundle changed during persistent capture"));
+        }
+        for entry in walk_directories(target)? {
+            std::fs::File::open(entry)?.sync_all()?;
+        }
+        std::fs::File::open(
+            target
+                .parent()
+                .ok_or_else(|| io::Error::other("bundle has no parent"))?,
+        )?
+        .sync_all()?;
+        Self::resume(target, expected)
+    }
+    /// Revalidate retained content without acquiring automatic deletion ownership.
+    pub fn resume(root: &Path, fingerprint: BundleFingerprint) -> io::Result<Self> {
+        let bundle = Self {
+            root: root.to_path_buf(),
+            _temporary: None,
+            fingerprint,
+        };
+        bundle.verify()?;
+        Ok(bundle)
+    }
+
     /// Private directory containing the captured bundle.
     pub fn root(&self) -> &Path {
-        self.root.path()
+        &self.root
     }
 
     /// Identity of the captured contents.
@@ -66,7 +101,24 @@ fn copy_file(root: &Path, relative: &Path, source: std::fs::File) -> io::Result<
         .open(target)?;
     let result = stream_file(source, Some(&mut output))?;
     output.set_permissions(std::fs::Permissions::from_mode(mode))?;
+    output.sync_all()?;
     Ok(result)
+}
+
+fn walk_directories(root: &Path) -> io::Result<Vec<std::path::PathBuf>> {
+    let mut directories = vec![root.to_path_buf()];
+    let mut index = 0;
+    while index < directories.len() {
+        for entry in std::fs::read_dir(&directories[index])? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                directories.push(entry.path());
+            }
+        }
+        index += 1;
+    }
+    directories.reverse();
+    Ok(directories)
 }
 
 #[cfg(test)]
@@ -109,6 +161,23 @@ mod tests {
         let owned = captured.root().to_path_buf();
         drop(captured);
         assert!(!owned.exists());
+    }
+
+    #[test]
+    fn persistent_capture_survives_owner_drop_and_rejects_changed_bytes_on_resume() {
+        let source = tempfile::tempdir().unwrap();
+        std::fs::write(source.path().join("asset"), b"app").unwrap();
+        let state = tempfile::tempdir().unwrap();
+        let target = state.path().join("bundle");
+        let captured = CapturedBundle::capture_persistent(source.path(), &target).unwrap();
+        let identity = captured.fingerprint().clone();
+        drop(captured);
+        let restored = CapturedBundle::resume(&target, identity.clone()).unwrap();
+        drop(restored);
+        std::fs::set_permissions(target.join("asset"), std::fs::Permissions::from_mode(0o600))
+            .unwrap();
+        std::fs::write(target.join("asset"), b"changed").unwrap();
+        assert!(CapturedBundle::resume(&target, identity).is_err());
     }
 
     #[test]

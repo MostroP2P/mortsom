@@ -79,6 +79,8 @@ fn fixture() -> (DesktopOptions, Factory) {
     }
     let bundle = Arc::new(crate::fingerprint::CapturedBundle::capture(root.path()).unwrap());
     let options = DesktopOptions {
+        recovery: None,
+        resume: false,
         artifact: bundle.root().into(),
         bundle,
         platform: Platform::Web,

@@ -72,6 +72,9 @@ impl AppAdapter for StateAdapter {
     ) -> Result<WalletConnection, AdapterError> {
         Err(AdapterError::infrastructure("no"))
     }
+    async fn owned_orders(&self, _: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
+        Ok(vec![])
+    }
     async fn create_order(
         &self,
         _: &DeviceContext<'_>,
@@ -226,6 +229,7 @@ pub fn context(adapter: Arc<dyn AppAdapter>) -> Context {
 /// Same as [`context`] with an explicit relay control.
 pub fn context_with(adapter: Arc<dyn AppAdapter>, relay_control: Arc<dyn RelayControl>) -> Context {
     Context {
+        journal: Arc::new(crate::journal::NoJournal),
         node_wallets: std::collections::BTreeMap::new(),
         adapter,
         actors: vec![

@@ -35,6 +35,28 @@ pub(super) async fn run_command(
             return ExitCode::from(2);
         }
     };
+    if platform != mortsom_desktop_driver::Platform::Android {
+        let pending = RealHost
+            .env("HOME")
+            .ok_or("HOME is required for desktop recovery".to_string())
+            .and_then(|home| {
+                crate::recovery_store::FileJournal::directory(std::path::Path::new(&home))
+            })
+            .and_then(|base| crate::recovery_store::FileJournal::refuse_pending(&base));
+        if let Err(error) = pending {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+        if ![&config.wallets.alice, &config.wallets.bob]
+            .iter()
+            .all(|wallet| matches!(wallet, mortsom_environment::WalletConfig::Lnd { .. }))
+        {
+            eprintln!(
+                "desktop checkpoint recovery requires Alice and Bob on caller-controlled LND wallets"
+            );
+            return ExitCode::from(2);
+        }
+    }
     let desktop = if platform == mortsom_desktop_driver::Platform::Android {
         None
     } else {
@@ -115,7 +137,7 @@ pub(super) async fn run_command(
 ///
 /// A free function rather than a closure: the factory is higher-ranked over
 /// the lifetime of what it borrows, and only an `fn` item names that.
-fn wallet_factory<'b>(
+pub(super) fn wallet_factory<'b>(
     label: &'b str,
     wallet: &'b mortsom_environment::WalletConfig,
 ) -> futures::future::BoxFuture<'b, Result<crate::run::WalletHandles, String>> {
@@ -171,6 +193,21 @@ struct NodeWalletOverLnd(mortsom_environment::LndWallet);
 
 #[async_trait::async_trait]
 impl mortsom_scenario_kit::context::NodeWallet for NodeWalletOverLnd {
+    fn routing_fee_cap_sats(&self) -> u64 {
+        mortsom_environment::lnd::MAX_ROUTING_FEE_SATS as u64
+    }
+    async fn cancel_invoice(&self, hash: &str) -> Result<(), String> {
+        self.0
+            .cancel_invoice(hash)
+            .await
+            .map_err(|error| error.to_string())
+    }
+    async fn settled_record_count(&self, hash: &str, incoming: bool) -> Result<usize, String> {
+        self.0
+            .settled_record_count(hash, incoming)
+            .await
+            .map_err(|error| error.to_string())
+    }
     async fn make_invoice(&self, sats: u64, memo: &str) -> Result<mortsom_common::Secret, String> {
         self.0
             .make_invoice(sats, memo)

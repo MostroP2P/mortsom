@@ -7,7 +7,9 @@
 mod execute;
 mod observer;
 mod preflight;
+pub(crate) mod recovery;
 mod report;
+mod world_execution;
 pub use observer::{LiveObserver, ObserverFactory};
 pub use report::RunSummary;
 use report::finish;
@@ -139,11 +141,19 @@ pub async fn run_scenarios(
     if options.desktop.is_none() {
         config.require_android().map_err(|e| e.to_string())?;
     }
-    let selected = select_for_run(
-        &options.scenarios,
-        options.tag.as_deref(),
-        options.desktop.is_some(),
-    )?;
+    let selected = if options
+        .desktop
+        .as_ref()
+        .is_some_and(|options| options.resume)
+    {
+        vec![&recovery::CLEANUP]
+    } else {
+        select_for_run(
+            &options.scenarios,
+            options.tag.as_deref(),
+            options.desktop.is_some(),
+        )?
+    };
     let clearance = clear_value_moving(config, deps, &selected)?;
     let mainnet = match clearance {
         Clearance::Mainnet(c) => Some(c),
@@ -169,6 +179,13 @@ pub async fn run_scenarios(
         deps.adapter.profile().name,
         mainnet.is_some(),
     )?;
+    if options
+        .desktop
+        .as_ref()
+        .is_some_and(|options| options.resume)
+    {
+        summary.command = "cleanup".into();
+    }
     report::record_environment(&artifacts, &summary)?;
     let (runnable, gated) = gate_capabilities(
         deps.adapter.as_ref(),
@@ -189,9 +206,17 @@ pub async fn run_scenarios(
     }
 
     report::record_environment(&artifacts, &summary)?;
+    let mut options = options.clone();
+    if let Err(error) = recovery::prepare(&mut options, &run_id, deps) {
+        summary
+            .checks
+            .push("protected-recovery", CheckStatus::Fail, error);
+        preflight::reject(&runnable, &mut summary);
+        return finish(&artifacts, &mut summary).map(|()| summary);
+    }
     let mut world = World::new(
         config,
-        options,
+        &options,
         deps,
         &artifacts,
         caps,
@@ -474,20 +499,57 @@ impl<'a> World<'a> {
                 ui: session.as_ref(),
                 ui_timeout: Duration::from_secs(self.config.ui_timeout_secs()),
             };
-            let actor = bootstrap_session(
-                self.config,
-                self.deps.adapter.as_ref(),
-                ctx,
-                &env,
-                self.artifacts,
-                &self.recorder,
-                &mut summary.checks,
-            )
-            .await;
+            let actor =
+                if let Some(options) = self.desktop.as_ref().filter(|options| options.resume) {
+                    let result = recovery::resume_actor(
+                        self,
+                        &ctx,
+                        options.recovery.as_ref().ok_or("resume journal missing")?,
+                    )
+                    .await;
+                    match result {
+                        Ok(actor) => actor,
+                        Err(error) => {
+                            self.farm = Some(farm);
+                            return Err(record_fail(summary, "recovery-identity", error));
+                        }
+                    }
+                } else {
+                    bootstrap_session(
+                        self.config,
+                        self.deps.adapter.as_ref(),
+                        ctx,
+                        &env,
+                        self.artifacts,
+                        &self.recorder,
+                        &mut summary.checks,
+                    )
+                    .await
+                };
             self.observe_actor(&actor).await;
             summary.actors.push(actor);
         }
-        self.farm = Some(farm);
+        if let Some(journal) = self
+            .desktop
+            .as_ref()
+            .and_then(|options| options.recovery.as_ref())
+        {
+            let identities = summary
+                .actors
+                .iter()
+                .filter_map(|actor| {
+                    actor
+                        .identity
+                        .as_ref()
+                        .map(|identity| (actor.actor.clone(), identity.public_key.clone()))
+                })
+                .collect();
+            let result = journal.set_actors(identities, farm.origin());
+            self.farm = Some(farm);
+            result.map_err(|error| record_fail(summary, "recovery-identity", error))?;
+        } else {
+            self.farm = Some(farm);
+        }
         // On the LND path the app is deliberately walletless, so a missing
         // wallet is the intended, successful outcome there.
         let bootstrapped = summary.actors.iter().all(|a| {
@@ -607,164 +669,6 @@ impl<'a> World<'a> {
                     .unwrap_or_default()
             },
             lane: self.config.run.lane,
-        }
-    }
-
-    /// Runs one scenario (with the retry policy) inside the live world.
-    async fn execute(
-        &self,
-        config: &Config,
-        def: &ScenarioDef,
-        summary: &mut RunSummary,
-    ) -> ScenarioResult {
-        let (Some(farm), Some(observer), Some(wallets)) =
-            (&self.farm, &self.observer, &self.wallets)
-        else {
-            return ScenarioResult {
-                name: def.name.into(),
-                app_profile: summary.app_profile.clone(),
-                app_version: summary.app_version.clone(),
-                outcome: Outcome::Failed {
-                    category: mortsom_common::FailureCategory::TestInfrastructure,
-                    message: "world not ready".into(),
-                },
-                attempts: 0,
-                duration: Duration::ZERO,
-            };
-        };
-        let actors: Vec<ActorSession> = farm
-            .sessions()
-            .into_iter()
-            .map(|(actor, ui)| ActorSession {
-                actor,
-                ui,
-                wallet_label: actor.as_str().to_owned(),
-            })
-            .collect();
-        let ctx = Context {
-            adapter: Arc::clone(&self.deps.adapter),
-            actors,
-            env: self.env(),
-            relay: Arc::clone(observer),
-            wallets: Arc::clone(wallets),
-            node_wallets: self.node_wallets.clone(),
-            relay_control: self.relay_control(),
-            budget: Arc::clone(&self.budget),
-            cleanup: Arc::clone(&self.cleanup),
-            timeline: Arc::clone(&self.timeline),
-            evidence: Arc::new(ArtifactSink::new(
-                self.artifacts.clone(),
-                Arc::clone(&self.recorder),
-            )),
-            pending_holds: Mutex::new(BTreeMap::new()),
-            mainnet: self.mainnet,
-            amount_sats: config.run.amount_sats,
-            fiat_code: config.run.fiat_code.clone(),
-            fiat_amount: config.run.fiat_amount,
-            payment_method: config.run.payment_method.clone(),
-            ui_timeout: Duration::from_secs(config.ui_timeout_secs()),
-            state_timeout: Duration::from_secs(config.run.state_timeout_secs),
-            settle_timeout: Duration::from_secs(config.run.settle_timeout_secs),
-            expiration_timeout: Duration::from_secs(config.run.expiration_timeout_secs),
-            recovery: RecoveryTiming {
-                quiet_window: Duration::from_secs(config.run.quiet_window_secs),
-                background_secs: config.run.background_secs,
-                outage: Duration::from_secs(config.run.outage_secs),
-            },
-        };
-        let result = execute_scenario(
-            def,
-            &ctx,
-            config.run.infra_retries,
-            &summary.app_profile,
-            summary.app_version.clone(),
-        )
-        .await;
-        execute::sweep_cleanup(&ctx).await;
-        result
-    }
-
-    /// Cleanup report, teardown of devices and relay, evidence flush.
-    async fn tear_down(&mut self, summary: &mut RunSummary) {
-        summary.cleanup = Some(self.cleanup.report());
-        summary.budget = Some(
-            self.budget
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .totals(),
-        );
-        if let Some(observer) = self.observer.take() {
-            for event in observer.snapshot() {
-                self.timeline.push_at(
-                    event.received_at_ms,
-                    TimelineKind::RelayEvent,
-                    None,
-                    format!(
-                        "relay: kind {} from {} (event {})",
-                        event.kind,
-                        short(&event.author),
-                        short(&event.id)
-                    ),
-                    Some(event.id.clone()),
-                );
-                if let Err(e) = self.artifacts.append_jsonl(files::RELAY_EVENTS, &event) {
-                    error!(error = %e, "cannot append relay event");
-                }
-            }
-            observer.stop().await;
-        }
-        if let Some(wallets) = self.wallets.take() {
-            let payments = serde_json::json!({
-                "observations": wallets.snapshot(),
-                "budget": summary.budget,
-            });
-            if let Err(e) = self.artifacts.write_json(files::WALLET_PAYMENTS, &payments) {
-                error!(error = %e, "cannot write wallet payments");
-            }
-        }
-        if let Some(farm) = self.farm.take() {
-            summary.farm_teardown = farm.tear_down(self.deps.runner).await;
-            let ok = summary.farm_teardown.iter().all(|i| i.ok);
-            summary.checks.push(
-                "device-teardown",
-                if ok {
-                    CheckStatus::Pass
-                } else {
-                    CheckStatus::Fail
-                },
-                format!("{} items", summary.farm_teardown.len()),
-            );
-        }
-        if let Some(relay) = self.relay.take() {
-            let (teardown, logs) = teardown_relay(self.deps.docker.as_ref(), &relay, false).await;
-            if let Err(e) = self.artifacts.write_text("relay-container.log", &logs) {
-                error!(error = %e, "cannot write relay log");
-            }
-            summary.checks.push(
-                "relay-teardown",
-                if teardown.removed {
-                    CheckStatus::Pass
-                } else {
-                    CheckStatus::Fail
-                },
-                teardown
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "container removed".into()),
-            );
-            summary.relay_teardown = Some(teardown);
-        }
-        if let Err(e) = self.artifacts.write_text(
-            files::TIMELINE,
-            &self.timeline.render(&format!("Run {}", summary.run_id)),
-        ) {
-            error!(error = %e, "cannot write timeline");
-        }
-        if let Err(e) = self
-            .artifacts
-            .write_json(files::TIMELINE_JSON, &self.timeline.entries())
-        {
-            error!(error = %e, "cannot write timeline.json");
         }
     }
 }

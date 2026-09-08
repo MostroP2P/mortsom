@@ -89,6 +89,8 @@ impl Ids {
     // cannot produce one.
     pub const INVOICE_NWC_TEXT: &'static str = "invoice.nwc.text";
     pub const INVOICE_MANUAL: &'static str = "invoice.manual";
+    pub const INVOICE_AMOUNT: &'static str = "invoice.amount";
+    pub const INVOICE_ORDER_ID: &'static str = "invoice.order_id";
     pub const INVOICE_TEXT: &'static str = "invoice.text";
     pub const INVOICE_SUBMIT: &'static str = "invoice.submit";
     pub const INVOICE_CANCEL: &'static str = "invoice.cancel";
@@ -164,6 +166,8 @@ impl Ids {
         Self::TRADE_RATE,
         Self::INVOICE_NWC_TEXT,
         Self::INVOICE_MANUAL,
+        Self::INVOICE_AMOUNT,
+        Self::INVOICE_ORDER_ID,
         Self::INVOICE_TEXT,
         Self::INVOICE_SUBMIT,
         Self::INVOICE_CANCEL,

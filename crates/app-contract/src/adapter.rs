@@ -65,6 +65,21 @@ pub trait AppAdapter: Send + Sync {
         label: &str,
         uri: &Secret,
     ) -> Result<WalletConnection, AdapterError>;
+    /// Existing identity read without generation or onboarding (recovery only).
+    async fn existing_identity(
+        &self,
+        _device: &DeviceContext<'_>,
+    ) -> Result<Identity, AdapterError> {
+        Err(AdapterError::contract(
+            "read-only identity recovery is not supported",
+        ))
+    }
+    /// Order IDs displayed in the actor's own trades list.
+    async fn owned_orders(&self, _device: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
+        Err(AdapterError::contract(
+            "own-order discovery is not supported",
+        ))
+    }
     /// Creates a fixed-price order.
     async fn create_order(
         &self,
@@ -91,6 +106,17 @@ pub trait AppAdapter: Send + Sync {
         order: &OrderReference,
         path: PaymentPath,
     ) -> Result<PaymentHandoff, AdapterError>;
+    /// Opens the buyer invoice form and reads the actual requested sats.
+    /// Implementations must not generate or submit an invoice during this read.
+    async fn buyer_invoice_amount(
+        &self,
+        _device: &DeviceContext<'_>,
+        _order: &OrderReference,
+    ) -> Result<u64, AdapterError> {
+        Err(AdapterError::contract(
+            "buyer invoice amount readout is not supported",
+        ))
+    }
     /// Submits the buyer invoice and returns it (protected) when the app
     /// exposed it, for hash correlation.
     ///

@@ -1,7 +1,7 @@
 //! Private JSON staging and durable publication of report directory entries.
 use std::{io, path::Path};
 
-pub(super) fn create_directory(path: &Path) -> io::Result<()> {
+pub(crate) fn create_directory(path: &Path) -> io::Result<()> {
     create_with(path, &RealDirectorySync)
 }
 
@@ -31,7 +31,7 @@ fn create_with(path: &Path, sync: &dyn DirectorySync) -> io::Result<()> {
     Ok(())
 }
 
-pub(super) fn atomic_json(path: &Path, json: &str) -> io::Result<()> {
+pub(crate) fn atomic_json(path: &Path, json: &str) -> io::Result<()> {
     use std::io::Write;
     let parent = path
         .parent()

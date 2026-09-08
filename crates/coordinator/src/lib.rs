@@ -29,3 +29,6 @@ pub mod fingerprint;
 
 /// Source and build provenance for captured desktop artifacts.
 pub mod provenance;
+
+/// Protected desktop identity and action recovery.
+pub mod recovery_store;
