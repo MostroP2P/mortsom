@@ -34,8 +34,8 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 ### Web build did not persist trades (fixed locally 2026-09-09)
 
-Two independent causes, both fixed on the app's `feat/mortsom-linux-accessibility` branch and pending
-upstream review: the `wasm32` storage backend stubbed every trade operation (`fe7fd55` adds the `trades` and
+Two independent causes, both fixed on the app's `feat/mortsom-linux-accessibility` branch, upstream PR
+MostroP2P/app#408: the `wasm32` storage backend stubbed every trade operation (`fe7fd55` adds the `trades` and
 `trade_keys` IndexedDB stores, part of app issue #233), and the Dart bootstrap skipped `init_db` on the web
 altogether (`def4d40`), which also meant the "implemented" web chat store had never been opened.
 

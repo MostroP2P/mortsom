@@ -63,8 +63,8 @@ private recovery state to gain space.
   `20260908T190424Z-85827b058763` (buy). Web: `20260909T025026Z-034b13e4fb91` (sell),
   `20260909T033857Z-e7b88a390989` (buy). Every pass settled the hold once on Alice and the payout once on Bob,
   resolved its order and retained nothing.
-- **App v2 changes required for Web** are committed on the app's `feat/mortsom-linux-accessibility` branch
-  and not yet pushed or reviewed upstream: `fe7fd55` (IndexedDB trades and trade-key stores), `def4d40` (open
+- **App v2 changes required for Web** are on the app's `feat/mortsom-linux-accessibility` branch, pushed to
+  `MostroP2P/app` as PR #408 (https://github.com/MostroP2P/app/pull/408), pending review: `fe7fd55` (IndexedDB trades and trade-key stores), `def4d40` (open
   the store on the web; `init_db` was skipped there, so nothing ever persisted), `e3ac458` (orders, relays,
   identity and outbox stores; the identity stub had made every order creation fail once the store was open).
   The Web bundle under test was built from `e3ac458`.
@@ -78,8 +78,7 @@ private recovery state to gain space.
   detached (`setsid nohup … &`) and followed through their log. Nothing in the harness depends on this.
 - No journal is retained; no harness process is left running; the regtest stack stays up by design.
 
-Next steps, in order: push this branch and open the PR; push the app branch and open its PR upstream
-(`MostroP2P/app`), citing issue #233; then the remaining plan items (isolate the Android crates behind a
+Next steps, in order: land Mortsom PR #18 and app PR #408; then the remaining plan items (isolate the Android crates behind a
 feature, replace the Ortsom delegation with the Mortsom-owned stack of spec section 5), coverage measurement
 and the further scenarios the operator chooses.
 
