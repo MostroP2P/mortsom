@@ -290,3 +290,43 @@ async fn cancel_from_the_invoice_form_uses_the_forms_cancel_button() {
         "{calls:?}"
     );
 }
+
+/// The detail read leaves an open form and reopens the trade: a trade the
+/// app routes straight back to the invoice form is one the daemon has asked
+/// an invoice for; one that opens on its detail shows that status instead.
+#[tokio::test]
+async fn the_detail_read_reports_where_the_reopened_trade_lands() {
+    let ui = taken_form(OrderKind::Sell, "o1");
+    let a = adapter();
+    let order = OrderReference::with_kind("o1", OrderKind::Sell);
+    a.find_and_take_order(&device(&ui), &order).await.unwrap();
+    ui.present(&[Ids::NAV_TRADES, "trades.item.o1", Ids::APPBAR_BACK]);
+    ui.on_tap(Ids::APPBAR_BACK, &[Ids::ORDER_ADD_FAB]);
+    ui.on_tap_hide(
+        Ids::APPBAR_BACK,
+        &[Ids::INVOICE_TEXT, Ids::INVOICE_ORDER_ID],
+    );
+    ui.on_tap(
+        "trades.item.o1",
+        &[Ids::INVOICE_TEXT, Ids::INVOICE_ORDER_ID],
+    );
+
+    let state = a.observe_order_detail(&device(&ui), &order).await.unwrap();
+    assert_eq!(state.raw_label, "waiting-invoice");
+    assert_eq!(state.state, OrderState::Taken);
+
+    // Before the daemon asks, the same trade opens on its detail.
+    let ui = taken_form(OrderKind::Sell, "o1");
+    a.find_and_take_order(&device(&ui), &order).await.unwrap();
+    ui.present(&[Ids::NAV_TRADES, "trades.item.o1", Ids::APPBAR_BACK]);
+    ui.on_tap(Ids::APPBAR_BACK, &[Ids::ORDER_ADD_FAB]);
+    ui.on_tap_hide(
+        Ids::APPBAR_BACK,
+        &[Ids::INVOICE_TEXT, Ids::INVOICE_ORDER_ID],
+    );
+    ui.on_tap("trades.item.o1", &[Ids::ORDER_STATUS, Ids::ORDER_ID]);
+    ui.label(Ids::ORDER_ID, "o1");
+    ui.label(Ids::ORDER_STATUS, "waiting-payment");
+    let state = a.observe_order_detail(&device(&ui), &order).await.unwrap();
+    assert_eq!(state.raw_label, "waiting-payment");
+}

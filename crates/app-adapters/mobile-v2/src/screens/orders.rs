@@ -147,15 +147,42 @@ pub async fn observe(
     observe_detail(device, order).await
 }
 
-/// Reads the status the trade detail shows, leaving any open form. The forms
-/// answer a fixed waiting label while they are up; the detail is where the
-/// daemon's next status (the request for an invoice, say) becomes visible.
+/// Reads the trade's state by leaving any open form and reopening the trade
+/// from the list. Where it opens is the observation: the app routes a trade
+/// that waits on this user's invoice or payment straight to that form, and
+/// shows the detail with its status otherwise. Unlike [`observe`], a form the
+/// harness itself opened earlier proves nothing here, because it is left
+/// first -- so this is the read that shows the daemon's request arriving.
 pub async fn observe_detail(
     device: &DeviceContext<'_>,
     order: &OrderReference,
 ) -> Result<AppOrderState, AdapterError> {
-    open_trade(device, order).await?;
-    verify_order_id(device, Ids::ORDER_ID, order).await?;
+    go_home(device).await?;
+    tap(device, Ids::NAV_TRADES).await?;
+    tap(device, &Ids::trades_item(&order.id)).await?;
+    let landed = super::first_present(
+        device,
+        &[Ids::ORDER_STATUS, Ids::INVOICE_TEXT, Ids::PAY_INVOICE_TEXT],
+    )
+    .await?;
+    match landed {
+        Some(id) if id == Ids::INVOICE_TEXT => {
+            verify_order_id(device, Ids::INVOICE_ORDER_ID, order).await?;
+            return Ok(AppOrderState {
+                state: OrderState::Taken,
+                raw_label: "waiting-invoice".into(),
+            });
+        }
+        Some(id) if id == Ids::PAY_INVOICE_TEXT => {
+            verify_order_id(device, Ids::PAY_ORDER_ID, order).await?;
+            return Ok(AppOrderState {
+                state: OrderState::Taken,
+                raw_label: "waiting-payment".into(),
+            });
+        }
+        Some(_) => verify_order_id(device, Ids::ORDER_ID, order).await?,
+        None => return Err(AdapterError::contract("`order.status` did not appear")),
+    }
     let raw = label(device, Ids::ORDER_STATUS).await?;
     let state = from_v2_label(&raw).ok_or_else(|| {
         AdapterError::product(format!(
