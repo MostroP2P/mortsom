@@ -4,12 +4,12 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 2/2, Web 0/2.**
+**Accepted: Linux 2/2, Web 2/2.** All four checkpoint cells are accepted.
 
 | Scenario | Linux | Web |
 |---|---|---|
-| `happy_sell` | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528` (see below) | **Blocked by the app**: one attempt, run `20260908T190651Z-8031670f7eb5` (see below) |
-| `happy_buy` | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763` (see below) | **Blocked by the app**: same cause as `happy_sell`; not attempted |
+| `happy_sell` | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528` | **Accepted** 2026-09-09, run `20260909T025026Z-034b13e4fb91` |
+| `happy_buy` | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763` | **Accepted** 2026-09-09, run `20260909T033857Z-e7b88a390989` |
 
 ## Live attempts
 
@@ -17,6 +17,9 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260909T033857Z-e7b88a390989` | Web | happy_buy | **Passed.** Order `e03c537d-30ac-4f47-82cd-35ed988b4e8c`: Bob created the buy, Alice took and paid hold `353bb042…`, Bob provided the invoice once the daemon asked, fiat sent, released; both clients completed | None. Hold settled once on Alice (1005 sats), payout once on Bob (995 sats). Resolved, nothing retained. Harness `40377ea`, app `e3ac458` |
+| `20260909T025026Z-034b13e4fb91` | Web | happy_sell | **Passed.** Order `0620785e-a819-487b-8c04-dfbd4822c716`: created, taken, invoice, hold `e185d552…` paid, fiat sent, released; relay `success`; both clients completed | None. Hold settled once on Alice (1005 sats), payout once on Bob (995 sats). Resolved, nothing retained. Harness `123ff35`, app `e3ac458` |
+| `20260909T02*` and `20260909T03*` (nine runs) | Web | both | Diagnostic attempts between the two passes | Each was recovered with verified cleanup and no settled payment: two browser deaths under the environment's memory guard (one with a hold in flight, released by cooperative cancel), a lost submit press, a currency pick the picker ignored, a focusing click landing on the currency row, a dropped buyer invoice, an order-id readout read mid-transition, and two submissions that produced no order (closed with `--attribute-order actor=none`). Fixes: `1e4ae9a`, `123ff35`, `c0faa5a`, `2f2361c`, `27b8bf2`, `40377ea` |
 | `20260909T005557Z-bf36f2d729bf` | Web | happy_sell | Alice submitted the sell order; the daemon saved `2ff23833-e73f-4ef3-8387-4dc5e0ebf37b` | Same symptom as the run below with the IndexedDB trades store already built in (app `fe7fd55`): the Dart bootstrap never called `init_db` on the web, so `db()` stayed unset and nothing persisted. Fixed in app `def4d40`. The journal was resolved with `cleanup --attribute-order alice=…` once the daemon expired the order; no payment |
 | `20260908T190651Z-8031670f7eb5` | Web | happy_sell | Alice submitted the sell order; the daemon saved `3d2c95a2-1209-4e9a-b7b1-10150154213d` as pending | Alice's Web app never listed the trade: "Mis operaciones" stayed empty. App v2's IndexedDB backend (`rust/src/db/indexeddb.rs`) implements only chat messages and settings; `save_trade`, `get_trade` and trade listing are stubs pending the app's issue #233. No payment. The pending order expires on the daemon after its one-hour limit. The journal has an unresolved submission and its Web profile is **retained**; see HANDOFF |
 | `20260908T190424Z-85827b058763` | Linux | happy_buy | **Passed** on the first attempt. Order `c31c3647-2098-4b5a-a3e7-8a3b32831cdc`: Bob created the buy, Alice took it and paid hold `ee711130…`, Bob provided invoice `fbca5acb…`, fiat sent, released; both clients completed | None. Hold settled once on Alice (1005 sats), payout settled once on Bob (995 sats), zero fees. Resolved, nothing retained. Harness `c39881e`, app `0ed7efb` |

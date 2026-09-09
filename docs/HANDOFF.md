@@ -10,7 +10,7 @@ v1.0. The plan, in order:
 
 1. **Docs cut.** Done. Only README, spec, this file, the acceptance ledger and the runbook are live; the rest
    is under `docs/history/`.
-2. **Close the live cells.** Linux done (2/2). Web blocked by the app; see below.
+2. **Close the live cells.** Done: Linux 2/2 and Web 2/2.
 3. **Isolate the frozen Android path** (`crates/android-driver`, `crates/app-adapters/mobile-legacy`) behind
    a Cargo feature so the default workspace is desktop and Web only.
 4. **Own the stack.** Replace the Ortsom delegation in `crates/coordinator/src/stack/` with Mortsom's own
@@ -57,27 +57,31 @@ export MORTSOM_BROWSER=/snap/chromium/current/usr/lib/chromium-browser/chrome
 Disk: about 34 GiB free on `/home`. Builds are large; check before coverage runs. Never delete artifacts or
 private recovery state to gain space.
 
-## Where things stand (2026-09-08, evening)
+## Where things stand (2026-09-09, early morning)
 
-- **Linux 2/2 accepted**: `happy_sell` run `20260908T190151Z-d027fc8a5528`, `happy_buy` run
-  `20260908T190424Z-85827b058763`. Both settled the hold on Alice and the payout on Bob exactly once.
-- **Web 0/2, blocked by the app.** The Web build of app v2 has no trade persistence: `rust/src/db/indexeddb.rs`
-  stubs `save_trade` and listing (app issue #233). Alice's Web client created order `3d2c95a2-…` but never
-  listed it, so the harness could neither continue nor cancel through the UI. The pending order expires on the
-  daemon after one hour with no funds involved.
-- **A retained journal blocks new desktop runs.** Run `20260908T190651Z-8031670f7eb5` (Web) has an
-  unresolved submission and its profile is retained under `$HOME/.local/state/mortsom/recovery/`. Until it is
-  resolved, `run` refuses to start. `cleanup` cannot resolve it through the UI because the Web app cannot show
-  the order. Options the operator must choose between: implement the app's trades store for Web and retry
-  recovery; or add a relay-based resolution path for a maker submission whose order the app never listed
-  (correlate the daemon's pending event in the submission window, then observe its expiry or cancel it once the
-  app can); or, as an explicit operator decision, mark that journal resolved by hand after the order has
-  expired on the daemon. None of these is done.
-- Fixes landed today in the harness: LND empty-invoice-database lookup (`8de9f4e`); relay-confirmed
-  cancellation with counterpart escalation (`aaa0615`, `869644a`); relay-list draw race in recovery
-  (`30c3298`); public-book correlation uses `in-progress`, never `active` (`c39881e`).
-- App v2 product issues found (to file against `MostroP2P/app`): optimistic `Canceled` on cooperative cancel
-  request; no trade persistence on Web. Details in the acceptance ledger.
+- **All four checkpoint cells accepted.** Linux: `20260908T190151Z-d027fc8a5528` (sell),
+  `20260908T190424Z-85827b058763` (buy). Web: `20260909T025026Z-034b13e4fb91` (sell),
+  `20260909T033857Z-e7b88a390989` (buy). Every pass settled the hold once on Alice and the payout once on Bob,
+  resolved its order and retained nothing.
+- **App v2 changes required for Web** are committed on the app's `feat/mortsom-linux-accessibility` branch
+  and not yet pushed or reviewed upstream: `fe7fd55` (IndexedDB trades and trade-key stores), `def4d40` (open
+  the store on the web; `init_db` was skipped there, so nothing ever persisted), `e3ac458` (orders, relays,
+  identity and outbox stores; the identity stub had made every order creation fail once the store was open).
+  The Web bundle under test was built from `e3ac458`.
+- **Harness changes on this branch** (`feat/web-happy-paths`): operator attribution for journals whose order
+  the app never listed (`--attribute-order actor=order-id` or `actor=none`), relay-confirmed closure of
+  unlisted orders, Web presses and focusing clicks that wait for the node to rest, verified picker choices,
+  bounded settle for order-id readouts, re-entry of a dropped buyer invoice, cancel from invoice and payment
+  forms, and providing the buyer invoice only after the daemon asks for it.
+- **Environment caveat.** The Claude Code session's memory guard killed background tasks and, once, both
+  browsers mid-trade (funds were recovered by cooperative cancel). Live Web runs were therefore launched
+  detached (`setsid nohup … &`) and followed through their log. Nothing in the harness depends on this.
+- No journal is retained; no harness process is left running; the regtest stack stays up by design.
+
+Next steps, in order: push this branch and open the PR; push the app branch and open its PR upstream
+(`MostroP2P/app`), citing issue #233; then the remaining plan items (isolate the Android crates behind a
+feature, replace the Ortsom delegation with the Mortsom-owned stack of spec section 5), coverage measurement
+and the further scenarios the operator chooses.
 
 ## Resume commands
 
@@ -111,5 +115,6 @@ Commit each completed task after fmt, strict clippy and meaningful tests.
 
 ## Last verification
 
-617 workspace tests passed, zero failed; formatting and strict clippy clean, at `c39881e`. Coverage has not
-been measured at this checkpoint.
+630 workspace tests passed, zero failed; formatting and strict clippy clean, at `40377ea`. App v2: 343
+Flutter tests passed, wasm32 and native clippy clean at `e3ac458`. Coverage has not been re-measured since
+83.88% at `5c764ba`.
