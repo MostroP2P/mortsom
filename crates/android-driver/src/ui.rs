@@ -200,6 +200,9 @@ pub mod tests_support {
         labels: Mutex<BTreeMap<String, String>>,
         text: Mutex<BTreeMap<String, mortsom_common::Secret>>,
         ignored_text: Mutex<Vec<String>>,
+        /// Controls whose next `n` typed values the app throws away after
+        /// accepting them: a form rebuilt by an incoming message.
+        wiped_text: Mutex<BTreeMap<String, u32>>,
         calls: Mutex<Vec<String>>,
         on_tap: Mutex<BTreeMap<String, Vec<String>>>,
         /// Elements that disappear after `id` is tapped (navigation away).
@@ -226,6 +229,11 @@ pub mod tests_support {
     }
 
     impl ScriptedUi {
+        /// The next `times` values typed into `id` are accepted and then lost,
+        /// as when the app rebuilds a form on a message that arrives mid-entry.
+        pub fn wipes_text(&self, id: &str, times: u32) {
+            self.wiped_text.lock().unwrap().insert(id.into(), times);
+        }
         /// Acknowledges edits without accepting their values for this control.
         pub fn ignore_text(&self, id: &str) {
             self.ignored_text.lock().unwrap().push(id.into());
@@ -454,7 +462,19 @@ pub mod tests_support {
                 .lock()
                 .unwrap()
                 .push(format!("type {id} ({} chars)", text.len()));
-            if !self
+            let wiped = {
+                let mut wiped = self.wiped_text.lock().unwrap();
+                match wiped.get_mut(id) {
+                    Some(left) if *left > 0 => {
+                        *left -= 1;
+                        true
+                    }
+                    _ => false,
+                }
+            };
+            if wiped {
+                self.text.lock().unwrap().remove(id);
+            } else if !self
                 .ignored_text
                 .lock()
                 .unwrap()

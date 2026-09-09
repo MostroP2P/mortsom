@@ -200,3 +200,93 @@ async fn an_order_id_still_settling_is_waited_for_not_rejected() {
         "{failure:?}"
     );
 }
+
+/// The maker of a buy lands on the invoice form before the seller's hold is
+/// accepted; the daemon's request then rebuilds the form and drops the typed
+/// invoice. Bob's live Web buy of 2026-09-09 pressed a disabled submit over
+/// an empty field. The invoice is typed again; submit is still pressed once.
+#[tokio::test]
+async fn an_invoice_the_app_dropped_is_typed_again_and_submitted_once() {
+    let ui = taken_form(OrderKind::Sell, "o1");
+    let a = adapter();
+    let order = OrderReference::with_kind("o1", OrderKind::Sell);
+    a.find_and_take_order(&device(&ui), &order).await.unwrap();
+    ui.present(&[Ids::INVOICE_SUBMIT]);
+    ui.on_tap(
+        Ids::INVOICE_SUBMIT,
+        &[
+            Ids::ORDER_STATUS,
+            Ids::ORDER_ID,
+            Ids::ORDER_ADD_FAB,
+            Ids::NAV_TRADES,
+            "trades.item.o1",
+        ],
+    );
+    ui.on_tap_hide(
+        Ids::INVOICE_SUBMIT,
+        &[Ids::INVOICE_TEXT, Ids::INVOICE_ORDER_ID],
+    );
+    ui.label(Ids::ORDER_ID, "o1");
+    ui.label(Ids::ORDER_STATUS, "active");
+    ui.wipes_text(Ids::INVOICE_TEXT, 1);
+
+    a.provide_buyer_invoice(&device(&ui), &order, Some(&Secret::new("private-invoice")))
+        .await
+        .unwrap();
+
+    let calls = ui.calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|c| c.starts_with("type invoice.text"))
+            .count(),
+        2,
+        "{calls:?}"
+    );
+    assert_eq!(
+        calls.iter().filter(|c| *c == "tap invoice.submit").count(),
+        1,
+        "{calls:?}"
+    );
+}
+
+/// Opening a trade that waits on this user's invoice lands on the invoice
+/// form, whose cancel button cancels the order. Cleanup must use it instead
+/// of waiting for a detail screen that never comes.
+#[tokio::test]
+async fn cancel_from_the_invoice_form_uses_the_forms_cancel_button() {
+    let ui = taken_form(OrderKind::Sell, "o1");
+    let a = adapter();
+    let order = OrderReference::with_kind("o1", OrderKind::Sell);
+    a.find_and_take_order(&device(&ui), &order).await.unwrap();
+    // Back leaves the form for the book, where the trade is listed; opening
+    // it returns to the form.
+    ui.present(&[Ids::NAV_TRADES, "trades.item.o1", Ids::APPBAR_BACK]);
+    ui.on_tap(Ids::APPBAR_BACK, &[Ids::ORDER_ADD_FAB]);
+    ui.on_tap_hide(
+        Ids::APPBAR_BACK,
+        &[Ids::INVOICE_TEXT, Ids::INVOICE_ORDER_ID],
+    );
+    ui.on_tap(
+        "trades.item.o1",
+        &[
+            Ids::INVOICE_TEXT,
+            Ids::INVOICE_ORDER_ID,
+            Ids::INVOICE_CANCEL,
+        ],
+    );
+    ui.on_tap(Ids::INVOICE_CANCEL, &[Ids::TRADE_CANCEL_CONFIRM]);
+
+    let outcome = a.cancel_if_open(&device(&ui), &order).await.unwrap();
+
+    assert_eq!(outcome, CancelOutcome::Cancelled);
+    let calls = ui.calls();
+    assert!(
+        calls.contains(&"tap invoice.cancel".to_owned()),
+        "{calls:?}"
+    );
+    assert!(
+        calls.contains(&"tap trade.cancel.confirm".to_owned()),
+        "{calls:?}"
+    );
+}
