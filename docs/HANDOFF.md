@@ -3,7 +3,17 @@
 Read [spec.md](../spec.md) first; it is normative. This file says where the work is and what comes next.
 Repository content is English; the operator conversation is Spanish.
 
-## Where things stand (2026-09-09, evening)
+## Where things stand (2026-09-09, night)
+
+**The happy-path and cancellation families are implemented and unit-tested; their live acceptance is
+pending.** Spec section 8 now lists the seven scenario families with their tags; the first two are in the
+catalogue: `range_order`, `market_price_order`, `full_trade_with_rating` (with `happy_sell`, `happy_buy`)
+and `cancel_before_taken` (was `cancel_pending`), `cancel_after_take_unpaid`, `taker_cancel_at_taken`,
+`cooperative_cancel`, `unilateral_cancel_rejected`. `run --tag <family>` on Linux and Web runs the family
+as a sequence of single-scenario runs and prints a family report. The app checkout carries the range and
+star identifiers on branch `feat/mortsom-range-and-rating-ids` (commit `20e7e90`, unpushed); both clients
+must be rebuilt from it before `range_order` or `full_trade_with_rating` can run. Nothing beyond the
+original four cells has been run live yet: the acceptance ledger lists the new cells as pending.
 
 **The checkpoint is met: all four cells are accepted.** Linux `happy_sell` and `happy_buy`, Web `happy_sell`
 and `happy_buy`, each a funded regtest trade driven end to end through the real app v2 UI, with the hold
@@ -30,14 +40,20 @@ No journal is retained, no harness process is left running, and the regtest stac
    still build by default. Put them behind a Cargo feature so the default workspace is desktop and Web only.
 2. **Measure coverage.** The spec requires 80% of lines under `cargo llvm-cov`. Last measured at 83.88%
    several commits ago (`5c764ba`); it has not been re-run since.
-3. **Further scenarios**, when the operator asks. The spec's deferred list (section 14) is the roadmap.
+3. **Accept the two new families live.** One cell per scenario and platform (spec section 2, item 5),
+   `cancel_before_taken` and `market_price_order` first since they need no new app build; then rebuild both
+   clients from the app branch and run `range_order` and `full_trade_with_rating`. Record every attempt in
+   the ledger. Watch for: the maker's app not listing the range remainder; the market rate needing
+   `api.yadio.io` reachable from the daemon container; the reap of an abandoned take landing on
+   `pending` versus `canceled`; what Bob's app shows for a reaped take.
+4. **Further families**, when the operator asks. Spec section 8.1 lists them; section 14 is the roadmap.
 
 ## Workspace
 
 | Project | Path | Branch |
 |---|---|---|
 | Mortsom | `/home/negrunch/dev/mortsom` | `main` |
-| App v2 | `/home/negrunch/dev/mobilev2` | `main` (PR #408 merged, `d49f3c1`) |
+| App v2 | `/home/negrunch/dev/mobilev2` | `feat/mortsom-range-and-rating-ids` (on `main` at `d49f3c1`; PR to open) |
 
 Ortsom's own stack (`ortsom-regtest`) was stopped, not destroyed, to free the shared host ports; `docker
 compose -p ortsom-regtest start` brings it back, after `mortsom stack down`. The two cannot run together.

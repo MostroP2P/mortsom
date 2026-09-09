@@ -4,12 +4,21 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 2/2, Web 2/2.** All four checkpoint cells are accepted.
+**Accepted: Linux 2/10, Web 2/10.** The four checkpoint cells are accepted; the rest of the happy-path
+and cancellation families (spec section 8) await their first live run.
 
-| Scenario | Linux | Web |
-|---|---|---|
-| `happy_sell` | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528` | **Accepted** 2026-09-09, run `20260909T025026Z-034b13e4fb91` |
-| `happy_buy` | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763` | **Accepted** 2026-09-09, run `20260909T033857Z-e7b88a390989` |
+| Scenario | Family | Linux | Web |
+|---|---|---|---|
+| `happy_sell` | happy-path | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528` | **Accepted** 2026-09-09, run `20260909T025026Z-034b13e4fb91` |
+| `happy_buy` | happy-path | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763` | **Accepted** 2026-09-09, run `20260909T033857Z-e7b88a390989` |
+| `range_order` | happy-path | Pending (needs an app build with the range identifiers) | Pending |
+| `market_price_order` | happy-path | Pending | Pending |
+| `full_trade_with_rating` | happy-path | Pending (needs an app build with the star identifiers) | Pending |
+| `cancel_before_taken` | cancellation | Pending | Pending |
+| `cancel_after_take_unpaid` | cancellation | Pending | Pending |
+| `taker_cancel_at_taken` | cancellation | Pending | Pending |
+| `cooperative_cancel` | cancellation | Pending | Pending |
+| `unilateral_cancel_rejected` | cancellation | Pending | Pending |
 
 ## Live attempts
 
