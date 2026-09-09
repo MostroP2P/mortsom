@@ -17,6 +17,7 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260909T122846Z-31d9701a9752` | Web | happy_sell | **Passed** on app `f1f995f` (book event checked for order id, lock acquisition races the request promise) | None. Hold and payout settled once each |
 | `20260909T114337Z-b620dfafd3fc` | Web | happy_sell | **Passed** on app `59a047e` (origin-wide Web Locks around document writes, guarded payout write, author check on fetched events) | None. Hold and payout settled once each |
 | `20260909T110604Z-a5d6eaee777a` | Web | happy_buy | **Passed** on app `0e65bd0` (seller completes from the public success event) | None. Hold and payout settled once each. Part of the 2026-09-09 four-cell timing batch |
 | `20260909T103926Z-8587e76354b9` | Web | happy_buy | Daemon paid Bob; Alice's Web client stayed on `payout-pending`, also after the first recovery restart | Root cause found: the daemon sends `PurchaseCompleted` to the buyer only; the seller learns of the payout from the public `success` event, and the app's stale sweep ignored `SettledHoldInvoice`, so a missed event was never repaired. App `0e65bd0` confirms the payout against the book for a minute after the escrow settles and lets the sweep complete such trades. Harness `7966a5b` resolves such a journal on the daemon's `success` plus one settled record per hash. Resolved by cleanup, both settlements verified |
