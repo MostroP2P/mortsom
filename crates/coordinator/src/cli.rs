@@ -283,7 +283,7 @@ pub async fn run(cli: Cli) -> ExitCode {
     eprint!(
         "{}",
         crate::banner::render(
-            &crate::banner::caption(&cli.command, &cli.config),
+            &crate::banner::caption(&cli.command, &cli.config, &cli.ortsom_dir),
             use_color_on_stderr()
         )
     );

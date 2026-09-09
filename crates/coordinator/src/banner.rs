@@ -61,7 +61,7 @@ pub fn render(detail: &str, color: bool) -> String {
 /// Pure and total: no config is loaded and no registry consulted, so the
 /// banner is printed before anything can fail. A command that dies on a
 /// missing environment variable has still said which config it read.
-pub fn caption(command: &Command, config: &Path) -> String {
+pub fn caption(command: &Command, config: &Path, ortsom_dir: &Path) -> String {
     let config = config.display();
     match command {
         Command::Run {
@@ -91,13 +91,17 @@ pub fn caption(command: &Command, config: &Path) -> String {
             Some(lane) => format!("accounting · lane {lane} · {config}"),
             None => format!("accounting · every lane · {config}"),
         },
+        // The stack commands read no config at all: they act on the sibling
+        // checkout that owns the environment. Naming the config here would
+        // point at one environment immediately before `down` destroys
+        // another.
         Command::Stack { action } => {
             let action = match action {
                 StackAction::Up { .. } => "up",
                 StackAction::Status => "status",
                 StackAction::Down => "down",
             };
-            format!("stack {action} · {config}")
+            format!("stack {action} · {}", ortsom_dir.display())
         }
         Command::App { .. } => format!("app · {config}"),
         Command::Device { .. } => format!("device · {config}"),
@@ -112,6 +116,10 @@ mod tests {
 
     fn config() -> PathBuf {
         PathBuf::from("config/desktop.example.toml")
+    }
+
+    fn ortsom_dir() -> PathBuf {
+        PathBuf::from("../ortsom")
     }
 
     fn a_run(scenarios: &[&str], tag: Option<&str>) -> Command {
@@ -203,15 +211,15 @@ mod tests {
     fn a_run_names_its_selection_its_platform_and_its_config() {
         // Arrange / Act / Assert
         assert_eq!(
-            caption(&a_run(&["happy_sell"], None), &config()),
+            caption(&a_run(&["happy_sell"], None), &config(), &ortsom_dir()),
             "run · happy_sell · linux · config/desktop.example.toml"
         );
         assert_eq!(
-            caption(&a_run(&[], Some("smoke")), &config()),
+            caption(&a_run(&[], Some("smoke")), &config(), &ortsom_dir()),
             "run · tag \"smoke\" · linux · config/desktop.example.toml"
         );
         assert_eq!(
-            caption(&a_run(&[], None), &config()),
+            caption(&a_run(&[], None), &config(), &ortsom_dir()),
             "run · every scenario · linux · config/desktop.example.toml"
         );
     }
@@ -245,14 +253,11 @@ mod tests {
                 intentional: None,
             },
             Command::Accounting { lane: None },
-            Command::Stack {
-                action: StackAction::Status,
-            },
         ];
 
         // Act / Assert
         for command in &commands {
-            let caption = caption(command, &config());
+            let caption = caption(command, &config(), &ortsom_dir());
             assert!(
                 caption.contains("config/desktop.example.toml"),
                 "{command:?} → {caption}"
@@ -263,7 +268,7 @@ mod tests {
     #[test]
     fn the_one_command_that_reads_no_config_names_what_it_reads_instead() {
         // Arrange / Act
-        let list = caption(&Command::List, &config());
+        let list = caption(&Command::List, &config(), &ortsom_dir());
 
         // Assert
         assert!(!list.contains("desktop.example.toml"), "{list}");
@@ -281,9 +286,32 @@ mod tests {
                 json: false,
             },
             &config(),
+            &ortsom_dir(),
         );
 
         // Assert
         assert!(web.starts_with("doctor · web · "), "{web}");
+    }
+
+    /// `stack` reads no config: it acts on the sibling checkout that owns
+    /// the environment. Naming the config would point at one environment
+    /// immediately before `down` destroys another.
+    #[test]
+    fn a_stack_action_names_the_checkout_it_will_touch_not_the_config() {
+        // Arrange
+        let elsewhere = PathBuf::from("/srv/another-ortsom");
+        let actions = [
+            (StackAction::Up { mostro_image: None }, "stack up"),
+            (StackAction::Status, "stack status"),
+            (StackAction::Down, "stack down"),
+        ];
+
+        // Act / Assert
+        for (action, prefix) in actions {
+            let caption = caption(&Command::Stack { action }, &config(), &elsewhere);
+
+            assert_eq!(caption, format!("{prefix} · /srv/another-ortsom"));
+            assert!(!caption.contains("desktop.example.toml"), "{caption}");
+        }
     }
 }
