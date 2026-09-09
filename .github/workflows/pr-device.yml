@@ -1,12 +1,16 @@
-# Non-value-moving device and UI-contract checks on every pull request
-# (spec Phase 6.2). Nothing here needs a daemon, a wallet or a secret: the
+# Non-value-moving Android device and UI-contract checks for the frozen
+# emulator path. Nothing here needs a daemon, a wallet or a secret: the
 # app's automation-contract widget tests, both emulators booting with the
 # app installed, and Appium sessions opening. Evidence goes through
 # `mortsom publish` before upload.
+#
+# Manual only: the Android path receives no new work (spec section 6.3) and
+# the pinned MostroP2P/mobile automation branch no longer exists, so this
+# cannot gate pull requests. Point MOBILE_REPO/MOBILE_REF at a living ref
+# before dispatching it.
 name: PR device checks
 
 on:
-  pull_request:
   workflow_dispatch:
 
 concurrency:

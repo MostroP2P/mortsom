@@ -17,6 +17,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The LND gRPC client (fedimint-tonic-lnd) compiles its protobuf
+      # definitions at build time and needs the protoc binary on the host.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -29,6 +32,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The LND gRPC client (fedimint-tonic-lnd) compiles its protobuf
+      # definitions at build time and needs the protoc binary on the host.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
@@ -38,6 +44,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # The LND gRPC client (fedimint-tonic-lnd) compiles its protobuf
+      # definitions at build time and needs the protoc binary on the host.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
