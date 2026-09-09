@@ -20,6 +20,7 @@ pub mod relay_smoke;
 pub mod report;
 pub mod run;
 pub mod safety;
+pub mod web_tools;
 
 pub use config::{Config, ConfigError, RunConfig};
 pub mod desktop;

@@ -65,12 +65,9 @@ cargo run -p mortsom-coordinator --example prepare_client -- web
 They land at `/home/negrunch/dev/mobilev2/build/linux/x64/release/bundle/mostro` and
 `/home/negrunch/dev/mobilev2/build/web`, and create no order and no payment.
 
-Web on this host uses:
-
-```sh
-export MORTSOM_CHROMEDRIVER=/snap/chromium/current/usr/lib/chromium-browser/chromedriver
-export MORTSOM_BROWSER=/snap/chromium/current/usr/lib/chromium-browser/chrome
-```
+Web on this host uses the Chromium snap. Mortsom detects the confined `/snap/bin/chromium` wrapper and
+runs the unconfined `chrome` and `chromedriver` inside the snap by itself; `MORTSOM_BROWSER` and
+`MORTSOM_CHROMEDRIVER` are no longer needed here, and still win when set.
 
 Disk: about 23 GiB free on `/home`, 98% used. Builds are large; check before a coverage run. Never delete
 artifacts or private recovery state to gain space.

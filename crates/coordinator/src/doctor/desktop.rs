@@ -122,22 +122,30 @@ fn check_tools(
     if platform == Platform::Linux {
         check_tool(&xvfb.to_string_lossy(), None, host, report);
     }
-    let tools: &[(&str, Option<&str>)] = match platform {
-        Platform::Linux => &[
-            ("dbus-daemon", None),
-            ("gnome-keyring-daemon", None),
-            ("import", None),
-            ("/usr/libexec/at-spi-bus-launcher", None),
-            ("/usr/libexec/at-spi2-registryd", None),
-        ],
-        Platform::Web => &[
-            ("chromedriver", Some("MORTSOM_CHROMEDRIVER")),
-            ("chromium", Some("MORTSOM_BROWSER")),
-        ],
-        Platform::Android => &[],
-    };
-    for (tool, variable) in tools {
-        check_tool(tool, *variable, host, report);
+    if platform == Platform::Linux {
+        for tool in [
+            "dbus-daemon",
+            "gnome-keyring-daemon",
+            "import",
+            "/usr/libexec/at-spi-bus-launcher",
+            "/usr/libexec/at-spi2-registryd",
+        ] {
+            check_tool(tool, None, host, report);
+        }
+    }
+    if platform == Platform::Web {
+        let tools = crate::web_tools::resolve(host);
+        for (name, tool) in [
+            ("chromedriver", &tools.chromedriver),
+            ("chromium", &tools.browser),
+        ] {
+            let status = if tool.is_usable() {
+                CheckStatus::Pass
+            } else {
+                CheckStatus::Fail
+            };
+            report.push(name, status, tool.describe());
+        }
     }
 }
 
