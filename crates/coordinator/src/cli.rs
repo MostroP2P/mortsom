@@ -236,9 +236,18 @@ pub enum RelayCommand {
 /// artifacts read exactly as they always did.
 fn use_color() -> bool {
     use std::io::IsTerminal;
-    std::io::stdout().is_terminal()
-        && std::env::var_os("NO_COLOR").is_none()
-        && std::env::var("TERM").is_ok_and(|t| t != "dumb")
+    std::io::stdout().is_terminal() && color_welcome()
+}
+
+/// The same question for the stream the banner and the logs go to.
+fn use_color_on_stderr() -> bool {
+    use std::io::IsTerminal;
+    std::io::stderr().is_terminal() && color_welcome()
+}
+
+/// Terminal styling is welcome unless the environment says otherwise.
+fn color_welcome() -> bool {
+    std::env::var_os("NO_COLOR").is_none() && std::env::var("TERM").is_ok_and(|t| t != "dumb")
 }
 
 fn lock_mutation(
@@ -269,6 +278,15 @@ fn lock_mutation(
 
 /// Runs the parsed command and returns the process exit code.
 pub async fn run(cli: Cli) -> ExitCode {
+    // Before anything can fail, and on stderr so `doctor --json` and `list`
+    // keep their pipes clean.
+    eprint!(
+        "{}",
+        crate::banner::render(
+            &crate::banner::caption(&cli.command, &cli.config),
+            use_color_on_stderr()
+        )
+    );
     // Stderr immediately; commands that own a run directory attach the
     // redacted `run.log` once the run id exists (`attach_run_log`).
     let _sink = init_logging();
