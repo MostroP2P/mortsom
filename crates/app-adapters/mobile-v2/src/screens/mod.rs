@@ -11,7 +11,7 @@ use mortsom_app_contract::{AdapterError, DeviceContext};
 use tracing::warn;
 
 /// Gap between looks while waiting for one of several screens.
-const SCREEN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+pub(super) const SCREEN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// How long a control that only has to draw has to answer before the tap
 /// is repeated.
@@ -190,6 +190,56 @@ async fn appears_within(
 pub async fn dismiss_keyboard(device: &DeviceContext<'_>) {
     if let Err(e) = device.ui.hide_keyboard().await {
         warn!(error = %e, "could not put the keyboard away");
+    }
+}
+
+/// Picks `option` from a picker and waits for the picker, identified by
+/// `picker`, to close. Choosing is not a business action -- picking the same
+/// currency twice selects it once -- so a pick the picker did not act on is
+/// pressed again, a bounded number of times. Flutter web rebuilds a lazy
+/// list's rows while it filters, and a press delivered to a row it has just
+/// replaced reaches nothing.
+pub async fn choose(
+    device: &DeviceContext<'_>,
+    option: &str,
+    picker: &str,
+) -> Result<(), AdapterError> {
+    const PICKS: usize = 3;
+    for _ in 0..PICKS {
+        tap(device, option).await?;
+        // Gone twice in a row: a semantics rebuild drops the picker's nodes
+        // for one poll while the picker is still very much open.
+        if gone_within(device, picker, PICKER_CLOSE).await? {
+            tokio::time::sleep(SCREEN_POLL).await;
+            if !present(device, picker).await? {
+                return Ok(());
+            }
+        }
+    }
+    Err(AdapterError::contract(format!(
+        "`{picker}` stayed open after choosing `{option}` {PICKS} times"
+    )))
+}
+
+/// How long a picker gets to close after a choice before the choice is
+/// believed lost.
+const PICKER_CLOSE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Whether `id` disappears within `patience`.
+async fn gone_within(
+    device: &DeviceContext<'_>,
+    id: &str,
+    patience: std::time::Duration,
+) -> Result<bool, AdapterError> {
+    let deadline = tokio::time::Instant::now() + patience;
+    loop {
+        if !present(device, id).await? {
+            return Ok(true);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(SCREEN_POLL).await;
     }
 }
 

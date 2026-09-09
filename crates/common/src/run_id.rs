@@ -40,6 +40,15 @@ impl RunId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The second the run started, read back from the identifier's
+    /// timestamp prefix; `None` for an identifier not minted by [`Self::at`].
+    pub fn started_at(&self) -> Option<chrono::DateTime<chrono::Utc>> {
+        let (stamp, _) = self.0.split_once('-')?;
+        chrono::NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M%SZ")
+            .ok()
+            .map(|naive| naive.and_utc())
+    }
 }
 
 impl Default for RunId {
@@ -136,5 +145,21 @@ mod validation_tests {
         let id = RunId::new();
         let nonce = id.as_str().rsplit_once('-').unwrap().1;
         assert!(nonce.len() >= 12, "{nonce} is too short to stay unique");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod started_at_tests {
+    use super::*;
+
+    #[test]
+    fn the_start_second_is_read_back_from_the_identifier() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-09T01:59:42Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let id = RunId::at(now, uuid::Uuid::nil());
+        assert_eq!(id.started_at(), Some(now));
+        assert_eq!("custom-id".parse::<RunId>().unwrap().started_at(), None);
     }
 }

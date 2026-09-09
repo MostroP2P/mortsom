@@ -200,12 +200,18 @@ pub mod tests_support {
         labels: Mutex<BTreeMap<String, String>>,
         text: Mutex<BTreeMap<String, mortsom_common::Secret>>,
         ignored_text: Mutex<Vec<String>>,
+        /// Controls whose next `n` typed values the app throws away after
+        /// accepting them: a form rebuilt by an incoming message.
+        wiped_text: Mutex<BTreeMap<String, u32>>,
         calls: Mutex<Vec<String>>,
         on_tap: Mutex<BTreeMap<String, Vec<String>>>,
         /// Elements that disappear after `id` is tapped (navigation away).
         on_tap_hide: Mutex<BTreeMap<String, Vec<String>>>,
         /// Label changes triggered by a tap.
         on_tap_relabel: Mutex<BTreeMap<String, (String, String)>>,
+        /// Labels still settling: `(interim value, reads left)` before the
+        /// stored label is what a read returns.
+        label_pending: Mutex<BTreeMap<String, (String, u32)>>,
         /// Elements rendered below the fold: only a scrolling look finds them.
         below: Mutex<Vec<String>>,
         /// Elements the app has not drawn yet, with the number of probes
@@ -223,6 +229,11 @@ pub mod tests_support {
     }
 
     impl ScriptedUi {
+        /// The next `times` values typed into `id` are accepted and then lost,
+        /// as when the app rebuilds a form on a message that arrives mid-entry.
+        pub fn wipes_text(&self, id: &str, times: u32) {
+            self.wiped_text.lock().unwrap().insert(id.into(), times);
+        }
         /// Acknowledges edits without accepting their values for this control.
         pub fn ignore_text(&self, id: &str) {
             self.ignored_text.lock().unwrap().push(id.into());
@@ -241,6 +252,14 @@ pub mod tests_support {
         /// Sets the accessibility label answered for `id`.
         pub fn label(&self, id: &str, value: &str) {
             self.labels.lock().unwrap().insert(id.into(), value.into());
+        }
+        /// The first `reads` reads of `id` return `interim`; a screen in
+        /// transition shows a stale or empty readout before the real one.
+        pub fn label_settles(&self, id: &str, interim: &str, reads: u32) {
+            self.label_pending
+                .lock()
+                .unwrap()
+                .insert(id.into(), (interim.into(), reads));
         }
         /// Elements that appear after `id` is tapped.
         pub fn on_tap(&self, id: &str, appear: &[&str]) {
@@ -443,7 +462,19 @@ pub mod tests_support {
                 .lock()
                 .unwrap()
                 .push(format!("type {id} ({} chars)", text.len()));
-            if !self
+            let wiped = {
+                let mut wiped = self.wiped_text.lock().unwrap();
+                match wiped.get_mut(id) {
+                    Some(left) if *left > 0 => {
+                        *left -= 1;
+                        true
+                    }
+                    _ => false,
+                }
+            };
+            if wiped {
+                self.text.lock().unwrap().remove(id);
+            } else if !self
                 .ignored_text
                 .lock()
                 .unwrap()
@@ -470,6 +501,16 @@ pub mod tests_support {
             Ok(!self.disabled.lock().unwrap().iter().any(|d| d == id))
         }
         async fn label_of(&self, id: &str) -> Result<String, AppiumError> {
+            {
+                let mut pending = self.label_pending.lock().unwrap();
+                if let Some((interim, left)) = pending.get_mut(id) {
+                    if *left > 0 {
+                        *left -= 1;
+                        return Ok(interim.clone());
+                    }
+                    pending.remove(id);
+                }
+            }
             Ok(self
                 .labels
                 .lock()

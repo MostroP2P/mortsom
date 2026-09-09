@@ -117,12 +117,18 @@ pub(super) async fn discover(ctx: &Context, journal: &FileJournal) -> Result<(),
     Ok(())
 }
 
-pub(super) fn unresolved_submissions(journal: &FileJournal) -> bool {
+pub(crate) fn unresolved_submissions(journal: &FileJournal) -> bool {
     let events = journal.snapshot().events;
     events.iter().enumerate().any(|(index, event)| {
         if let RecoveryEvent::SubmissionStarted { actor, .. } = event {
-            !events[index+1..].iter().any(|event| matches!(event, RecoveryEvent::OrderFound { actor: found, .. } if found == actor))
-        } else { false }
+            !events[index + 1..].iter().any(|event| {
+                matches!(event,
+                    RecoveryEvent::OrderFound { actor: found, .. }
+                    | RecoveryEvent::SubmissionAbandoned { actor: found } if found == actor)
+            })
+        } else {
+            false
+        }
     })
 }
 

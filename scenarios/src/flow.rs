@@ -107,6 +107,16 @@ pub async fn create_buy_and_fund(ctx: &Context) -> Result<Taken, ScenarioError> 
     actions::take_order(ctx, Actor::Alice, &order).await?;
     actions::wait_both(ctx, &order, OrderState::Taken).await?;
     actions::pay_hold_invoice(ctx, Actor::Alice, &order).await?;
+    // The daemon asks the buyer for the payout invoice only once the hold is
+    // accepted, and the app rebuilds the invoice form when that request
+    // lands. An invoice typed before it is dropped, so wait for the ask.
+    actions::wait_app_label(
+        ctx,
+        Actor::Bob,
+        &order,
+        &["waiting-invoice", "waiting-buyer-invoice"],
+    )
+    .await?;
     let payout_hash = actions::provide_buyer_invoice(ctx, Actor::Bob, &order).await?;
     actions::wait_both(ctx, &order, OrderState::Active).await?;
     actions::wait_relay_state(ctx, &order, OrderState::Taken).await?;

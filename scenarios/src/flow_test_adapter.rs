@@ -160,11 +160,17 @@ impl AppAdapter for Adapter {
         _: &DeviceContext<'_>,
         _: &OrderReference,
     ) -> Result<AppOrderState, AdapterError> {
-        let state = self.state.lock().unwrap().order;
-        Ok(AppOrderState {
-            state,
-            raw_label: state.to_string(),
-        })
+        let guard = self.state.lock().unwrap();
+        let state = guard.order;
+        // The maker of a buy sees `waiting-payment` until the seller's hold
+        // is accepted and `waiting-invoice` once the daemon asks for the
+        // payout invoice; both are the coarse `taken`.
+        let raw_label = match state {
+            OrderState::Taken if guard.hold_started => "waiting-invoice".to_owned(),
+            OrderState::Taken => "waiting-payment".to_owned(),
+            other => other.to_string(),
+        };
+        Ok(AppOrderState { state, raw_label })
     }
     async fn visible_actions(
         &self,

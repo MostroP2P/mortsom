@@ -82,14 +82,34 @@ async fn terminal_order_state(
         .state;
     if matches!(state, OrderState::Completed | OrderState::PayoutPending) {
         for actor in Actor::ALL {
-            mortsom_scenario_kit::actions::wait_app_state(
+            let shown = mortsom_scenario_kit::actions::wait_app_state(
                 ctx,
                 actor,
                 &order,
                 OrderState::Completed,
             )
-            .await
-            .map_err(|e| e.to_string())?;
+            .await;
+            let Err(lagging) = shown else { continue };
+            // The daemon tells only the buyer about the completed payout;
+            // the seller's client learns it from the public book, and one
+            // that missed that event keeps showing payout pending. The
+            // daemon's own `success`, plus the exact settlement records
+            // checked next, decide whether funds are still open; a lagging
+            // screen is recorded, not obeyed.
+            let _ = ctx.relay.add_order(order_id).await;
+            mortsom_scenario_kit::actions::wait_relay_state(ctx, &order, OrderState::Completed)
+                .await
+                .map_err(|e| format!("{lagging}; and {e}"))?;
+            ctx.timeline.push(
+                mortsom_scenario_kit::timeline::TimelineKind::Assertion,
+                Some(actor.as_str()),
+                format!(
+                    "order {order_id}: {} never showed completed ({lagging}); the daemon published success, \
+                     settlement records decide",
+                    actor.as_str()
+                ),
+                None,
+            );
         }
         return Ok(OrderState::Completed);
     }

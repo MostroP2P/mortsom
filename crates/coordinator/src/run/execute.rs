@@ -222,28 +222,45 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
             .await
             .is_ok_and(|state| state.state == OrderState::PayoutPending)
     {
-        return match mortsom_scenario_kit::actions::wait_app_state(
-            ctx,
-            maker,
-            order,
-            OrderState::Completed,
-        )
-        .await
-        {
+        let shown =
+            mortsom_scenario_kit::actions::wait_app_state(ctx, maker, order, OrderState::Completed)
+                .await;
+        return match shown {
             Ok(_) => CleanupResult::Done {
                 outcome: CancelOutcome::AlreadyClosed,
             },
-            Err(error) => CleanupResult::Failed {
-                message: error.to_string(),
+            // A seller client that missed the public success event keeps
+            // showing payout pending; the daemon's own success closes the
+            // order, and the settlement records are verified afterwards.
+            Err(lagging) => match mortsom_scenario_kit::actions::wait_relay_state(
+                ctx,
+                order,
+                OrderState::Completed,
+            )
+            .await
+            {
+                Ok(()) => {
+                    ctx.timeline.push(
+                        TimelineKind::Cleanup,
+                        Some(maker.as_str()),
+                        format!(
+                            "order {}: screen stayed short of completed ({lagging}); the daemon published success",
+                            order.id
+                        ),
+                        None,
+                    );
+                    CleanupResult::Done {
+                        outcome: CancelOutcome::AlreadyClosed,
+                    }
+                }
+                Err(_) => CleanupResult::Failed {
+                    message: lagging.to_string(),
+                },
             },
         };
     }
     let outcome = match cancel_as(ctx, maker, order).await {
-        Ok(CancelOutcome::NotFound) => {
-            return CleanupResult::Done {
-                outcome: CancelOutcome::NotFound,
-            };
-        }
+        Ok(CancelOutcome::NotFound) => return confirm_unlisted_closed(ctx, order).await,
         Ok(outcome) => outcome,
         Err(message) => return CleanupResult::Failed { message },
     };
@@ -286,6 +303,49 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
         },
         None => CleanupResult::Failed {
             message: "state unreadable after both sides cancelled".into(),
+        },
+    }
+}
+
+/// An order the app no longer lists is done only when the daemon says it is
+/// closed on the relay (`canceled`, `success` or `expired`). A client that
+/// cannot show a trade it created has not thereby cancelled it: the order
+/// may still sit pending on the daemon, waiting for a taker.
+async fn confirm_unlisted_closed(ctx: &Context, order: &OrderReference) -> CleanupResult {
+    let id = order.id.clone();
+    let closed = ctx
+        .relay
+        .wait_for(ctx.state_timeout, |e| {
+            e.kind == mortsom_scenario_kit::actions::ORDER_EVENT_KIND
+                && e.tag("d") == Some(id.as_str())
+                && e.tag("s")
+                    .and_then(OrderState::from_protocol_status)
+                    .is_some_and(|state| state.is_terminal())
+        })
+        .await;
+    match closed {
+        Some(event) => {
+            ctx.timeline.push_at(
+                event.received_at_ms,
+                TimelineKind::RelayEvent,
+                None,
+                format!(
+                    "relay: order {} is closed ({}) although the app lists no trade for it",
+                    order.id,
+                    event.tag("s").unwrap_or("?")
+                ),
+                Some(event.id.clone()),
+            );
+            // The daemon closed it: that is what "already closed" means.
+            CleanupResult::Done {
+                outcome: CancelOutcome::AlreadyClosed,
+            }
+        }
+        None => CleanupResult::Failed {
+            message: format!(
+                "the app lists no trade for order {} and the relay never showed it closed",
+                order.id
+            ),
         },
     }
 }

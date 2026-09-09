@@ -19,6 +19,13 @@ async fn fixture() -> (MockServer, Session) {
         .with_priority(10)
         .mount(&server)
         .await;
+    // A field at rest, unless a test overrides it with a moving one.
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/rect"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(rect_json(40.0)))
+        .with_priority(10)
+        .mount(&server)
+        .await;
     (server, session)
 }
 
@@ -110,7 +117,10 @@ async fn check_rebuilt_field(code: &'static str) {
         .await;
     let flag = written.clone();
     Mock::given(method("GET"))
-        .respond_with(move |_: &wiremock::Request| {
+        .respond_with(move |request: &wiremock::Request| {
+            if request.url.path().ends_with("/rect") {
+                return ResponseTemplate::new(200).set_body_json(rect_json(40.0));
+            }
             ResponseTemplate::new(200)
                 .set_body_json(json!({"value":if flag.load(Ordering::SeqCst) {"100"} else {""}}))
         })
@@ -153,4 +163,109 @@ async fn check_rebuilt_field(code: &'static str) {
             acted = last_lookup;
         }
     }
+}
+
+fn rect_json(x: f64) -> serde_json::Value {
+    json!({"value":{"x":x,"y":10.0,"width":80.0,"height":20.0}})
+}
+
+/// The button moves for a moment (a scroll settling, a semantics rebuild),
+/// then rests. One click, and only once it rests.
+#[tokio::test]
+async fn a_press_waits_for_the_node_to_rest_and_clicks_exactly_once() {
+    let (server, session) = fixture().await;
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/rect"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(rect_json(5.0)))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/rect"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(rect_json(40.0)))
+        .with_priority(5)
+        .mount(&server)
+        .await;
+
+    press(&session, "submit", Duration::from_secs(2))
+        .await
+        .unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    let clicks = requests
+        .iter()
+        .filter(|r| r.url.path().ends_with("/element/field/click"))
+        .count();
+    assert_eq!(clicks, 1, "{requests:#?}");
+    let rects = requests
+        .iter()
+        .filter(|r| r.url.path().ends_with("/element/field/rect"))
+        .count();
+    assert!(rects >= 3, "the moving node was re-measured: {rects}");
+}
+
+/// A node that never settles is never clicked: an unsent press is a plain
+/// failure, a press delivered to the wrong place is not.
+#[tokio::test]
+async fn a_node_that_never_rests_is_never_clicked() {
+    let (server, session) = fixture().await;
+    let moving = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/rect"))
+        .respond_with({
+            let moving = moving.clone();
+            move |_: &wiremock::Request| {
+                let n = moving.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                ResponseTemplate::new(200).set_body_json(rect_json(f64::from(n)))
+            }
+        })
+        .mount(&server)
+        .await;
+
+    let failure = press(&session, "submit", Duration::from_millis(600))
+        .await
+        .unwrap_err();
+
+    assert!(
+        failure.to_string().contains("never came to rest"),
+        "{failure}"
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert!(!requests.iter().any(|r| r.url.path().ends_with("/click")));
+}
+
+/// Typing starts with a focusing click; delivered while the form is still
+/// moving it lands on a neighbour. A field that never rests is never clicked.
+#[tokio::test]
+async fn text_entry_never_clicks_a_field_that_is_still_moving() {
+    let (server, session) = fixture().await;
+    let moving = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/rect"))
+        .respond_with({
+            let moving = moving.clone();
+            move |_: &wiremock::Request| {
+                let n = moving.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                ResponseTemplate::new(200).set_body_json(rect_json(f64::from(n)))
+            }
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/property/value"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value":""})))
+        .mount(&server)
+        .await;
+
+    assert!(
+        enter(&session, "amount", "1000", Duration::from_millis(600))
+            .await
+            .is_err()
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        !requests.iter().any(|r| r.url.path().ends_with("/click")),
+        "{requests:#?}"
+    );
 }

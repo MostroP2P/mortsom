@@ -2,6 +2,7 @@
 
 mod maintenance;
 mod recover;
+mod recover_audit;
 mod run;
 use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};
 use run::run_command;
@@ -65,6 +66,11 @@ pub enum Command {
     Cleanup {
         /// Run id (the artifacts directory name).
         run: String,
+        /// Name the order of an actor's unresolved submission, as
+        /// `actor=order-id`, when the app never listed it. The order must
+        /// still be shown closed by the relay or closed through the UI.
+        #[arg(long = "attribute-order", value_name = "ACTOR=ORDER_ID")]
+        attribute_order: Vec<String>,
     },
     /// Build the sanitized publication bundle of a run (redacted text
     /// evidence, screenshots by policy, manifest with retry classification).
@@ -276,7 +282,10 @@ pub async fn run(cli: Cli) -> ExitCode {
     match cli.command {
         Command::Stack { action } => stack_cli(&cli.ortsom_dir, action).await,
         Command::List => list_scenarios(),
-        Command::Cleanup { run } => cleanup_command(&cli.config, &cli.ortsom_dir, &run).await,
+        Command::Cleanup {
+            run,
+            attribute_order,
+        } => cleanup_command(&cli.config, &cli.ortsom_dir, &run, &attribute_order).await,
         Command::Publish {
             run,
             out,

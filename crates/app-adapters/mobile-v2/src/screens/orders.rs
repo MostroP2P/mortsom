@@ -10,7 +10,7 @@ use mortsom_app_contract::{
 use mortsom_common::Secret;
 
 use super::nav::go_home;
-use super::{dismiss_keyboard, expect, label, listed, present, tap, type_into};
+use super::{SCREEN_POLL, dismiss_keyboard, expect, label, listed, present, tap, type_into};
 use crate::selectors::Ids;
 use crate::states::from_v2_label;
 
@@ -38,7 +38,12 @@ pub async fn create(
     // for one further down is never built. Narrowing it is how a user
     // reaches a currency, and how the driver does.
     type_into(device, Ids::ORDER_CREATE_CURRENCY_SEARCH, &draft.fiat_code).await?;
-    tap(device, &Ids::currency_option(&draft.fiat_code)).await?;
+    super::choose(
+        device,
+        &Ids::currency_option(&draft.fiat_code),
+        Ids::ORDER_CREATE_CURRENCY_SEARCH,
+    )
+    .await?;
     type_into(
         device,
         Ids::ORDER_CREATE_FIAT_AMOUNT,
@@ -139,8 +144,45 @@ pub async fn observe(
     if let Some(state) = invoice_form_state(device, order).await? {
         return Ok(state);
     }
-    open_trade(device, order).await?;
-    verify_order_id(device, Ids::ORDER_ID, order).await?;
+    observe_detail(device, order).await
+}
+
+/// Reads the trade's state by leaving any open form and reopening the trade
+/// from the list. Where it opens is the observation: the app routes a trade
+/// that waits on this user's invoice or payment straight to that form, and
+/// shows the detail with its status otherwise. Unlike [`observe`], a form the
+/// harness itself opened earlier proves nothing here, because it is left
+/// first -- so this is the read that shows the daemon's request arriving.
+pub async fn observe_detail(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<AppOrderState, AdapterError> {
+    go_home(device).await?;
+    tap(device, Ids::NAV_TRADES).await?;
+    tap(device, &Ids::trades_item(&order.id)).await?;
+    let landed = super::first_present(
+        device,
+        &[Ids::ORDER_STATUS, Ids::INVOICE_TEXT, Ids::PAY_INVOICE_TEXT],
+    )
+    .await?;
+    match landed {
+        Some(id) if id == Ids::INVOICE_TEXT => {
+            verify_order_id(device, Ids::INVOICE_ORDER_ID, order).await?;
+            return Ok(AppOrderState {
+                state: OrderState::Taken,
+                raw_label: "waiting-invoice".into(),
+            });
+        }
+        Some(id) if id == Ids::PAY_INVOICE_TEXT => {
+            verify_order_id(device, Ids::PAY_ORDER_ID, order).await?;
+            return Ok(AppOrderState {
+                state: OrderState::Taken,
+                raw_label: "waiting-payment".into(),
+            });
+        }
+        Some(_) => verify_order_id(device, Ids::ORDER_ID, order).await?,
+        None => return Err(AdapterError::contract("`order.status` did not appear")),
+    }
     let raw = label(device, Ids::ORDER_STATUS).await?;
     let state = from_v2_label(&raw).ok_or_else(|| {
         AdapterError::product(format!(
@@ -193,17 +235,61 @@ pub async fn pay_hold_invoice(
     })
 }
 
+/// How long a just-opened screen gets to show its order id before a wrong
+/// or empty readout is believed. A screen in transition (a detail route
+/// pushed over a list, a rebuilt semantics node on the web) reads stale or
+/// blank for a moment; a foreign form still reads foreign after it settles.
+const ID_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
+
 async fn verify_order_id(
     device: &DeviceContext<'_>,
     id: &str,
     order: &OrderReference,
 ) -> Result<(), AdapterError> {
-    if label(device, id).await?.trim() != order.id {
-        return Err(AdapterError::contract(
-            "invoice or trade screen belongs to a different order",
-        ));
+    let deadline = tokio::time::Instant::now() + ID_SETTLE;
+    loop {
+        let shown = label(device, id).await?;
+        if shown.trim() == order.id {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(AdapterError::contract(format!(
+                "invoice or trade screen belongs to a different order: `{id}` shows `{}`, expected `{}`",
+                shown.trim(),
+                order.id
+            )));
+        }
+        tokio::time::sleep(SCREEN_POLL).await;
     }
-    Ok(())
+}
+
+/// Whether the typed invoice is still in the field and submit accepts a
+/// press, within a bounded settle. `false` when the app dropped the text
+/// or never enabled submit, so the caller can type it again.
+async fn invoice_ready(device: &DeviceContext<'_>, invoice: &Secret) -> Result<bool, AdapterError> {
+    let deadline = tokio::time::Instant::now() + ID_SETTLE;
+    loop {
+        let entered = device
+            .ui
+            .text_of(Ids::INVOICE_TEXT)
+            .await
+            .map_err(|_| AdapterError::contract("cannot verify buyer invoice text"))?;
+        if entered.trim() != invoice.expose().trim() {
+            return Ok(false);
+        }
+        if device
+            .ui
+            .is_enabled(Ids::INVOICE_SUBMIT)
+            .await
+            .map_err(|e| AdapterError::infrastructure(format!("probe `invoice.submit`: {e}")))?
+        {
+            return Ok(true);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(SCREEN_POLL).await;
+    }
 }
 
 /// Manual invoice screens are waiting states only when their public order ID
@@ -283,17 +369,23 @@ pub async fn provide_buyer_invoice(
 ) -> Result<Option<Secret>, AdapterError> {
     if let Some(invoice) = supplied {
         open_buyer_invoice(device, order).await?;
-        type_into(device, Ids::INVOICE_TEXT, invoice.expose()).await?;
-        let entered = Secret::new(
-            device
-                .ui
-                .text_of(Ids::INVOICE_TEXT)
-                .await
-                .map_err(|_| AdapterError::contract("cannot verify buyer invoice text"))?,
-        );
-        if entered.expose().trim() != invoice.expose().trim() {
+        // The daemon's request for the invoice can arrive while the user is
+        // already on the form (the maker of a buy lands there before the
+        // seller's hold is accepted); the app rebuilds the form and drops
+        // what was typed. Typing is not a business action, so the invoice is
+        // entered again, a bounded number of times. Submit stays single-press.
+        const ENTRIES: usize = 3;
+        let mut ready = false;
+        for _ in 0..ENTRIES {
+            type_into(device, Ids::INVOICE_TEXT, invoice.expose()).await?;
+            if invoice_ready(device, invoice).await? {
+                ready = true;
+                break;
+            }
+        }
+        if !ready {
             return Err(AdapterError::contract(
-                "buyer invoice field did not accept the supplied invoice",
+                "buyer invoice field did not keep the supplied invoice with submit enabled",
             ));
         }
         tap(device, Ids::INVOICE_SUBMIT).await?;
@@ -350,7 +442,32 @@ pub async fn cancel_if_open(
         return Ok(CancelOutcome::NotFound);
     }
     tap(device, &Ids::trades_item(&order.id)).await?;
-    expect(device, Ids::ORDER_STATUS).await?;
+    // A trade waiting on this user's invoice or payment opens its form, not
+    // the detail; the form's own cancel button cancels the order.
+    let landed = super::first_present(
+        device,
+        &[Ids::ORDER_STATUS, Ids::INVOICE_TEXT, Ids::PAY_INVOICE_TEXT],
+    )
+    .await?;
+    let form_cancel = match landed {
+        Some(id) if id == Ids::INVOICE_TEXT => {
+            verify_order_id(device, Ids::INVOICE_ORDER_ID, order).await?;
+            Some(Ids::INVOICE_CANCEL)
+        }
+        Some(id) if id == Ids::PAY_INVOICE_TEXT => {
+            verify_order_id(device, Ids::PAY_ORDER_ID, order).await?;
+            Some(Ids::PAY_CANCEL)
+        }
+        Some(_) => None,
+        None => return Err(AdapterError::contract("`order.status` did not appear")),
+    };
+    if let Some(cancel) = form_cancel {
+        tap(device, cancel).await?;
+        if super::appears_within(device, Ids::TRADE_CANCEL_CONFIRM, ID_SETTLE).await? {
+            tap(device, Ids::TRADE_CANCEL_CONFIRM).await?;
+        }
+        return Ok(CancelOutcome::Cancelled);
+    }
     let raw = label(device, Ids::ORDER_STATUS).await?;
     if from_v2_label(&raw).is_some_and(OrderState::is_terminal) {
         return Ok(CancelOutcome::AlreadyClosed);

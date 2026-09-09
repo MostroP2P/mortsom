@@ -4,12 +4,12 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 2/2, Web 0/2.**
+**Accepted: Linux 2/2, Web 2/2.** All four checkpoint cells are accepted.
 
 | Scenario | Linux | Web |
 |---|---|---|
-| `happy_sell` | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528` (see below) | **Blocked by the app**: one attempt, run `20260908T190651Z-8031670f7eb5` (see below) |
-| `happy_buy` | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763` (see below) | **Blocked by the app**: same cause as `happy_sell`; not attempted |
+| `happy_sell` | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528` | **Accepted** 2026-09-09, run `20260909T025026Z-034b13e4fb91` |
+| `happy_buy` | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763` | **Accepted** 2026-09-09, run `20260909T033857Z-e7b88a390989` |
 
 ## Live attempts
 
@@ -17,6 +17,22 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260909T122846Z-31d9701a9752` | Web | happy_sell | **Passed** on app `f1f995f` (book event checked for order id, lock acquisition races the request promise) | None. Hold and payout settled once each |
+| `20260909T114337Z-b620dfafd3fc` | Web | happy_sell | **Passed** on app `59a047e` (origin-wide Web Locks around document writes, guarded payout write, author check on fetched events) | None. Hold and payout settled once each |
+| `20260909T110604Z-a5d6eaee777a` | Web | happy_buy | **Passed** on app `0e65bd0` (seller completes from the public success event) | None. Hold and payout settled once each. Part of the 2026-09-09 four-cell timing batch |
+| `20260909T103926Z-8587e76354b9` | Web | happy_buy | Daemon paid Bob; Alice's Web client stayed on `payout-pending`, also after the first recovery restart | Root cause found: the daemon sends `PurchaseCompleted` to the buyer only; the seller learns of the payout from the public `success` event, and the app's stale sweep ignored `SettledHoldInvoice`, so a missed event was never repaired. App `0e65bd0` confirms the payout against the book for a minute after the escrow settles and lets the sweep complete such trades. Harness `7966a5b` resolves such a journal on the daemon's `success` plus one settled record per hash. Resolved by cleanup, both settlements verified |
+| `20260909T103509Z-4b2f0aabf959` | Web | happy_sell | **Passed** on app `93719ec` | None. Part of the timing batch |
+| `20260909T102900Z-eda642371033` | Web | happy_sell | Both browsers closed at the release step with the hold in flight | Environment: both Chromium processes died simultaneously; cooperative cancel through recovery released the 1005 sats. Cleanup healthy |
+| `20260909T102645Z-b25c3889174b` | Linux | happy_buy | **Passed** on app `0e65bd0` Linux bundle | None. Part of the timing batch |
+| `20260909T102431Z-d0d733b2c3a9` | Linux | happy_sell | **Passed** on app `0e65bd0` Linux bundle | None. Part of the timing batch |
+| `20260909T101325Z-f250eea4b457` | Web | happy_sell | **Passed** on app `93719ec` (review fixes on app PR #408: serialised IndexedDB patches, spec aligned) | None. Hold and payout settled once each. Harness `4bb36bd` |
+| `20260909T100500Z-dfd813ba075c` | Web | happy_sell | Alice's pay screen never rendered after Bob's invoice | App build `b8e3883` held one IndexedDB transaction across awaits; the write hit an inactive transaction and the hold invoice was never stored. Replaced by an async lock in `93719ec`. Cleanup healthy, no payment |
+| `20260909T095315Z-d4be48bb4aaf` | Web | happy_sell | Daemon reached `success` and paid Bob; Alice's Web client stayed on `payout-pending` for 90 s | The live `PurchaseCompleted` message was not applied by Alice's client until it restarted; `cleanup` reopened both clients, saw completed on each and verified both settlements once. App product flake to watch (build `e3ac458`) |
+| `20260909T065642Z-a9d467b16107` | Web | happy_buy | **Passed** again after the review fixes on PR #18 (relay-audited attributions, invoice request observed as the trade reopening on its form) | None. Hold settled once on Alice, payout once on Bob. Harness `4bb36bd` |
+| `20260909T033857Z-e7b88a390989` | Web | happy_buy | **Passed.** Order `e03c537d-30ac-4f47-82cd-35ed988b4e8c`: Bob created the buy, Alice took and paid hold `353bb042…`, Bob provided the invoice once the daemon asked, fiat sent, released; both clients completed | None. Hold settled once on Alice (1005 sats), payout once on Bob (995 sats). Resolved, nothing retained. Harness `40377ea`, app `e3ac458` |
+| `20260909T025026Z-034b13e4fb91` | Web | happy_sell | **Passed.** Order `0620785e-a819-487b-8c04-dfbd4822c716`: created, taken, invoice, hold `e185d552…` paid, fiat sent, released; relay `success`; both clients completed | None. Hold settled once on Alice (1005 sats), payout once on Bob (995 sats). Resolved, nothing retained. Harness `123ff35`, app `e3ac458` |
+| `20260909T02*` and `20260909T03*` (nine runs) | Web | both | Diagnostic attempts between the two passes | Each was recovered with verified cleanup and no settled payment: two browser deaths under the environment's memory guard (one with a hold in flight, released by cooperative cancel), a lost submit press, a currency pick the picker ignored, a focusing click landing on the currency row, a dropped buyer invoice, an order-id readout read mid-transition, and two submissions that produced no order (closed with `--attribute-order actor=none`). Fixes: `1e4ae9a`, `123ff35`, `c0faa5a`, `2f2361c`, `27b8bf2`, `40377ea` |
+| `20260909T005557Z-bf36f2d729bf` | Web | happy_sell | Alice submitted the sell order; the daemon saved `2ff23833-e73f-4ef3-8387-4dc5e0ebf37b` | Same symptom as the run below with the IndexedDB trades store already built in (app `fe7fd55`): the Dart bootstrap never called `init_db` on the web, so `db()` stayed unset and nothing persisted. Fixed in app `def4d40`. The journal was resolved with `cleanup --attribute-order alice=…` once the daemon expired the order; no payment |
 | `20260908T190651Z-8031670f7eb5` | Web | happy_sell | Alice submitted the sell order; the daemon saved `3d2c95a2-1209-4e9a-b7b1-10150154213d` as pending | Alice's Web app never listed the trade: "Mis operaciones" stayed empty. App v2's IndexedDB backend (`rust/src/db/indexeddb.rs`) implements only chat messages and settings; `save_trade`, `get_trade` and trade listing are stubs pending the app's issue #233. No payment. The pending order expires on the daemon after its one-hour limit. The journal has an unresolved submission and its Web profile is **retained**; see HANDOFF |
 | `20260908T190424Z-85827b058763` | Linux | happy_buy | **Passed** on the first attempt. Order `c31c3647-2098-4b5a-a3e7-8a3b32831cdc`: Bob created the buy, Alice took it and paid hold `ee711130…`, Bob provided invoice `fbca5acb…`, fiat sent, released; both clients completed | None. Hold settled once on Alice (1005 sats), payout settled once on Bob (995 sats), zero fees. Resolved, nothing retained. Harness `c39881e`, app `0ed7efb` |
 | `20260908T190151Z-d027fc8a5528` | Linux | happy_sell | **Passed.** Order `02f4840d-74f0-470f-96ed-86d86a48ff38`: created, taken, buyer invoice `3327cca6…`, hold `65e91e73…` paid by Alice, fiat sent, released; relay published `success`; both clients showed completed | None. Hold settled once on Alice's node (1005 sats), payout settled once on Bob's node (995 sats), zero fees. Order resolved, no retained storage. Harness `c39881e`, app `0ed7efb`, mostrod 0.18.7 |
@@ -28,11 +44,12 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 ## Known app v2 product issues
 
-### Web build cannot persist trades
+### Web build did not persist trades (fixed locally 2026-09-09)
 
-On `wasm32` the storage backend stubs every trade operation, so a Web client never shows the orders it
-creates or takes. Both Web cells are blocked until the app implements the trades store (app issue #233).
-Mortsom cannot cancel such an order through the UI either, because the trade never appears.
+Two independent causes, both fixed on the app's `feat/mortsom-linux-accessibility` branch, upstream PR
+MostroP2P/app#408: the `wasm32` storage backend stubbed every trade operation (`fe7fd55` adds the `trades` and
+`trade_keys` IndexedDB stores, part of app issue #233), and the Dart bootstrap skipped `init_db` on the web
+altogether (`def4d40`), which also meant the "implemented" web chat store had never been opened.
 
 ### Optimistic cancel label
 

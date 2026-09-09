@@ -187,7 +187,7 @@ async fn cleanup_needs_the_relay_to_confirm_a_funded_cancellation() {
     adapter.ui_claims_cancelled = true;
     let adapter = Arc::new(adapter);
     let observer = FakeObserver {
-        publish_canceled: false,
+        publish_closed: false,
         canceled_gate: None,
     };
 
@@ -217,7 +217,7 @@ async fn cleanup_finishes_a_cooperative_cancel_the_maker_screen_called_done() {
     adapter.maker_screen_lies = true;
     let adapter = Arc::new(adapter);
     let observer = FakeObserver {
-        publish_canceled: true,
+        publish_closed: true,
         canceled_gate: Some(Arc::new(Mutex::new(Vec::new()))),
     };
     let gate = observer.canceled_gate.clone().unwrap();
@@ -248,4 +248,53 @@ async fn cleanup_finishes_a_cooperative_cancel_the_maker_screen_called_done() {
     let cleanup = summary.cleanup.unwrap();
     assert!(cleanup.is_clean(), "{cleanup:?}");
     assert_eq!(*adapter.cancelled.lock().unwrap(), ["o1".to_owned()]);
+}
+
+/// An order the app no longer lists is not thereby closed. The live Web run
+/// of 2026-09-08 created an order the client never showed; the daemon kept it
+/// pending for an hour. "Not found" on screen needs the relay to show the
+/// order closed before cleanup may report it done.
+#[tokio::test]
+async fn cleanup_needs_the_relay_to_close_an_order_the_app_does_not_list() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+    adapter.hides_trades = true;
+    let adapter = Arc::new(adapter);
+    let observer = FakeObserver {
+        publish_closed: false,
+        canceled_gate: None,
+    };
+
+    let summary = run_with_observer(&world, adapter, opts(&["happy_sell"]), true, &observer)
+        .await
+        .unwrap();
+
+    let cleanup = summary.cleanup.unwrap();
+    assert_eq!(cleanup.unresolved, vec!["o1".to_owned()]);
+    let entry = &cleanup.entries[0];
+    assert!(
+        matches!(&entry.result, Some(mortsom_scenario_kit::cleanup::CleanupResult::Failed { message }) if message.contains("lists no trade")),
+        "{entry:?}"
+    );
+}
+
+/// The mirror of the previous test: when the relay does show the unlisted
+/// order closed, cleanup reports it resolved, so the journal can close.
+#[tokio::test]
+async fn an_unlisted_order_the_relay_shows_closed_counts_as_resolved() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+    adapter.hides_trades = true;
+    let adapter = Arc::new(adapter);
+
+    let summary = run(&world, adapter, opts(&["happy_sell"]), true)
+        .await
+        .unwrap();
+
+    let cleanup = summary.cleanup.unwrap();
+    assert!(cleanup.is_clean(), "{cleanup:?}");
 }

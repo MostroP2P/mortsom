@@ -70,10 +70,84 @@ async fn replace(session: &Session, id: &str, text: &str) -> Result<bool, Appium
             }),
         )
         .await?;
+    // The focusing click must land on the field, not on whatever is passing
+    // through its place: a dialog that has just closed is still animating
+    // the form back into position, and a click delivered then opens the
+    // neighbouring control instead. Wait for the field to rest first.
+    let before = rect(session, &node).await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    if rect(session, &node).await? != before {
+        return Ok(false);
+    }
     session.click(&input(session, id).await?).await?;
     session.clear(&input(session, id).await?).await?;
     session.send_keys(&input(session, id).await?, text).await?;
     Ok(read(session, id).await? == text)
+}
+
+/// Presses `id` once, after it has come to rest.
+///
+/// Flutter web rebuilds its semantics nodes after a scroll or a focus
+/// change, and WebDriver clicks the centre of the element it was handed at
+/// the moment it was handed it. A click that lands while the node is still
+/// moving, or on a node the framework has just replaced, is delivered to
+/// nothing -- which a live run showed as a filled order form whose submit
+/// button had been "clicked" and never left. So: scroll the node into view,
+/// read its rectangle twice and click only when the two agree and the node
+/// has a size. Errors that mean the click was never delivered are retried
+/// until `timeout`; a delivered click is never repeated, because the
+/// business action behind it may already be on its way.
+pub(crate) async fn press(
+    session: &Session,
+    id: &str,
+    timeout: Duration,
+) -> Result<(), AppiumError> {
+    tokio::time::timeout(timeout, async {
+        let mut tick = tokio::time::interval(Duration::from_millis(100));
+        loop {
+            tick.tick().await;
+            match press_once(session, id).await {
+                Ok(true) => return Ok(()),
+                Ok(false) => {}
+                Err(cause) if transient(&cause) => {}
+                Err(cause) => return Err(cause),
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| Err(error(format!("press deadline: `{id}` never came to rest"))))
+}
+
+/// One attempt: `Ok(false)` when the node was still moving or had no size.
+async fn press_once(session: &Session, id: &str) -> Result<bool, AppiumError> {
+    let node = session.find_element(Locator::XPath, &selector(id)?).await?;
+    session
+        .post(
+            "execute/sync",
+            &json!({
+                "script":"arguments[0].scrollIntoView({block: 'center', inline: 'nearest'});",
+                "args":[{"element-6066-11e4-a52e-4f735466cecf":node.id}]
+            }),
+        )
+        .await?;
+    let before = rect(session, &node).await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let after = rect(session, &node).await?;
+    if before != after || after.2 <= 0.0 || after.3 <= 0.0 {
+        return Ok(false);
+    }
+    session.click(&node).await?;
+    Ok(true)
+}
+
+/// `(x, y, width, height)` of the node as the browser lays it out now.
+async fn rect(session: &Session, node: &Element) -> Result<(f64, f64, f64, f64), AppiumError> {
+    let value = session.get(&format!("element/{}/rect", node.id)).await?;
+    let number = |key: &str| value.get(key).and_then(serde_json::Value::as_f64);
+    match (number("x"), number("y"), number("width"), number("height")) {
+        (Some(x), Some(y), Some(w), Some(h)) => Ok((x, y, w, h)),
+        _ => Err(error("element rect is not four numbers")),
+    }
 }
 
 fn transient(cause: &AppiumError) -> bool {
