@@ -9,9 +9,8 @@ frozen, selectable option. [spec.md](spec.md) is normative; this file is the ope
 
 ## Status
 
-Accepted live cells: **Linux 2/2, Web 2/2**. Web required app v2 changes that live on the app's
-`feat/mortsom-linux-accessibility` branch (IndexedDB stores and store initialisation on the web, upstream PR
-MostroP2P/app#408). See [docs/acceptance-ledger.md](docs/acceptance-ledger.md) for every attempt and
+Accepted live cells: **Linux 2/2, Web 2/2**. Web required app v2 changes (IndexedDB stores and store initialisation on the web) that are merged
+upstream as MostroP2P/app#408; build the clients from the app's `main`. See [docs/acceptance-ledger.md](docs/acceptance-ledger.md) for every attempt and
 [docs/HANDOFF.md](docs/HANDOFF.md) for the current plan.
 
 **Transitional dependency.** The spec requires `mortsom stack up` to build the regtest stack on its own. The

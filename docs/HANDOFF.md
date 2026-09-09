@@ -28,7 +28,7 @@ the commands below work only with that checkout present and built. The README sa
 | Project | Path | Branch |
 |---|---|---|
 | Mortsom | `/home/negrunch/dev/mortsom` | `feat/v2-desktop-web` |
-| App v2 | `/home/negrunch/dev/mobilev2` | `feat/mortsom-linux-accessibility`, at `0ed7efb` |
+| App v2 | `/home/negrunch/dev/mobilev2` | `main` (PR #408 merged, `d49f3c1`) |
 | Ortsom (transitional dependency) | `/home/negrunch/dev/ortsom` | `feat/public-stack-status` |
 
 Mortsom and app commits are local; nothing has been pushed from these branches. Run `git status --short`
@@ -64,7 +64,7 @@ private recovery state to gain space.
   `20260909T033857Z-e7b88a390989` (buy). Every pass settled the hold once on Alice and the payout once on Bob,
   resolved its order and retained nothing.
 - **App v2 changes required for Web** are on the app's `feat/mortsom-linux-accessibility` branch, pushed to
-  `MostroP2P/app` as PR #408 (https://github.com/MostroP2P/app/pull/408), pending review: `fe7fd55` (IndexedDB trades and trade-key stores), `def4d40` (open
+  `MostroP2P/app` as PR #408, merged into the app's `main` on 2026-09-09 (merge `d49f3c1`): `fe7fd55` (IndexedDB trades and trade-key stores), `def4d40` (open
   the store on the web; `init_db` was skipped there, so nothing ever persisted), `e3ac458` (orders, relays,
   identity and outbox stores; the identity stub had made every order creation fail once the store was open).
   The Web bundle under test was built from `e3ac458`.
@@ -78,7 +78,7 @@ private recovery state to gain space.
   detached (`setsid nohup … &`) and followed through their log. Nothing in the harness depends on this.
 - No journal is retained; no harness process is left running; the regtest stack stays up by design.
 
-Next steps, in order: land Mortsom PR #18 and app PR #408; then the remaining plan items (isolate the Android crates behind a
+Next steps, in order: land Mortsom PR #18 (app PR #408 is merged; build clients from the app's `main`); then the remaining plan items (isolate the Android crates behind a
 feature, replace the Ortsom delegation with the Mortsom-owned stack of spec section 5), coverage measurement
 and the further scenarios the operator chooses.
 
