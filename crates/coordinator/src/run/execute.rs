@@ -315,8 +315,9 @@ async fn confirm_unlisted_closed(ctx: &Context, order: &OrderReference) -> Clean
                 ),
                 Some(event.id.clone()),
             );
+            // The daemon closed it: that is what "already closed" means.
             CleanupResult::Done {
-                outcome: CancelOutcome::NotFound,
+                outcome: CancelOutcome::AlreadyClosed,
             }
         }
         None => CleanupResult::Failed {

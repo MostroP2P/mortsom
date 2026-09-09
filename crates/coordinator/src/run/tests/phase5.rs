@@ -279,3 +279,22 @@ async fn cleanup_needs_the_relay_to_close_an_order_the_app_does_not_list() {
         "{entry:?}"
     );
 }
+
+/// The mirror of the previous test: when the relay does show the unlisted
+/// order closed, cleanup reports it resolved, so the journal can close.
+#[tokio::test]
+async fn an_unlisted_order_the_relay_shows_closed_counts_as_resolved() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+    adapter.hides_trades = true;
+    let adapter = Arc::new(adapter);
+
+    let summary = run(&world, adapter, opts(&["happy_sell"]), true)
+        .await
+        .unwrap();
+
+    let cleanup = summary.cleanup.unwrap();
+    assert!(cleanup.is_clean(), "{cleanup:?}");
+}

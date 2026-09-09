@@ -280,7 +280,10 @@ mod tests {
             ORDER.to_owned(),
             "alice=not a uuid".to_owned(),
         ] {
-            assert!(attribute_orders(&open, std::slice::from_ref(&bad)).is_err(), "{bad}");
+            assert!(
+                attribute_orders(&open, std::slice::from_ref(&bad)).is_err(),
+                "{bad}"
+            );
         }
         assert_eq!(
             open.events().len(),
