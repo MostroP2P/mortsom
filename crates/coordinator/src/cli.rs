@@ -116,7 +116,8 @@ pub enum Command {
         xvfb: PathBuf,
         /// Scenario names.
         scenarios: Vec<String>,
-        /// Run every scenario carrying this tag.
+        /// Run every scenario carrying this tag (a family, or `smoke`). On
+        /// Linux and Web each scenario is its own run with fresh actors.
         #[arg(long)]
         tag: Option<String>,
     },

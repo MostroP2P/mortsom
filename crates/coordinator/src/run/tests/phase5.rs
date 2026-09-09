@@ -48,7 +48,7 @@ async fn phase5_no_value_scenarios_run_against_fakes() {
         "duplicate_events_at_taken",
         "stale_event_at_taken",
         "unauthorized_actions_at_taken",
-        "cancel_pending",
+        "cancel_before_taken",
         "taker_cancel_at_taken",
         "nwc_cancel_payment",
     ];

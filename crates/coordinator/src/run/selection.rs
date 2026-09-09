@@ -30,7 +30,7 @@ mod tests {
                 .len(),
             1
         );
-        let names = ["happy_sell".into(), "cancel_pending".into()];
+        let names = ["happy_sell".into(), "cancel_before_taken".into()];
         assert!(select_for_run(&names, None, true).is_err());
         assert_eq!(select_for_run(&names, None, false).unwrap().len(), 2);
     }
