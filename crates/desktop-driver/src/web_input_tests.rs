@@ -19,6 +19,13 @@ async fn fixture() -> (MockServer, Session) {
         .with_priority(10)
         .mount(&server)
         .await;
+    // A field at rest, unless a test overrides it with a moving one.
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/rect"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(rect_json(40.0)))
+        .with_priority(10)
+        .mount(&server)
+        .await;
     (server, session)
 }
 
@@ -110,7 +117,10 @@ async fn check_rebuilt_field(code: &'static str) {
         .await;
     let flag = written.clone();
     Mock::given(method("GET"))
-        .respond_with(move |_: &wiremock::Request| {
+        .respond_with(move |request: &wiremock::Request| {
+            if request.url.path().ends_with("/rect") {
+                return ResponseTemplate::new(200).set_body_json(rect_json(40.0));
+            }
             ResponseTemplate::new(200)
                 .set_body_json(json!({"value":if flag.load(Ordering::SeqCst) {"100"} else {""}}))
         })
@@ -223,4 +233,39 @@ async fn a_node_that_never_rests_is_never_clicked() {
     );
     let requests = server.received_requests().await.unwrap();
     assert!(!requests.iter().any(|r| r.url.path().ends_with("/click")));
+}
+
+/// Typing starts with a focusing click; delivered while the form is still
+/// moving it lands on a neighbour. A field that never rests is never clicked.
+#[tokio::test]
+async fn text_entry_never_clicks_a_field_that_is_still_moving() {
+    let (server, session) = fixture().await;
+    let moving = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/rect"))
+        .respond_with({
+            let moving = moving.clone();
+            move |_: &wiremock::Request| {
+                let n = moving.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                ResponseTemplate::new(200).set_body_json(rect_json(f64::from(n)))
+            }
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/property/value"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value":""})))
+        .mount(&server)
+        .await;
+
+    assert!(
+        enter(&session, "amount", "1000", Duration::from_millis(600))
+            .await
+            .is_err()
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        !requests.iter().any(|r| r.url.path().ends_with("/click")),
+        "{requests:#?}"
+    );
 }

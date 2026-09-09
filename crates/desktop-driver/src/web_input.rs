@@ -70,6 +70,15 @@ async fn replace(session: &Session, id: &str, text: &str) -> Result<bool, Appium
             }),
         )
         .await?;
+    // The focusing click must land on the field, not on whatever is passing
+    // through its place: a dialog that has just closed is still animating
+    // the form back into position, and a click delivered then opens the
+    // neighbouring control instead. Wait for the field to rest first.
+    let before = rect(session, &node).await?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    if rect(session, &node).await? != before {
+        return Ok(false);
+    }
     session.click(&input(session, id).await?).await?;
     session.clear(&input(session, id).await?).await?;
     session.send_keys(&input(session, id).await?, text).await?;

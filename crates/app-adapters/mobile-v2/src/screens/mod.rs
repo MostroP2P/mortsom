@@ -207,8 +207,13 @@ pub async fn choose(
     const PICKS: usize = 3;
     for _ in 0..PICKS {
         tap(device, option).await?;
+        // Gone twice in a row: a semantics rebuild drops the picker's nodes
+        // for one poll while the picker is still very much open.
         if gone_within(device, picker, PICKER_CLOSE).await? {
-            return Ok(());
+            tokio::time::sleep(SCREEN_POLL).await;
+            if !present(device, picker).await? {
+                return Ok(());
+            }
         }
     }
     Err(AdapterError::contract(format!(
