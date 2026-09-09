@@ -10,7 +10,7 @@ use mortsom_app_contract::{
 use mortsom_common::Secret;
 
 use super::nav::go_home;
-use super::{dismiss_keyboard, expect, label, listed, present, tap, type_into};
+use super::{SCREEN_POLL, dismiss_keyboard, expect, label, listed, present, tap, type_into};
 use crate::selectors::Ids;
 use crate::states::from_v2_label;
 
@@ -193,17 +193,32 @@ pub async fn pay_hold_invoice(
     })
 }
 
+/// How long a just-opened screen gets to show its order id before a wrong
+/// or empty readout is believed. A screen in transition (a detail route
+/// pushed over a list, a rebuilt semantics node on the web) reads stale or
+/// blank for a moment; a foreign form still reads foreign after it settles.
+const ID_SETTLE: std::time::Duration = std::time::Duration::from_secs(3);
+
 async fn verify_order_id(
     device: &DeviceContext<'_>,
     id: &str,
     order: &OrderReference,
 ) -> Result<(), AdapterError> {
-    if label(device, id).await?.trim() != order.id {
-        return Err(AdapterError::contract(
-            "invoice or trade screen belongs to a different order",
-        ));
+    let deadline = tokio::time::Instant::now() + ID_SETTLE;
+    loop {
+        let shown = label(device, id).await?;
+        if shown.trim() == order.id {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(AdapterError::contract(format!(
+                "invoice or trade screen belongs to a different order: `{id}` shows `{}`, expected `{}`",
+                shown.trim(),
+                order.id
+            )));
+        }
+        tokio::time::sleep(SCREEN_POLL).await;
     }
-    Ok(())
 }
 
 /// Manual invoice screens are waiting states only when their public order ID

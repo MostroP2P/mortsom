@@ -157,3 +157,46 @@ async fn buyer_submission_leaves_the_form_and_observes_the_returned_trade_status
     assert_eq!(state.state, OrderState::Active);
     assert_eq!(state.raw_label, "active");
 }
+
+/// A detail screen in transition reads its order id blank or stale for a
+/// moment. The live Web run of 2026-09-09 polled Alice's screen while a
+/// route settled and rejected her own trade as "a different order"; only a
+/// readout that stays wrong after settling is foreign.
+#[tokio::test]
+async fn an_order_id_still_settling_is_waited_for_not_rejected() {
+    let ui = taken_form(OrderKind::Sell, "o1");
+    let a = adapter();
+    let order = OrderReference::with_kind("o1", OrderKind::Sell);
+    a.find_and_take_order(&device(&ui), &order).await.unwrap();
+    ui.present(&[Ids::INVOICE_SUBMIT]);
+    ui.on_tap(
+        Ids::INVOICE_SUBMIT,
+        &[
+            Ids::ORDER_STATUS,
+            Ids::ORDER_ID,
+            Ids::ORDER_ADD_FAB,
+            Ids::NAV_TRADES,
+            "trades.item.o1",
+        ],
+    );
+    ui.on_tap_hide(
+        Ids::INVOICE_SUBMIT,
+        &[Ids::INVOICE_TEXT, Ids::INVOICE_ORDER_ID],
+    );
+    ui.label(Ids::ORDER_ID, "o1");
+    ui.label(Ids::ORDER_STATUS, "fiat-sent");
+    a.provide_buyer_invoice(&device(&ui), &order, Some(&Secret::new("private-invoice")))
+        .await
+        .unwrap();
+
+    ui.label_settles(Ids::ORDER_ID, "", 2);
+    let state = a.observe_order(&device(&ui), &order).await.unwrap();
+    assert_eq!(state.state, OrderState::FiatSent);
+
+    ui.label(Ids::ORDER_ID, "o2");
+    let failure = a.observe_order(&device(&ui), &order).await.unwrap_err();
+    assert!(
+        failure.message.contains("shows `o2`, expected `o1`"),
+        "{failure:?}"
+    );
+}

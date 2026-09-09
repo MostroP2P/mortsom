@@ -11,7 +11,7 @@ use mortsom_app_contract::{AdapterError, DeviceContext};
 use tracing::warn;
 
 /// Gap between looks while waiting for one of several screens.
-const SCREEN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+pub(super) const SCREEN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
 /// How long a control that only has to draw has to answer before the tap
 /// is repeated.
