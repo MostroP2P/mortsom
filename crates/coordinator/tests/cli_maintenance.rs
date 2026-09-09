@@ -110,3 +110,29 @@ fn a_missing_custom_publication_secret_fails_before_creating_the_output() {
         .stderr(predicates::str::contains("CUSTOM_MACAROON"));
     assert!(!root.path().join("published").exists());
 }
+
+#[test]
+fn a_mistyped_run_id_is_refused_with_the_run_it_resembles() {
+    // Arrange
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+
+    // Act / Assert: a typo of a known run stops before touching the host.
+    command(root.path())
+        .args(["cleanup", "run-aa"])
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains(
+            "run run-aa is not known on this host",
+        ))
+        .stderr(predicates::str::contains("mortsom cleanup run-a"))
+        .stdout(predicates::str::is_empty());
+
+    // An id nothing resembles is still swept, as a crashed run may have left
+    // host resources without an artifact directory.
+    command(root.path())
+        .args(["cleanup", "never-ran"])
+        .assert()
+        .code(1)
+        .stdout(predicates::str::contains("orders UNKNOWN"));
+}
