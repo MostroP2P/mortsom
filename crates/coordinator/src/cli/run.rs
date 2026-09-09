@@ -42,7 +42,10 @@ pub(super) async fn run_command(
             .and_then(|home| {
                 crate::recovery_store::FileJournal::directory(std::path::Path::new(&home))
             })
-            .and_then(|base| crate::recovery_store::FileJournal::refuse_pending(&base));
+            .and_then(|base| {
+                crate::recovery_store::FileJournal::refuse_pending(&base)
+                    .map_err(|pending| pending.message(use_color_on_stderr()))
+            });
         if let Err(error) = pending {
             eprintln!("{error}");
             return ExitCode::from(2);

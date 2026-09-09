@@ -145,3 +145,30 @@ fn a_fifo_manifest_is_rejected_without_waiting_for_a_writer() {
     mknodat(CWD, &path, FileType::Fifo, Mode::RUSR | Mode::WUSR, 0).unwrap();
     assert!(FileJournal::open(journal.root()).is_err());
 }
+#[test]
+fn pending_recovery_message_names_the_exact_cleanup_command() {
+    // Arrange
+    let base = tempfile::tempdir().unwrap();
+    let journal = FileJournal::create(base.path(), manifest()).unwrap();
+    let run_id = journal.snapshot().run_id.as_str().to_string();
+    drop(journal);
+
+    // Act
+    let pending = FileJournal::refuse_pending(base.path()).unwrap_err();
+
+    // Assert
+    let plain = pending.message(false);
+    assert_eq!(
+        plain,
+        format!(
+            "run {run_id} retains unresolved recovery state; run `mortsom cleanup {run_id}` before starting another desktop scenario"
+        )
+    );
+    assert!(!plain.contains('\u{1b}'), "{plain:?}");
+    let styled = pending.message(true);
+    assert!(
+        styled.contains(&format!("\u{1b}[1mmortsom cleanup {run_id}\u{1b}[0m")),
+        "{styled:?}"
+    );
+    assert_eq!(String::from(pending), plain);
+}

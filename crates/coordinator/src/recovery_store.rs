@@ -38,6 +38,42 @@ pub struct RecoveryManifest {
     pub resolution_verified: bool,
 }
 
+/// Why a new desktop scenario cannot start yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingRecovery {
+    /// A previous run still holds identities that `mortsom cleanup` must resolve.
+    Unresolved(RunId),
+    /// The recovery directory could not be inspected.
+    Io(String),
+}
+impl PendingRecovery {
+    /// Operator-facing text; `color` wraps the command to run in bold so it
+    /// stands out on a terminal, and stays plain for logs and pipes.
+    pub fn message(&self, color: bool) -> String {
+        const BOLD: &str = "\u{1b}[1m";
+        const RESET: &str = "\u{1b}[0m";
+        match self {
+            Self::Unresolved(run_id) => {
+                let command = format!("mortsom cleanup {run_id}");
+                let highlighted = if color {
+                    format!("{BOLD}{command}{RESET}")
+                } else {
+                    format!("`{command}`")
+                };
+                format!(
+                    "run {run_id} retains unresolved recovery state; run {highlighted} before starting another desktop scenario"
+                )
+            }
+            Self::Io(cause) => cause.clone(),
+        }
+    }
+}
+impl From<PendingRecovery> for String {
+    fn from(pending: PendingRecovery) -> Self {
+        pending.message(false)
+    }
+}
+
 /// Durable journal with a caller-owned directory, never automatically removed.
 #[derive(Debug)]
 pub struct FileJournal {
@@ -52,17 +88,16 @@ impl FileJournal {
             .map_err(|e| e.to_string())
     }
     /// Refuse new work while any previous protected identity needs recovery.
-    pub fn refuse_pending(base: &Path) -> Result<(), String> {
+    pub fn refuse_pending(base: &Path) -> Result<(), PendingRecovery> {
         if !base.exists() {
             return Ok(());
         }
-        for entry in std::fs::read_dir(base).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let journal = Self::open(&entry.path())?;
+        for entry in std::fs::read_dir(base).map_err(|e| PendingRecovery::Io(e.to_string()))? {
+            let entry = entry.map_err(|e| PendingRecovery::Io(e.to_string()))?;
+            let journal = Self::open(&entry.path()).map_err(PendingRecovery::Io)?;
             if !journal.snapshot().closed {
-                return Err(format!(
-                    "run {} retains unresolved recovery state; run mortsom cleanup before starting another desktop scenario",
-                    journal.snapshot().run_id
+                return Err(PendingRecovery::Unresolved(
+                    journal.snapshot().run_id.clone(),
                 ));
             }
         }
