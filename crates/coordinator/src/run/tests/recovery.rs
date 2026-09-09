@@ -182,6 +182,16 @@ async fn attempt_with_wallet(
     journal: Arc<FileJournal>,
     wallet: Option<(String, Arc<RecoveryWallet>)>,
 ) -> (RunSummary, Vec<Arc<RetainedUi>>) {
+    attempt_with_wallet_and_book(fixture, adapter, journal, wallet, &["canceled", "success"]).await
+}
+
+async fn attempt_with_wallet_and_book(
+    fixture: &World,
+    adapter: Arc<FakeAdapter>,
+    journal: Arc<FileJournal>,
+    wallet: Option<(String, Arc<RecoveryWallet>)>,
+    book_statuses: &[&'static str],
+) -> (RunSummary, Vec<Arc<RetainedUi>>) {
     let runner = FakeRunner::default();
     let ui = FakeUi(adapter.flags.clone());
     let env = |_: &str| None;
@@ -208,10 +218,11 @@ async fn attempt_with_wallet(
         None,
         false,
     );
-    let sessions = attach_runtime(
+    let sessions = attach_runtime_with_book(
         &mut world,
         &journal,
         options.desktop.as_ref().unwrap().bundle.clone(),
+        book_statuses,
     );
     if let Some((label, wallet)) = wallet {
         world.wallets = Some(Arc::new(WalletObserver::new(vec![(
@@ -254,6 +265,18 @@ pub(super) fn attach_runtime(
     journal: &FileJournal,
     bundle: Arc<crate::fingerprint::CapturedBundle>,
 ) -> Vec<Arc<RetainedUi>> {
+    attach_runtime_with_book(world, journal, bundle, &["canceled", "success"])
+}
+
+/// Like [`attach_runtime`], with the statuses the fixture daemon publishes
+/// on the book for the saved order.
+pub(super) fn attach_runtime_with_book(
+    world: &mut super::super::World<'_>,
+    journal: &FileJournal,
+    bundle: Arc<crate::fingerprint::CapturedBundle>,
+    book_statuses: &[&'static str],
+) -> Vec<Arc<RetainedUi>> {
+    let book_statuses: Vec<&'static str> = book_statuses.to_vec();
     let sessions: Vec<_> = Actor::ALL
         .into_iter()
         .map(|actor| {
@@ -289,14 +312,16 @@ pub(super) fn attach_runtime(
     let feeder = Arc::clone(&observer);
     tokio::spawn(async move {
         for _ in 0..200 {
-            let event = EventBuilder::new(Kind::Custom(38383), "")
-                .tags([
-                    Tag::parse(["d", "old-order"]).unwrap(),
-                    Tag::parse(["s", "canceled"]).unwrap(),
-                ])
-                .finalize(&daemon)
-                .unwrap();
-            feeder.ingest("ws://fixture", &event);
+            for status in &book_statuses {
+                let event = EventBuilder::new(Kind::Custom(38383), "")
+                    .tags([
+                        Tag::parse(["d", "old-order"]).unwrap(),
+                        Tag::parse(["s", status]).unwrap(),
+                    ])
+                    .finalize(&daemon)
+                    .unwrap();
+                feeder.ingest("ws://fixture", &event);
+            }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     });
@@ -557,6 +582,55 @@ async fn payment_attempt(
     .await;
     assert_eq!(journal.snapshot().closed, summary.checks.is_healthy());
     (summary, adapter)
+}
+
+/// The daemon tells only the buyer about the completed payout, so a seller
+/// client that missed the public success event stays on payout pending. With
+/// the daemon's success on the book and one settled record per hash, the
+/// journal resolves and the lagging screen is recorded; without the daemon's
+/// success, a lagging screen keeps the journal open.
+#[tokio::test]
+async fn a_client_stuck_on_payout_pending_resolves_only_with_the_daemons_success() {
+    use mortsom_scenario_kit::journal::RecoveryJournal;
+    for (book, healthy) in [
+        (&["canceled", "success"][..], true),
+        (&["canceled"][..], false),
+    ] {
+        let mut fixture = world(false);
+        fixture.config.run.settle_timeout_secs = 1;
+        let journal = saved_run_for(&fixture, Actor::Bob);
+        journal
+            .record(RecoveryEvent::PaymentExpected {
+                order_id: "old-order".into(),
+                wallet: "bob".into(),
+                hash: "c".repeat(64),
+                incoming: true,
+                amount_sats: 100,
+            })
+            .unwrap();
+        let root = journal.root().to_path_buf();
+        drop(journal);
+        let journal = Arc::new(FileJournal::open(&root).unwrap());
+        let adapter = Arc::new(FakeAdapter::full());
+        // Never completes on screen: no `complete_after_observations`.
+        adapter.set("old-order", OrderState::PayoutPending);
+        let wallet = RecoveryWallet::new(PaymentState::Settled, 100, 0, 1);
+        let (summary, _) = attempt_with_wallet_and_book(
+            &fixture,
+            adapter,
+            journal.clone(),
+            Some(("bob".into(), wallet)),
+            book,
+        )
+        .await;
+        assert_eq!(
+            summary.checks.is_healthy(),
+            healthy,
+            "book={book:?}: {:?}",
+            summary.checks
+        );
+        assert_eq!(journal.snapshot().closed, healthy);
+    }
 }
 
 fn payment_failed(summary: &RunSummary) -> bool {

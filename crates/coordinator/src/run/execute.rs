@@ -222,19 +222,40 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
             .await
             .is_ok_and(|state| state.state == OrderState::PayoutPending)
     {
-        return match mortsom_scenario_kit::actions::wait_app_state(
-            ctx,
-            maker,
-            order,
-            OrderState::Completed,
-        )
-        .await
-        {
+        let shown =
+            mortsom_scenario_kit::actions::wait_app_state(ctx, maker, order, OrderState::Completed)
+                .await;
+        return match shown {
             Ok(_) => CleanupResult::Done {
                 outcome: CancelOutcome::AlreadyClosed,
             },
-            Err(error) => CleanupResult::Failed {
-                message: error.to_string(),
+            // A seller client that missed the public success event keeps
+            // showing payout pending; the daemon's own success closes the
+            // order, and the settlement records are verified afterwards.
+            Err(lagging) => match mortsom_scenario_kit::actions::wait_relay_state(
+                ctx,
+                order,
+                OrderState::Completed,
+            )
+            .await
+            {
+                Ok(()) => {
+                    ctx.timeline.push(
+                        TimelineKind::Cleanup,
+                        Some(maker.as_str()),
+                        format!(
+                            "order {}: screen stayed short of completed ({lagging}); the daemon published success",
+                            order.id
+                        ),
+                        None,
+                    );
+                    CleanupResult::Done {
+                        outcome: CancelOutcome::AlreadyClosed,
+                    }
+                }
+                Err(_) => CleanupResult::Failed {
+                    message: lagging.to_string(),
+                },
             },
         };
     }
