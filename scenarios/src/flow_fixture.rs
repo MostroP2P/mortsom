@@ -1,12 +1,19 @@
-//! In-memory UI, daemon-event and wallet boundaries for buy-order sequencing.
-use super::super::*;
+//! In-memory UI, daemon-event and wallet boundaries for scenario
+//! sequencing: a daemon that publishes what the real one publishes, two
+//! silent actors, and wallets that answer for the payments the daemon
+//! made or returned.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use async_trait::async_trait;
+use mortsom_android_driver::avd::Actor;
 use mortsom_android_driver::ui::tests_support::ScriptedUi;
+use mortsom_app_contract::{FiatAmount, OrderDraft, OrderKind, OrderPrice, OrderState};
 use mortsom_common::{Lane, Secret};
 use mortsom_observers::{
     relay::{ObserverScope, RelayObserver},
     wallet::{PaymentState, WalletObserver, WalletReader},
 };
+use mortsom_scenario_kit::context::Context;
 use mortsom_scenario_kit::{
     budget::{Budget, SpendCaps},
     cleanup::CleanupRegistry,
@@ -26,17 +33,39 @@ use std::{
 mod adapter;
 pub use adapter::Adapter;
 
-const ORDER: &str = "buy-order";
+/// The order every scenario creates.
+pub const ORDER: &str = "the-order";
+/// The remainder the daemon spawns from a range order.
+pub const REMAINDER: &str = "the-remainder";
 // Public BOLT 11 reference invoice, never submitted to a real wallet.
 const INVOICE: &str = "lnbc2500u1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpu9qrsgquk0rl77nj30yxdy8j9vdx85fkpmdla2087ne0xh8nhedh8w27kyke0lp53ut353s06fv3qfegext0eh0ymjpf39tuven09sam30g4vgpfna3rh";
+
+/// How the fixture daemon deviates from the well-behaved one.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Misbehaviour {
+    /// The seller's hold payment fails.
+    pub fail_payment: bool,
+    /// A lone cancel request on a funded order closes it outright.
+    pub lone_cancel_closes: bool,
+    /// A market order is published with a sats amount.
+    pub prices_market_orders_upfront: bool,
+}
 
 struct State {
     order: OrderState,
     created: Option<(Actor, OrderKind)>,
+    draft: Option<OrderDraft>,
     actions: Vec<String>,
     wallet_checks: Vec<String>,
     hold_started: bool,
-    fail_payment: bool,
+    refunded: bool,
+    taken_at: Option<u64>,
+    remainder: Option<OrderState>,
+    cancel_requests: Vec<Actor>,
+    rated: Vec<Actor>,
+    /// What the daemon publishes when a take is abandoned, if anything.
+    reaps_abandoned_take_to: Option<&'static str>,
+    misbehaviour: Misbehaviour,
 }
 
 pub struct Fixture {
@@ -47,6 +76,14 @@ pub struct Fixture {
 
 impl Fixture {
     pub async fn new(fail_payment: bool) -> Self {
+        Self::with(Misbehaviour {
+            fail_payment,
+            ..Misbehaviour::default()
+        })
+        .await
+    }
+
+    pub async fn with(misbehaviour: Misbehaviour) -> Self {
         let keys = Keys::generate();
         let mut scope = ObserverScope::daemon_only(keys.public_key());
         scope.add_order(ORDER);
@@ -54,10 +91,17 @@ impl Fixture {
         let state = Arc::new(Mutex::new(State {
             order: OrderState::Pending,
             created: None,
+            draft: None,
             actions: Vec::new(),
             wallet_checks: Vec::new(),
             hold_started: false,
-            fail_payment,
+            refunded: false,
+            taken_at: None,
+            remainder: None,
+            cancel_requests: Vec::new(),
+            rated: Vec::new(),
+            reaps_abandoned_take_to: None,
+            misbehaviour,
         }));
         let adapter = Arc::new(Adapter {
             state: state.clone(),
@@ -122,11 +166,11 @@ impl Fixture {
             fiat_amount: 10,
             payment_method: "Cash".into(),
             ui_timeout: Duration::from_millis(50),
-            state_timeout: Duration::from_millis(50),
+            state_timeout: Duration::from_millis(500),
             settle_timeout: Duration::from_millis(50),
-            expiration_timeout: Duration::from_millis(50),
+            expiration_timeout: Duration::from_millis(500),
             recovery: RecoveryTiming {
-                quiet_window: Duration::ZERO,
+                quiet_window: Duration::from_millis(30),
                 background_secs: 0,
                 outage: Duration::ZERO,
             },
@@ -137,11 +181,37 @@ impl Fixture {
             state,
         }
     }
+
+    /// The daemon reaps an abandoned take by publishing the order as `wire`.
+    pub fn reaps_abandoned_take_to(self, wire: &'static str) -> Self {
+        self.state.lock().unwrap().reaps_abandoned_take_to = Some(wire);
+        self
+    }
+
     pub fn actions(&self) -> Vec<String> {
         self.state.lock().unwrap().actions.clone()
     }
     pub fn wallet_checks(&self) -> Vec<String> {
         self.state.lock().unwrap().wallet_checks.clone()
+    }
+    /// Every state the relay saw for `order`, in order.
+    pub fn relay_states(&self, order: &str) -> Vec<String> {
+        self.context
+            .relay
+            .snapshot()
+            .iter()
+            .filter(|e| e.kind == 38383 && e.tag("d") == Some(order))
+            .filter_map(|e| e.tag("s").map(str::to_owned))
+            .collect()
+    }
+    /// How many reputation events the daemon published.
+    pub fn ratings_published(&self) -> usize {
+        self.context
+            .relay
+            .snapshot()
+            .iter()
+            .filter(|e| e.kind == mortsom_scenario_kit::actions::RATING_EVENT_KIND)
+            .count()
     }
 }
 
@@ -154,20 +224,30 @@ impl NodeWallet for Wallet {
     async fn make_invoice(&self, sats: u64, _: &str) -> Result<Secret, String> {
         assert_eq!(self.actor, Actor::Bob);
         assert_eq!(sats, 250_000);
-        assert!(
-            self.state.lock().unwrap().hold_started,
-            "buyer invoice must follow accepted escrow"
-        );
+        let state = self.state.lock().unwrap();
+        // The maker of a buy is asked for the invoice only once the seller's
+        // hold is accepted; the taker of a sell hands it in first.
+        if matches!(state.created, Some((_, OrderKind::Buy))) {
+            assert!(
+                state.hold_started,
+                "buyer invoice must follow accepted escrow"
+            );
+        }
         Ok(Secret::new(INVOICE))
     }
     async fn start_payment(&self, _: &Secret) -> Result<(), String> {
         assert_eq!(self.actor, Actor::Alice);
         let mut state = self.state.lock().unwrap();
         state.actions.push("pay:alice".into());
-        if state.fail_payment {
+        if state.misbehaviour.fail_payment {
             return Err("injected hold payment failure".into());
         }
         state.hold_started = true;
+        // On a sell the daemon tells both parties `active` once the hold
+        // is accepted; on a buy it first asks the maker for the invoice.
+        if matches!(state.created, Some((_, OrderKind::Sell))) {
+            state.order = OrderState::Active;
+        }
         Ok(())
     }
 }
@@ -176,6 +256,11 @@ impl WalletReader for Wallet {
     async fn lookup(&self, _: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
         let mut state = self.state.lock().unwrap();
         let settled = state.order == OrderState::Completed;
+        if state.refunded {
+            assert_eq!(self.actor, Actor::Alice);
+            state.wallet_checks.push("alice:failed".into());
+            return Ok(Some((250_000, 0, PaymentState::Failed)));
+        }
         if !settled {
             assert_eq!(self.actor, Actor::Alice);
             assert!(state.hold_started);

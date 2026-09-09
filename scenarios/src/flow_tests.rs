@@ -1,8 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-#[path = "flow_fixture.rs"]
-mod fixture;
-use fixture::Fixture;
+use crate::flow_fixture::Fixture;
 use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::OrderKind;
 use mortsom_scenario_kit::{cleanup::CleanupResult, registry};

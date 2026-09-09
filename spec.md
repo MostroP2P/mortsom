@@ -42,8 +42,10 @@ Mortsom is complete for this version when an operator can:
 3. Run `happy_sell` and `happy_buy` with Alice and Bob on Linux, and again on Web, and obtain **four accepted
    cells** with correlated order, escrow and payout evidence and verified cleanup.
 4. Recover any failed run with `mortsom cleanup <run-id>` without inventing identities or losing funds.
+5. Run every scenario of the happy-path and cancellation families (section 8) on Linux and on Web, one
+   accepted cell per scenario and platform, selected one by one or by family tag.
 
-More scenarios follow once these four cells are accepted. A scenario, platform or benchmark outside this list
+More families follow once these cells are accepted. A scenario, platform or benchmark outside this list
 needs an explicit operator instruction.
 
 An accepted cell requires all of the following. Nothing weaker counts:
@@ -211,13 +213,54 @@ tests, never as test-only business endpoints.
 Scenarios express business actions through a platform-neutral app adapter. Linux and Web run the same
 narrative; scenario bodies contain no AT-SPI or WebDriver detail.
 
+### 8.1 Families and tags
+
+The catalogue is organised in families. Each scenario carries its family name as a tag, and `--tag` runs
+a whole family; `smoke` cuts across families to mark the cheap subset (`happy_sell`, `happy_buy` and
+`cancel_before_taken`). `mortsom list` prints every scenario with its tags and requirements.
+
+| Family | Tag | What it covers |
+|---|---|---|
+| Happy path | `happy-path` | Trades that work: sell, buy, range, market price, rating |
+| Cancellations | `cancellation` | Orders ended before the sats move — unilateral, abandoned, cooperative |
+| Expirations | `expiration` | The daemon's own clocks reaping what nobody touched |
+| Disputes | `dispute` | Disputes opened, resolved by a solver, or undone by the parties themselves |
+| Payment failures | `payment-failure` | Invoices the daemon cannot pay, how it recovers, and how many unresolved payouts it lets one payee pin |
+| Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
+| Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
+
+This version implements the first two families in full. The other five are roadmap (section 14): their
+tags are reserved, and no scenario carries them yet.
+
+A scenario whose profile lacks a required capability is **skipped with a reason, never failed**, and a
+skipped scenario is never counted as accepted.
+
+### 8.2 Happy path
+
 | Scenario | Narrative | Required evidence |
 |---|---|---|
 | `happy_sell` | Alice creates a sell order. Bob takes it and provides a payout invoice. Alice pays the hold invoice. Bob reports fiat sent. Alice releases. | Matching order ID on both screens and in relay events. Hold invoice paid by Alice and settled once. Payout received by Bob once. Both clients show completion. |
 | `happy_buy` | Bob creates a buy order. Alice takes it as seller and pays the hold invoice. Bob provides a payout invoice and reports fiat sent. Alice releases. | Same evidence with maker and taker roles reversed. |
+| `range_order` | Alice creates a sell order for a fiat range (one to three times the configured fiat amount). Bob takes it at twice the amount. The trade completes as `happy_sell`. | The book carries both bounds of the range. The daemon prices the take; the hold and payout settle once each. After settlement the daemon publishes the remainder as a new pending order of Alice's, for the fiat left of the range; her app lists it, and she cancels it with relay confirmation. |
+| `market_price_order` | Alice creates a sell order priced at market (no premium). Bob takes it. The trade completes as `happy_sell`. | The book carries the order with no sats amount. The daemon prices the take: the hold invoice asks for a positive amount within the per-order cap, the buyer invoice matches what the app requests, both settle once. |
+| `full_trade_with_rating` | `happy_sell`, then Alice and Bob each rate the other with five stars. | After completion each app offers the rating; after each rating the app shows the trade rated and the daemon publishes a reputation event on the run relay. |
 
-These are the two ordinary trades of the Mostro protocol. Mortsom expresses every actor action as a real UI
-journey; nothing is sent on the protocol by the harness itself.
+`happy_sell` and `happy_buy` are the two ordinary trades of the Mostro protocol. Mortsom expresses every
+actor action as a real UI journey; nothing is sent on the protocol by the harness itself. Market pricing
+needs the daemon's exchange-rate source to be reachable from the stack.
+
+### 8.3 Cancellations
+
+| Scenario | Narrative | Required evidence |
+|---|---|---|
+| `cancel_before_taken` | Alice creates a sell order and cancels it while pending. | Both apps and the relay show the order cancelled. No payment. |
+| `cancel_after_take_unpaid` | Alice creates a sell order. Bob takes it and never provides an invoice. | After the daemon's taker window it publishes the order as pending again, cancelled or expired — a revision later than the take, never the original `pending`. Alice's app shows the same state. A republished order is closed by the cleanup sweep. |
+| `taker_cancel_at_taken` | Alice creates a sell order. Bob takes it, provides his invoice and cancels before Alice pays. | The relay republishes the order as pending after the cancel; Alice's app shows it pending. The cleanup sweep closes it. |
+| `cooperative_cancel` | Alice creates, Bob takes, Alice funds. Alice asks to cancel; Bob agrees. | Bob's app keeps the order active for the whole quiet window after Alice's request. After Bob's agreement both apps and the relay show it cancelled and Alice's hold payment fails (the escrow returns). |
+| `unilateral_cancel_rejected` | As `cooperative_cancel` up to Alice's request; Bob does not agree during the window. | Bob's app keeps the order active and the relay publishes no `canceled` for the whole quiet window. Bob then agrees, which returns the escrow; that step is teardown, not the assertion. |
+
+The maker's own screen is never proof of a cancellation: app v2 marks a funded order cancelled on the
+request alone, while the daemon has only opened the cooperative flow and still holds the escrow.
 
 Rules for every scenario:
 
@@ -229,8 +272,8 @@ Rules for every scenario:
 - Private app keys are never extracted to decrypt messages. Evidence comes from the UI, public relay events
   and wallet results.
 
-New scenarios are added one at a time after the four cells are accepted, each with its own row here and its
-own live acceptance per platform. The earlier twenty-scenario catalogue remains a roadmap in
+New scenarios are added one family at a time, each scenario with its own row here and its own live
+acceptance per platform. The earlier twenty-scenario catalogue remains a roadmap in
 [docs/history/spec-v0.3.md](docs/history/spec-v0.3.md), section 10.
 
 ## 9. Identity and isolation
@@ -326,8 +369,8 @@ overlooked bugs. Commits follow Conventional Commits and never include secrets, 
 
 Documented as roadmap, not required by this version:
 
-- Eighteen further scenarios: cancellations, expirations, disputes, ratings, range and market
-  orders, invoice faults and payout caps.
+- The remaining scenario families of section 8.1: expirations, disputes, payment failures, anti-abuse
+  bonds and adversarial messages.
 - CPU and memory comparison of Linux and Web, and against the Android baseline, under matched conditions.
 - Multi-scenario runs with in-process profile reset.
 - NWC wallet mode for desktop clients.

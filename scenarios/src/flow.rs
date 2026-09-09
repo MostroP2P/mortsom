@@ -53,15 +53,15 @@ pub struct Taken {
     pub payout_hash: Option<String>,
 }
 
-/// The sell draft every scenario uses.
+/// The fixed-price sell draft every ordinary scenario uses.
 pub fn sell_draft(ctx: &Context) -> OrderDraft {
-    OrderDraft {
-        kind: OrderKind::Sell,
-        amount_sats: ctx.amount_sats,
-        fiat_code: ctx.fiat_code.clone(),
-        fiat_amount: ctx.fiat_amount,
-        payment_method: ctx.payment_method.clone(),
-    }
+    OrderDraft::fixed(
+        OrderKind::Sell,
+        ctx.amount_sats,
+        ctx.fiat_code.clone(),
+        ctx.fiat_amount,
+        ctx.payment_method.clone(),
+    )
 }
 
 /// Alice publishes a sell order; her app and the relay show it pending.
@@ -78,7 +78,16 @@ async fn create_pending_for(
         kind,
         ..sell_draft(ctx)
     };
-    let order = actions::create_order(ctx, maker, &draft).await?;
+    create_pending_with(ctx, maker, &draft).await
+}
+
+/// `maker` publishes `draft`; their app and the relay show it pending.
+pub async fn create_pending_with(
+    ctx: &Context,
+    maker: Actor,
+    draft: &OrderDraft,
+) -> Result<OrderReference, ScenarioError> {
+    let order = actions::create_order(ctx, maker, draft).await?;
     actions::wait_app_state(ctx, maker, &order, OrderState::Pending).await?;
     actions::wait_relay_state(ctx, &order, OrderState::Pending).await?;
     Ok(order)
@@ -98,6 +107,29 @@ pub async fn take(ctx: &Context, order: OrderReference) -> Result<Taken, Scenari
 pub async fn create_and_take(ctx: &Context) -> Result<Taken, ScenarioError> {
     let order = create_pending(ctx).await?;
     take(ctx, order).await
+}
+
+/// Bob takes the range `order` at `fiat_amount` and hands in his invoice
+/// for the sats the daemon priced; both apps show it taken. No value moves.
+pub async fn take_at(
+    ctx: &Context,
+    order: OrderReference,
+    fiat_amount: u64,
+) -> Result<Taken, ScenarioError> {
+    actions::take_order_at(ctx, Actor::Bob, &order, fiat_amount).await?;
+    actions::wait_both(ctx, &order, OrderState::Taken).await?;
+    let payout_hash = actions::provide_buyer_invoice(ctx, Actor::Bob, &order).await?;
+    actions::wait_app_state(ctx, Actor::Alice, &order, OrderState::Taken).await?;
+    Ok(Taken { order, payout_hash })
+}
+
+/// Alice creates a sell order, Bob takes it, Alice funds it: the order both
+/// apps show active, with the escrow held. Where every deviation from the
+/// happy path that needs a funded order starts.
+pub async fn create_take_and_fund(ctx: &Context) -> Result<Taken, ScenarioError> {
+    let taken = create_and_take(ctx).await?;
+    fund(ctx, &taken.order).await?;
+    Ok(taken)
 }
 
 /// Bob publishes a buy and Alice takes it as seller. Her escrow must be
@@ -127,10 +159,12 @@ pub async fn create_buy_and_fund(ctx: &Context) -> Result<Taken, ScenarioError> 
 /// tells only the two parties about `active`: the public book keeps the
 /// order `in-progress` from the take until it closes, so that is the relay
 /// state to correlate with. Moves value: requires mainnet clearance.
-pub async fn fund(ctx: &Context, order: &OrderReference) -> Result<(), ScenarioError> {
-    actions::pay_hold_invoice(ctx, Actor::Alice, order).await?;
+/// Returns the sats the hold invoice asked for.
+pub async fn fund(ctx: &Context, order: &OrderReference) -> Result<u64, ScenarioError> {
+    let hold = actions::pay_hold_invoice(ctx, Actor::Alice, order).await?;
     actions::wait_both(ctx, order, OrderState::Active).await?;
-    actions::wait_relay_state(ctx, order, OrderState::Taken).await
+    actions::wait_relay_state(ctx, order, OrderState::Taken).await?;
+    Ok(hold.amount_sats)
 }
 
 /// Bob reports fiat sent; Alice sees it.

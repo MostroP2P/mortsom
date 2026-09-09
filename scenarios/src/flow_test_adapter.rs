@@ -2,6 +2,10 @@ use super::*;
 use mortsom_android_driver::process::CommandRunner;
 use mortsom_app_contract::*;
 
+/// How long the fixture daemon takes to reap an abandoned take or to
+/// publish a remainder after settlement.
+const DAEMON_DELAY: Duration = Duration::from_millis(30);
+
 pub struct Adapter {
     pub(super) state: Arc<Mutex<State>>,
     pub(super) relay: Arc<RelayObserver>,
@@ -19,14 +23,60 @@ impl Adapter {
     }
     async fn transition(&self, state: OrderState, wire: &str) {
         self.state.lock().unwrap().order = state;
+        self.publish(ORDER, wire, &[]).await;
+    }
+    /// Publishes `order` as `wire` on the fixture relay with `extra` tags.
+    /// An order outside the observer's scope is retried until the scenario
+    /// scopes it, the way a relay replays a stored replaceable event to a
+    /// late subscriber.
+    async fn publish(&self, order: &str, wire: &str, extra: &[Vec<String>]) {
+        let mut tags = vec![
+            Tag::parse(["d", order]).unwrap(),
+            Tag::parse(["s", wire]).unwrap(),
+            // Two revisions in one second must not share an event id.
+            Tag::parse(["nonce", &uuid_like()]).unwrap(),
+        ];
+        for tag in extra {
+            tags.push(Tag::parse(tag.iter().map(String::as_str)).unwrap());
+        }
         let event = EventBuilder::new(Kind::Custom(38383), "")
-            .tags([
-                Tag::parse(["d", ORDER]).unwrap(),
-                Tag::parse(["s", wire]).unwrap(),
-            ])
+            .tags(tags)
             .finalize(&self.keys)
             .unwrap();
-        assert!(self.relay.ingest("ws://fixture.invalid", &event).is_some());
+        if self.relay.ingest("ws://fixture.invalid", &event).is_some() {
+            return;
+        }
+        let relay = self.relay.clone();
+        tokio::spawn(async move {
+            for _ in 0..200 {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                if relay.ingest("ws://fixture.invalid", &event).is_some() {
+                    return;
+                }
+            }
+        });
+    }
+    /// The book tags of the created order: sats only once priced, fiat as
+    /// one amount or both bounds.
+    fn book_tags(&self) -> Vec<Vec<String>> {
+        let state = self.state.lock().unwrap();
+        let Some(draft) = state.draft.as_ref() else {
+            return vec![];
+        };
+        let amt = match draft.price {
+            OrderPrice::Fixed { amount_sats } => amount_sats,
+            OrderPrice::Market { .. } if state.misbehaviour.prices_market_orders_upfront => 1000,
+            OrderPrice::Market { .. } => 0,
+        };
+        let mut fa = vec!["fa".to_owned()];
+        match draft.fiat {
+            FiatAmount::Exact(amount) => fa.push(amount.to_string()),
+            FiatAmount::Range { min, max } => {
+                fa.push(min.to_string());
+                fa.push(max.to_string());
+            }
+        }
+        vec![vec!["amt".to_owned(), amt.to_string()], fa]
     }
     fn action(&self, verb: &str, actor: Actor) {
         self.state
@@ -35,7 +85,31 @@ impl Adapter {
             .actions
             .push(format!("{verb}:{actor}"));
     }
+    async fn take(&self, actor: Actor) {
+        self.action("take", actor);
+        // The live daemon republishes a taken order as `in-progress`.
+        self.transition(OrderState::Taken, "in-progress").await;
+        let reap = self.state.lock().unwrap().reaps_abandoned_take_to;
+        if let Some(wire) = reap {
+            let state = self.state.clone();
+            let this = Adapter {
+                state: state.clone(),
+                relay: self.relay.clone(),
+                keys: self.keys.clone(),
+            };
+            tokio::spawn(async move {
+                tokio::time::sleep(DAEMON_DELAY).await;
+                let reaped = OrderState::from_protocol_status(wire).unwrap();
+                this.transition(reaped, wire).await;
+            });
+        }
+    }
 }
+
+fn uuid_like() -> String {
+    format!("{:?}", std::time::Instant::now())
+}
+
 #[async_trait]
 impl AppAdapter for Adapter {
     fn profile(&self) -> AppProfile {
@@ -75,14 +149,31 @@ impl AppAdapter for Adapter {
     ) -> Result<WalletConnection, AdapterError> {
         unreachable!()
     }
+    async fn owned_orders(&self, _: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
+        let state = self.state.lock().unwrap();
+        let mut ids = vec![];
+        if state.created.is_some() {
+            ids.push(ORDER.to_owned());
+        }
+        if state.remainder.is_some() {
+            ids.push(REMAINDER.to_owned());
+        }
+        Ok(ids)
+    }
     async fn create_order(
         &self,
         device: &DeviceContext<'_>,
         draft: &OrderDraft,
     ) -> Result<VisibleOrder, AdapterError> {
         self.action("create", device.actor);
-        self.state.lock().unwrap().created = Some((device.actor, draft.kind));
-        self.transition(OrderState::Pending, "pending").await;
+        {
+            let mut state = self.state.lock().unwrap();
+            state.created = Some((device.actor, draft.kind));
+            state.draft = Some(draft.clone());
+            state.order = OrderState::Pending;
+        }
+        let tags = self.book_tags();
+        self.publish(ORDER, "pending", &tags).await;
         Ok(VisibleOrder {
             id: Some(ORDER.into()),
             state: OrderState::Pending,
@@ -91,12 +182,32 @@ impl AppAdapter for Adapter {
     async fn find_and_take_order(
         &self,
         device: &DeviceContext<'_>,
-        order: &OrderReference,
+        _: &OrderReference,
     ) -> Result<(), AdapterError> {
-        assert_eq!(order.kind, Some(OrderKind::Buy));
-        self.action("take", device.actor);
-        // The live daemon republishes a taken order as `in-progress`.
-        self.transition(OrderState::Taken, "in-progress").await;
+        self.take(device.actor).await;
+        Ok(())
+    }
+    async fn find_and_take_order_at(
+        &self,
+        device: &DeviceContext<'_>,
+        _: &OrderReference,
+        fiat_amount: u64,
+    ) -> Result<(), AdapterError> {
+        let is_range = self
+            .state
+            .lock()
+            .unwrap()
+            .draft
+            .as_ref()
+            .is_some_and(OrderDraft::is_range);
+        if !is_range {
+            return Err(AdapterError::contract(
+                "the take amount dialog never appears for a fixed order",
+            ));
+        }
+        self.action(&format!("take-at-{fiat_amount}"), device.actor);
+        self.state.lock().unwrap().taken_at = Some(fiat_amount);
+        self.take(device.actor).await;
         Ok(())
     }
     async fn pay_hold_invoice(
@@ -126,8 +237,11 @@ impl AppAdapter for Adapter {
         invoice: Option<&Secret>,
     ) -> Result<Option<Secret>, AdapterError> {
         self.action("invoice", device.actor);
-        assert!(self.state.lock().unwrap().hold_started);
-        self.private_transition(OrderState::Active);
+        let kind = self.state.lock().unwrap().created.map(|(_, kind)| kind);
+        if kind == Some(OrderKind::Buy) {
+            assert!(self.state.lock().unwrap().hold_started);
+            self.private_transition(OrderState::Active);
+        }
         Ok(invoice.cloned())
     }
     async fn confirm_fiat_sent(
@@ -146,28 +260,125 @@ impl AppAdapter for Adapter {
     ) -> Result<(), AdapterError> {
         self.action("release", device.actor);
         self.transition(OrderState::Completed, "success").await;
+        let remainder = {
+            let state = self.state.lock().unwrap();
+            match (state.draft.as_ref().map(|d| d.fiat), state.taken_at) {
+                (Some(FiatAmount::Range { max, .. }), Some(taken)) => Some(max - taken),
+                _ => None,
+            }
+        };
+        if let Some(left) = remainder {
+            // The daemon spawns the remainder once the hold has settled.
+            let this = Adapter {
+                state: self.state.clone(),
+                relay: self.relay.clone(),
+                keys: self.keys.clone(),
+            };
+            tokio::spawn(async move {
+                tokio::time::sleep(DAEMON_DELAY).await;
+                this.state.lock().unwrap().remainder = Some(OrderState::Pending);
+                this.publish(
+                    REMAINDER,
+                    "pending",
+                    &[
+                        vec!["amt".into(), "0".into()],
+                        vec!["fa".into(), left.to_string()],
+                    ],
+                )
+                .await;
+            });
+        }
         Ok(())
     }
     async fn cancel_if_open(
         &self,
-        _: &DeviceContext<'_>,
-        _: &OrderReference,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
     ) -> Result<CancelOutcome, AdapterError> {
-        unreachable!()
+        self.action("cancel", device.actor);
+        if order.id == REMAINDER {
+            self.state.lock().unwrap().remainder = Some(OrderState::Cancelled);
+            self.publish(REMAINDER, "canceled", &[]).await;
+            return Ok(CancelOutcome::Cancelled);
+        }
+        let (state, lone_closes) = {
+            let state = self.state.lock().unwrap();
+            (state.order, state.misbehaviour.lone_cancel_closes)
+        };
+        match state {
+            OrderState::Pending => {
+                self.transition(OrderState::Cancelled, "canceled").await;
+                Ok(CancelOutcome::Cancelled)
+            }
+            // A taker walking away puts the order back on the book.
+            OrderState::Taken => {
+                self.transition(OrderState::Pending, "pending").await;
+                Ok(CancelOutcome::Cancelled)
+            }
+            OrderState::Active | OrderState::FiatSent => {
+                let both = {
+                    let mut guard = self.state.lock().unwrap();
+                    if !guard.cancel_requests.contains(&device.actor) {
+                        guard.cancel_requests.push(device.actor);
+                    }
+                    guard.cancel_requests.len() == Actor::ALL.len()
+                };
+                if both || lone_closes {
+                    self.state.lock().unwrap().refunded = true;
+                    self.transition(OrderState::Cancelled, "canceled").await;
+                }
+                Ok(CancelOutcome::Cancelled)
+            }
+            _ => Ok(CancelOutcome::AlreadyClosed),
+        }
+    }
+    async fn rate_counterpart(
+        &self,
+        device: &DeviceContext<'_>,
+        _: &OrderReference,
+        score: u8,
+    ) -> Result<(), AdapterError> {
+        assert_eq!(score, 5);
+        self.action("rate", device.actor);
+        self.state.lock().unwrap().rated.push(device.actor);
+        let event = EventBuilder::new(
+            Kind::Custom(mortsom_scenario_kit::actions::RATING_EVENT_KIND),
+            "",
+        )
+        .tags([
+            Tag::parse(["d", "counterpart-trade-key"]).unwrap(),
+            Tag::parse(["nonce", &uuid_like()]).unwrap(),
+        ])
+        .finalize(&self.keys)
+        .unwrap();
+        assert!(self.relay.ingest("ws://fixture.invalid", &event).is_some());
+        Ok(())
     }
     async fn observe_order(
         &self,
-        _: &DeviceContext<'_>,
-        _: &OrderReference,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
     ) -> Result<AppOrderState, AdapterError> {
         let guard = self.state.lock().unwrap();
+        if order.id == REMAINDER {
+            let state = guard
+                .remainder
+                .ok_or_else(|| AdapterError::product("the app lists no remainder"))?;
+            return Ok(AppOrderState {
+                state,
+                raw_label: state.to_string(),
+            });
+        }
         let state = guard.order;
         // The maker of a buy sees `waiting-payment` until the seller's hold
         // is accepted and `waiting-invoice` once the daemon asks for the
-        // payout invoice; both are the coarse `taken`.
+        // payout invoice; both are the coarse `taken`. A completed trade
+        // asks this user for a rating until they give one.
         let raw_label = match state {
             OrderState::Taken if guard.hold_started => "waiting-invoice".to_owned(),
             OrderState::Taken => "waiting-payment".to_owned(),
+            OrderState::Completed if guard.rated.contains(&device.actor) => "rated".to_owned(),
+            OrderState::Completed => "pending-rating".to_owned(),
             other => other.to_string(),
         };
         Ok(AppOrderState { state, raw_label })

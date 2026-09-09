@@ -2,7 +2,9 @@
 //! adversarial scenarios expressed against the scenario kit. Scenarios are
 //! typed domain narratives; they self-register with the kit's registry.
 
+pub mod cancellation;
 pub mod flow;
+pub mod happy;
 pub mod recovery;
 pub mod regression;
 pub mod smoke;
@@ -54,6 +56,14 @@ macro_rules! register_scenario {
 /// Forces the linker to keep every scenario registration.
 pub fn link() {
     smoke::link();
+    happy::link();
+    cancellation::link();
     recovery::link();
     regression::link();
 }
+
+#[cfg(test)]
+#[path = "catalogue_tests.rs"]
+mod catalogue_tests;
+#[cfg(test)]
+mod flow_fixture;
