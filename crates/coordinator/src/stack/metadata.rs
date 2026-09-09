@@ -71,7 +71,7 @@ impl DaemonImage {
     }
 }
 
-/// Operator expectations exported by Ortsom, never inferred from daemon version.
+/// Limits the stack declares in `stack/limits.toml`, never inferred from the daemon version.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct DeclaredLimits {
     /// Time before an untaken order expires.

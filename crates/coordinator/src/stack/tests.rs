@@ -1,365 +1,646 @@
 #![allow(clippy::unwrap_used)]
+//! The stack module against a scripted Docker: no daemon, no network.
 use super::*;
-use mortsom_android_driver::process::tests_support::FakeRunner;
+use async_trait::async_trait;
+use mortsom_android_driver::process::{ChildProcess, Command, CommandRunner, Output, ProcessError};
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+const IMAGE_ID: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const DIGEST: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+/// A Docker that behaves like a regtest stack being built: nodes gain a
+/// balance once funded and a channel once one is opened.
+struct ScriptedStack {
+    root: PathBuf,
+    calls: Mutex<Vec<String>>,
+    funded: Mutex<bool>,
+    channels: Mutex<Vec<String>>,
+    daemon_state: &'static str,
+    running_image: &'static str,
+    owner: Option<PathBuf>,
+}
+
+impl ScriptedStack {
+    fn fresh(layout: &Layout) -> Self {
+        Self {
+            root: layout.root().to_path_buf(),
+            calls: Mutex::new(Vec::new()),
+            funded: Mutex::new(false),
+            channels: Mutex::new(Vec::new()),
+            daemon_state: "running",
+            running_image: IMAGE_ID,
+            owner: None,
+        }
+    }
+
+    fn built(layout: &Layout) -> Self {
+        let stack = Self::fresh(layout);
+        *stack.funded.lock().unwrap() = true;
+        *stack.channels.lock().unwrap() = vec!["lnd-alice".into(), "lnd-bob".into()];
+        stack
+    }
+
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    fn matching(&self, needle: &str) -> Vec<String> {
+        self.calls()
+            .into_iter()
+            .filter(|call| call.contains(needle))
+            .collect()
+    }
+
+    fn reply(&self, key: &str, args: &[String]) -> Output {
+        let has = |needle: &str| args.iter().any(|arg| arg == needle);
+        let ok = |stdout: String| Output {
+            success: true,
+            stdout,
+            stderr: String::new(),
+        };
+        if key.starts_with("docker ps") {
+            return ok(self
+                .owner
+                .as_ref()
+                .map(|_| "c".repeat(64))
+                .unwrap_or_default());
+        }
+        if key.starts_with("docker inspect") {
+            let format = args.iter().find(|arg| arg.contains("{{")).unwrap();
+            if format.contains("working_dir") {
+                let owner = self.owner.clone().unwrap_or_else(|| self.root.clone());
+                return ok(serde_json::json!({
+                    "working_dir": owner.display().to_string(),
+                    "config_files": owner.join("compose.yml").display().to_string(),
+                })
+                .to_string());
+            }
+            return ok(serde_json::json!({
+                "image": self.running_image,
+                "running": self.daemon_state == "running",
+            })
+            .to_string());
+        }
+        if key.starts_with("docker image inspect") {
+            return ok(serde_json::json!({
+                "id": IMAGE_ID,
+                "digests": [format!("mostrop2p/mostro@{DIGEST}")],
+            })
+            .to_string());
+        }
+        if has("getinfo") {
+            return ok(r#"{"identity_pubkey":"02carol"}"#.into());
+        }
+        if has("newaddress") {
+            return ok(r#"{"address":"bcrt1qnode"}"#.into());
+        }
+        if has("getnewaddress") {
+            return ok("bcrt1qmine".into());
+        }
+        if has("sendtoaddress") {
+            *self.funded.lock().unwrap() = true;
+        }
+        if has("walletbalance") {
+            let sats = if *self.funded.lock().unwrap() {
+                "99000"
+            } else {
+                "0"
+            };
+            return ok(format!(r#"{{"confirmed_balance":"{sats}"}}"#));
+        }
+        if has("openchannel") {
+            self.channels.lock().unwrap().push(args[3].clone());
+        }
+        if has("listchannels") {
+            let service = &args[3];
+            let channels = self.channels.lock().unwrap();
+            let count = if service == "lnd-carol" {
+                channels.len()
+            } else {
+                channels.iter().filter(|c| *c == service).count()
+            };
+            let items: Vec<_> = (0..count)
+                .map(|_| serde_json::json!({"active": true}))
+                .collect();
+            return ok(serde_json::json!({"channels": items}).to_string());
+        }
+        if has("ps") && has("-q") {
+            return ok("d".repeat(64));
+        }
+        if has("ps") {
+            return ok(format!(
+                "bitcoind running\nlnd-alice running\nlnd-bob running\nlnd-carol running\nrelay running\nmostro {}\n",
+                self.daemon_state
+            ));
+        }
+        ok(String::new())
+    }
+}
+
+#[async_trait]
+impl CommandRunner for ScriptedStack {
+    async fn run(&self, command: &Command, _timeout: Duration) -> Result<Output, ProcessError> {
+        let key = format!("{} {}", command.program.display(), command.args.join(" "));
+        self.calls.lock().unwrap().push(key.clone());
+        Ok(self.reply(&key, &command.args))
+    }
+
+    async fn spawn(
+        &self,
+        _command: &Command,
+        _log_file: Option<&Path>,
+    ) -> Result<Box<dyn ChildProcess>, ProcessError> {
+        unreachable!("the stack never spawns")
+    }
+}
+
+struct Publishes(bool);
+
+#[async_trait]
+impl InfoProbe for Publishes {
+    async fn daemon_published_info(&self, _relay_url: &str, _pubkey: PublicKey) -> bool {
+        self.0
+    }
+}
+
+fn scratch() -> (tempfile::TempDir, Layout) {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["compose.yml", "relay-config.toml"] {
+        std::fs::write(dir.path().join(name), "").unwrap();
+    }
+    std::fs::write(
+        dir.path().join("mostro-settings.tpl.toml"),
+        include_str!("../../../../stack/mostro-settings.tpl.toml"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("limits.toml"),
+        include_str!("../../../../stack/limits.toml"),
+    )
+    .unwrap();
+    let layout = Layout::new(dir.path()).unwrap();
+    (dir, layout)
+}
+
+fn quick() -> UpOptions {
+    UpOptions {
+        image: DEFAULT_MOSTRO_IMAGE.into(),
+        timing: Timing {
+            wait: Duration::ZERO,
+            poll: Duration::ZERO,
+        },
+    }
+}
 
 #[test]
-fn stack_command_uses_only_the_external_cli_and_explicit_checkout() {
-    let cmd = stack_command(
-        Path::new("/work/ortsom"),
-        Path::new("/bin/ortsom"),
-        "status",
-    );
-    assert_eq!(cmd.program, Path::new("env"));
+fn compose_commands_carry_project_file_and_invoking_user_in_the_environment() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let compose = Compose::new(&layout, Some("mostrop2p/mostro@sha256:abc"));
+
+    // Act
+    let command = compose.command(&["ps"]);
+
+    // Assert
+    assert_eq!(command.program, Path::new("docker"));
+    assert_eq!(command.args, ["compose", "ps"]);
     assert_eq!(
-        cmd.args,
-        [
-            "--chdir=/work/ortsom",
-            "COMPOSE_PROJECT_NAME=ortsom-regtest",
-            "/bin/ortsom",
-            "stack",
-            "status"
-        ]
+        command.env["COMPOSE_FILE"],
+        layout.compose_file().display().to_string()
     );
+    assert_eq!(command.env["COMPOSE_PROJECT_NAME"], PROJECT);
+    assert_eq!(
+        command.env["MORTSOM_MOSTRO_IMAGE"],
+        "mostrop2p/mostro@sha256:abc"
+    );
+    for id in ["MORTSOM_UID", "MORTSOM_GID"] {
+        assert!(
+            command.env[id].chars().all(|c| c.is_ascii_digit()),
+            "{id}={}",
+            command.env[id]
+        );
+    }
 }
 
 #[tokio::test]
-async fn failed_stack_does_not_attempt_automatic_destruction() {
-    let root = tempfile::tempdir().unwrap();
-    let runner = FakeRunner::default();
-    runner.script_failure("env", "stack failed");
-    runner.script(
-        "docker image inspect",
-        &serde_json::json!({
-            "id": format!("sha256:{}", "a".repeat(64)),
-            "digests": [format!("mostrop2p/mostro@sha256:{}", "b".repeat(64))],
-        })
-        .to_string(),
-    );
-    assert!(
-        invoke(&runner, root.path(), Path::new("ortsom"), "up")
-            .await
-            .is_err()
-    );
-    assert_eq!(runner.calls().len(), 6);
-    assert!(runner.calls().iter().all(|c| !c.contains("down")));
+async fn up_mines_past_coinbase_maturity_before_funding_anything() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let docker = ScriptedStack::fresh(&layout);
+
+    // Act
+    up(&docker, &Publishes(true), &layout, &quick())
+        .await
+        .unwrap();
+
+    // Assert
+    let mined: Vec<String> = docker
+        .matching("generatetoaddress")
+        .into_iter()
+        .map(|call| call.split(' ').rev().nth(1).unwrap().to_owned())
+        .collect();
+    assert_eq!(mined, ["150", "6", "6"]);
+    let first_funding = docker
+        .calls()
+        .iter()
+        .position(|call| call.contains("sendtoaddress"))
+        .unwrap();
+    let first_mining = docker
+        .calls()
+        .iter()
+        .position(|call| call.contains("generatetoaddress"))
+        .unwrap();
+    assert!(first_mining < first_funding);
 }
 
 #[tokio::test]
-async fn imported_stack_uses_public_cli_without_opening_private_config() {
-    let dir = tempfile::tempdir().unwrap();
-    // A directory at the old filename makes any attempt to read it fail.
-    std::fs::create_dir(dir.path().join("ortsom.regtest.local.toml")).unwrap();
-    let runner = FakeRunner::default();
-    runner.script("env", &public_status(dir.path()));
-    let context = StackContext::resolve(dir.path(), &runner).await.unwrap();
-    assert_eq!(context.lookup("MORTSOM_MOSTRO_PUBKEY").unwrap().len(), 64);
-    assert!(
-        context
-            .lookup("MORTSOM_ALICE_LND_CERT")
-            .unwrap()
-            .ends_with("ci/regtest/creds/alice/tls.cert")
-    );
-    assert!(context.lookup("SOLVER_NSEC").is_none());
+async fn up_opens_one_balanced_channel_per_actor_and_none_between_them() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let docker = ScriptedStack::fresh(&layout);
+
+    // Act
+    up(&docker, &Publishes(true), &layout, &quick())
+        .await
+        .unwrap();
+
+    // Assert
+    let opens = docker.matching("openchannel");
+    assert_eq!(opens.len(), 2, "{opens:?}");
+    for call in &opens {
+        assert!(call.contains("--node_key=02carol"), "{call}");
+        assert!(call.contains("--local_amt=1000000"), "{call}");
+        assert!(call.contains("--push_amt=500000"), "{call}");
+    }
+    assert!(opens[0].contains("exec -T lnd-alice "), "{}", opens[0]);
+    assert!(opens[1].contains("exec -T lnd-bob "), "{}", opens[1]);
+}
+
+#[tokio::test]
+async fn up_leaves_funded_wallets_and_existing_channels_alone() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let docker = ScriptedStack::built(&layout);
+
+    // Act
+    up(&docker, &Publishes(true), &layout, &quick())
+        .await
+        .unwrap();
+
+    // Assert
+    assert!(docker.matching("openchannel").is_empty());
+    assert!(docker.matching("sendtoaddress").is_empty());
+}
+
+#[tokio::test]
+async fn up_mints_a_fresh_identity_into_owner_only_settings_and_a_public_descriptor() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let docker = ScriptedStack::fresh(&layout);
+
+    // Act
+    let descriptor = up(&docker, &Publishes(true), &layout, &quick())
+        .await
+        .unwrap();
+
+    // Assert
+    let settings = std::fs::read_to_string(layout.settings_file()).unwrap();
+    assert!(!settings.contains("__NSEC__"));
+    assert!(settings.contains("nsec1"));
+    use std::os::unix::fs::PermissionsExt;
+    let mode = std::fs::metadata(layout.settings_file())
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let public = std::fs::read_to_string(layout.descriptor_file()).unwrap();
+    assert!(!public.contains("nsec"), "{public}");
+    assert_eq!(descriptor.daemon_pubkey.len(), 64);
+    assert!(public.contains(&descriptor.daemon_pubkey));
+    assert_eq!(descriptor.daemon_image.image_id, IMAGE_ID);
     assert_eq!(
-        context.lookup("MORTSOM_ALICE_LND_HOST").as_deref(),
-        Some("https://127.0.0.1:17001")
+        descriptor.daemon_image.repository_digest.as_deref(),
+        Some(DIGEST)
     );
+    assert_eq!(descriptor.declared_limits.hold_invoice_expiry_secs, 120);
+    // The daemon starts only after its settings exist, with the resolved image.
+    let daemon_start = docker
+        .calls()
+        .iter()
+        .position(|call| call.contains("up -d --force-recreate mostro"))
+        .unwrap();
+    let base_start = docker
+        .calls()
+        .iter()
+        .position(|call| call.contains("up -d bitcoind"))
+        .unwrap();
+    assert!(base_start < daemon_start);
+}
+
+#[tokio::test]
+async fn two_stacks_never_share_an_identity() {
+    // Arrange
+    let (_a, layout_a) = scratch();
+    let (_b, layout_b) = scratch();
+
+    // Act
+    let a = up(
+        &ScriptedStack::fresh(&layout_a),
+        &Publishes(true),
+        &layout_a,
+        &quick(),
+    )
+    .await
+    .unwrap();
+    let b = up(
+        &ScriptedStack::fresh(&layout_b),
+        &Publishes(true),
+        &layout_b,
+        &quick(),
+    )
+    .await
+    .unwrap();
+
+    // Assert
+    assert_ne!(a.daemon_pubkey, b.daemon_pubkey);
+}
+
+#[tokio::test]
+async fn up_refuses_when_the_pull_fails_and_starts_nothing() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let runner = mortsom_android_driver::process::tests_support::FakeRunner::default();
+    runner.script_failure("docker pull", "manifest unknown");
+
+    // Act
+    let error = up(&runner, &Publishes(true), &layout, &quick())
+        .await
+        .unwrap_err();
+
+    // Assert
+    assert!(error.to_string().contains("manifest unknown"), "{error}");
     assert!(
         runner
             .calls()
-            .last()
-            .unwrap()
-            .ends_with("stack status --json")
+            .iter()
+            .all(|call| !call.contains("compose up"))
     );
+    assert!(!layout.local_dir().exists());
 }
 
 #[tokio::test]
-async fn unready_unknown_or_invalid_stack_descriptor_refuses_attachment() {
-    let dir = tempfile::tempdir().unwrap();
-    for descriptor in [
-        "not json",
-        r#"{"schema_version":2,"ready":true,"daemon_pubkey":"invalid"}"#,
-        r#"{"schema_version":1,"ready":false,"daemon_pubkey":null}"#,
-        r#"{"schema_version":1,"ready":true,"daemon_pubkey":"invalid"}"#,
-    ] {
-        let runner = FakeRunner::default();
-        runner.script("env", descriptor);
-        assert!(StackContext::resolve(dir.path(), &runner).await.is_err());
-    }
-}
+async fn up_fails_when_the_daemon_never_publishes_its_info_event() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let docker = ScriptedStack::fresh(&layout);
 
-#[tokio::test]
-async fn failed_stack_output_redacts_wallet_credentials() {
-    let root = tempfile::tempdir().unwrap();
-    let runner = FakeRunner::default();
-    let credential = "nostr+walletconnect://wallet?relay=wss://relay&secret=private";
-    runner.script_failure("env", credential);
-    let error = invoke(&runner, root.path(), Path::new("ortsom"), "status")
+    // Act
+    let error = up(&docker, &Publishes(false), &layout, &quick())
         .await
         .unwrap_err();
-    assert!(!error.to_string().contains(credential));
-    assert!(!format!("{error:?}").contains(credential));
-}
 
-/// Spec section 5: `stack up` pulls the pinned release by default, never a
-/// floating tag, so an accepted run stays reproducible when upstream
-/// publishes a new daemon.
-#[tokio::test]
-async fn a_failed_pull_of_the_pinned_release_leaves_the_existing_stack_untouched() {
-    let root = tempfile::tempdir().unwrap();
-    let runner = FakeRunner::default();
-    runner.script_failure("docker pull", "registry unavailable");
-    assert!(
-        invoke(&runner, root.path(), Path::new("ortsom"), "up")
-            .await
-            .is_err()
-    );
-    assert_eq!(runner.calls().len(), 4);
-    assert_eq!(
-        runner.calls()[3],
-        format!("docker pull {DEFAULT_MOSTRO_IMAGE}")
-    );
-    assert!(
-        !DEFAULT_MOSTRO_IMAGE.ends_with(":latest"),
-        "the default must be an immutable release tag"
-    );
+    // Assert
+    assert!(error.to_string().contains("info event"), "{error}");
+    assert!(docker.calls().iter().all(|call| !call.contains(" down")));
 }
 
 #[tokio::test]
-async fn an_explicit_image_override_is_pulled_and_passed_to_the_stack() {
-    let root = tempfile::tempdir().unwrap();
-    let runner = FakeRunner::default();
-    runner.script_failure("docker pull", "registry unavailable");
-    assert!(
-        invoke_with_image(
-            &runner,
-            root.path(),
-            Path::new("ortsom"),
-            "up",
-            "mostrop2p/mostro:v9.9.9-rc1"
-        )
-        .await
-        .is_err()
-    );
-    assert_eq!(runner.calls()[3], "docker pull mostrop2p/mostro:v9.9.9-rc1");
-}
-
-#[tokio::test]
-async fn up_pins_the_resolved_digest_and_verifies_running_image_and_readiness() {
-    let root = tempfile::tempdir().unwrap();
-    let runner = FakeRunner::default();
-    let image_id = format!("sha256:{}", "a".repeat(64));
-    let reference = format!("mostrop2p/mostro@sha256:{}", "b".repeat(64));
-    runner.script(
-        "docker image inspect",
-        &serde_json::json!({
-            "id": image_id, "digests": [reference],
-        })
-        .to_string(),
-    );
-    runner.script(
-        "docker inspect",
-        &serde_json::json!({"image":image_id,"running":true,
-            "working_dir":root.path().join("ci/regtest"),
-            "config_files":root.path().join("ci/regtest/compose.yml")})
-        .to_string(),
-    );
-    let base = format!(
-        "env --chdir={} COMPOSE_PROJECT_NAME=ortsom-regtest",
-        root.path().display()
-    );
-    runner.script(&format!("{base} docker compose"), &"c".repeat(64));
-    runner.script(
-        &format!("{base} ortsom stack status --json"),
-        &public_status(root.path()),
-    );
-    invoke(&runner, root.path(), Path::new("ortsom"), "up")
+async fn resolve_reads_only_public_facts_from_the_stack_it_owns() {
+    // Arrange
+    let (dir, layout) = scratch();
+    let docker = ScriptedStack::fresh(&layout);
+    up(&docker, &Publishes(true), &layout, &quick())
         .await
         .unwrap();
-    let calls = runner.calls();
-    assert!(calls[5].ends_with(&format!("stack up --mostro-image {reference}")));
-    assert!(calls.last().unwrap().ends_with("stack status --json"));
-}
 
-#[tokio::test]
-async fn foreign_project_blocks_up_and_down_before_any_mutation() {
-    let root = tempfile::tempdir().unwrap();
-    for action in ["up", "down"] {
-        let runner = FakeRunner::default();
-        runner.script("docker ps", &"a".repeat(64));
-        runner.script(
-            "docker inspect",
-            r#"{"working_dir":"/foreign","config_files":"/foreign/compose.yml"}"#,
-        );
-        assert!(
-            invoke(&runner, root.path(), Path::new("ortsom"), action)
-                .await
-                .is_err()
-        );
-        assert_eq!(runner.calls().len(), 2);
-        assert!(
-            runner
-                .calls()
-                .iter()
-                .all(|c| !c.starts_with("env") && !c.contains("pull"))
-        );
-    }
-}
+    // Act
+    let context = StackContext::resolve(dir.path(), &docker).await.unwrap();
 
-#[tokio::test]
-async fn attachment_refuses_a_different_checkouts_project() {
-    let root = tempfile::tempdir().unwrap();
-    let runner = FakeRunner::default();
-    runner.script("docker ps", &"a".repeat(64));
-    runner.script(
-        "docker inspect",
-        r#"{"working_dir":"/foreign","config_files":"/foreign/compose.yml"}"#,
+    // Assert
+    assert_eq!(context.lookup("MORTSOM_MOSTRO_PUBKEY").unwrap().len(), 64);
+    assert_eq!(
+        context.lookup("MORTSOM_ALICE_LND_CERT").unwrap(),
+        layout
+            .root()
+            .join("local/creds/alice/tls.cert")
+            .display()
+            .to_string()
     );
-    runner.script("env", r#"{"schema_version":1,"ready":true,"daemon_pubkey":"8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51"}"#);
-    assert!(StackContext::resolve(root.path(), &runner).await.is_err());
+    assert_eq!(
+        context.lookup("MORTSOM_BOB_LND_MACAROON").unwrap(),
+        layout
+            .root()
+            .join("local/creds/bob/admin.macaroon")
+            .display()
+            .to_string()
+    );
+    assert_eq!(
+        context.lookup("MORTSOM_ALICE_LND_HOST").unwrap(),
+        "https://127.0.0.1:10001"
+    );
+    assert_eq!(
+        context.lookup("MORTSOM_MOSTRO_SETTINGS_FILE").unwrap(),
+        layout.settings_file().display().to_string()
+    );
+    let snapshot = context.snapshot();
+    assert_eq!(snapshot.relay_url, "ws://127.0.0.1:7000");
+    assert_eq!(snapshot.wallet_endpoints["bob"], "https://127.0.0.1:10002");
+    assert!(context.lookup("MORTSOM_MOSTRO_NSEC").is_none());
 }
 
 #[tokio::test]
-async fn leftover_resources_block_up_and_down_before_pull_or_lifecycle() {
-    let root = tempfile::tempdir().unwrap();
-    for action in ["up", "down"] {
-        for resource in ["volume", "network"] {
-            let runner = FakeRunner::default();
-            runner.script(&format!("docker {resource} ls"), "unattributed-resource");
-            assert!(
-                invoke(&runner, root.path(), Path::new("ortsom"), action)
-                    .await
-                    .is_err()
-            );
-            assert!(
-                runner
-                    .calls()
-                    .iter()
-                    .all(|c| !c.starts_with("env") && !c.contains("pull"))
-            );
-        }
+async fn resolve_refuses_a_directory_where_stack_up_never_ran() {
+    // Arrange
+    let (dir, layout) = scratch();
+    let docker = ScriptedStack::fresh(&layout);
+
+    // Act
+    let error = StackContext::resolve(dir.path(), &docker)
+        .await
+        .unwrap_err();
+
+    // Assert
+    assert!(error.to_string().contains("stack up"), "{error}");
+}
+
+#[tokio::test]
+async fn resolve_refuses_a_stack_whose_daemon_is_not_running_the_recorded_image() {
+    // Arrange
+    let (dir, layout) = scratch();
+    let docker = ScriptedStack::fresh(&layout);
+    up(&docker, &Publishes(true), &layout, &quick())
+        .await
+        .unwrap();
+    let mut stale = ScriptedStack::built(&layout);
+    stale.running_image = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+    let mut stopped = ScriptedStack::built(&layout);
+    stopped.daemon_state = "exited";
+
+    // Act / Assert
+    for docker in [stale, stopped] {
+        assert!(StackContext::resolve(dir.path(), &docker).await.is_err());
     }
 }
 
-fn public_status(root: &Path) -> String {
-    let wallets: BTreeMap<_, _> = [("alice", 17001), ("bob", 17002)].into_iter().map(|(actor, port)| {
-        (actor, serde_json::json!({
-            "grpc_url":format!("https://127.0.0.1:{port}"),
-            "cert_file":root.join("ci/regtest/creds").join(actor).join("tls.cert"),
-            "macaroon_file":root.join("ci/regtest/creds").join(actor).join("admin.macaroon"),
-        }))
-    }).collect();
-    serde_json::json!({"schema_version":1,"ready":true,
-        "daemon_pubkey":"8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51",
-        "connections":{"relay_url":"ws://127.0.0.1:17000", "wallets":wallets},
-        "daemon_image":{"image_id":format!("sha256:{}", "a".repeat(64)),
-            "reference":"mostrop2p/mostro:latest", "repository_digest":null},
-        "declared_limits":{"order_expiration_secs":300,"hold_invoice_expiry_secs":120,
-            "buyer_invoice_deadline_secs":120,"payout_invoice_min_expiry_secs":300,
-            "fiat_window_secs":null,"max_inflight_payouts_per_destination":2,"payout_dispatch_permits":8}
-    })
-    .to_string()
-}
-
 #[tokio::test]
-async fn public_connections_cannot_redirect_credentials_or_share_actor_ports() {
-    let root = tempfile::tempdir().unwrap();
-    for pointer in [
-        "/connections/relay_url",
-        "/connections/wallets/alice/grpc_url",
-        "/connections/wallets/alice/cert_file",
-        "/connections/wallets/bob/macaroon_file",
+async fn status_reports_every_service_node_and_the_identity_in_effect() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let docker = ScriptedStack::fresh(&layout);
+    let descriptor = up(&docker, &Publishes(true), &layout, &quick())
+        .await
+        .unwrap();
+
+    // Act
+    let report = status(&docker, &layout).await.unwrap();
+
+    // Assert
+    assert!(report.is_ready());
+    let rendered = report.render();
+    for service in [
+        "bitcoind",
+        "lnd-alice",
+        "lnd-bob",
+        "lnd-carol",
+        "relay",
+        "mostro",
     ] {
-        let mut value: serde_json::Value =
-            serde_json::from_str(&public_status(root.path())).unwrap();
-        *value.pointer_mut(pointer).unwrap() = serde_json::json!("/outside/credential");
-        let runner = FakeRunner::default();
-        runner.script("env", &value.to_string());
-        assert!(StackContext::resolve(root.path(), &runner).await.is_err());
+        assert!(rendered.contains(service), "{rendered}");
     }
-    let mut value: serde_json::Value = serde_json::from_str(&public_status(root.path())).unwrap();
-    value["connections"]["wallets"]["bob"]["grpc_url"] =
-        serde_json::json!("https://127.0.0.1:17001");
-    let runner = FakeRunner::default();
-    runner.script("env", &value.to_string());
-    assert!(StackContext::resolve(root.path(), &runner).await.is_err());
+    assert!(rendered.contains(&descriptor.daemon_pubkey), "{rendered}");
+    assert!(rendered.contains("ready"), "{rendered}");
 }
 
 #[tokio::test]
-async fn attachment_requires_valid_image_identity_and_explicit_nonzero_limits() {
-    let root = tempfile::tempdir().unwrap();
-    for pointer in [
-        "/daemon_image",
-        "/declared_limits",
-        "/declared_limits/order_expiration_secs",
-        "/declared_limits/hold_invoice_expiry_secs",
-        "/declared_limits/buyer_invoice_deadline_secs",
-        "/declared_limits/payout_invoice_min_expiry_secs",
-        "/declared_limits/fiat_window_secs",
-        "/declared_limits/max_inflight_payouts_per_destination",
-        "/declared_limits/payout_dispatch_permits",
+async fn status_is_not_ready_before_stack_up_or_with_a_node_lacking_a_channel() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let never_built = ScriptedStack::fresh(&layout);
+
+    // Act
+    let report = status(&never_built, &layout).await.unwrap();
+
+    // Assert
+    assert!(!report.is_ready());
+    assert!(report.render().contains("not ready"), "{}", report.render());
+}
+
+#[tokio::test]
+async fn down_removes_services_volumes_and_every_generated_secret() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let docker = ScriptedStack::fresh(&layout);
+    up(&docker, &Publishes(true), &layout, &quick())
+        .await
+        .unwrap();
+    assert!(layout.local_dir().exists());
+
+    // Act
+    down(&docker, &layout).await.unwrap();
+
+    // Assert
+    assert!(
+        docker
+            .calls()
+            .iter()
+            .any(|call| call.ends_with("compose --profile daemon down -v --remove-orphans")),
+        "{:?}",
+        docker.calls()
+    );
+    assert!(!layout.local_dir().exists());
+}
+
+#[tokio::test]
+async fn up_and_down_refuse_containers_another_directory_created() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let mut docker = ScriptedStack::built(&layout);
+    docker.owner = Some(PathBuf::from("/elsewhere/stack"));
+
+    // Act
+    let up_error = up(&docker, &Publishes(true), &layout, &quick())
+        .await
+        .unwrap_err();
+    let down_error = down(&docker, &layout).await.unwrap_err();
+
+    // Assert
+    for error in [up_error, down_error] {
+        assert!(error.to_string().contains("ownership"), "{error}");
+    }
+    assert!(docker.calls().iter().all(|call| !call.contains(" down")));
+    assert!(
+        docker
+            .calls()
+            .iter()
+            .all(|call| !call.contains("compose up"))
+    );
+}
+
+#[test]
+fn declared_limits_match_the_settings_template() {
+    // Arrange
+    let limits: DeclaredLimits =
+        toml::from_str(include_str!("../../../../stack/limits.toml")).unwrap();
+    let template: toml::Table = include_str!("../../../../stack/mostro-settings.tpl.toml")
+        .parse()
+        .unwrap();
+    let value = |section: &str, key: &str| template[section][key].as_integer().unwrap() as u64;
+
+    // Assert
+    assert_eq!(
+        limits.hold_invoice_expiry_secs,
+        value("lightning", "hold_invoice_expiration_window")
+    );
+    assert_eq!(
+        limits.payout_invoice_min_expiry_secs,
+        value("lightning", "invoice_expiration_window")
+    );
+    assert_eq!(
+        limits.buyer_invoice_deadline_secs,
+        value("mostro", "expiration_seconds")
+    );
+    assert_eq!(
+        limits.max_inflight_payouts_per_destination,
+        Some(value("lightning", "max_inflight_payouts_per_destination") as u32)
+    );
+    assert!(limits.validate().is_ok());
+}
+
+#[test]
+fn the_compose_file_publishes_exactly_the_ports_the_spec_fixes() {
+    // Arrange
+    let compose = include_str!("../../../../stack/compose.yml");
+
+    // Assert
+    for published in [
+        "\"10001:10009\"",
+        "\"10002:10009\"",
+        "\"10003:10009\"",
+        "\"127.0.0.1:7000:7000\"",
     ] {
-        let mut status: serde_json::Value =
-            serde_json::from_str(&public_status(root.path())).unwrap();
-        *status.pointer_mut(pointer).unwrap() = serde_json::json!(0);
-        let runner = FakeRunner::default();
-        runner.script("env", &status.to_string());
-        assert!(
-            StackContext::resolve(root.path(), &runner).await.is_err(),
-            "{pointer}"
-        );
+        assert!(compose.contains(published), "{published}");
     }
+    assert_eq!(
+        compose.matches("ports:").count(),
+        4,
+        "bitcoind and mostro publish nothing"
+    );
+    assert!(compose.contains(&format!("MORTSOM_MOSTRO_IMAGE:-{DEFAULT_MOSTRO_IMAGE}")));
+    assert!(compose.contains(&format!("name: {PROJECT}")));
 }
 
-#[tokio::test]
-async fn literal_daemon_and_wallet_settings_must_match_the_inspected_stack() {
-    let root = tempfile::tempdir().unwrap();
-    for actor in ["alice", "bob"] {
-        let directory = root.path().join("ci/regtest/creds").join(actor);
-        std::fs::create_dir_all(&directory).unwrap();
-        for name in ["tls.cert", "admin.macaroon"] {
-            std::fs::write(directory.join(name), b"fixture").unwrap();
-        }
-    }
-    let runner = FakeRunner::default();
-    runner.script("env", &public_status(root.path()));
-    let stack = StackContext::resolve(root.path(), &runner).await.unwrap();
-    let mut config = crate::Config::from_toml_str(
-        include_str!("../../../../config/desktop.example.toml"),
-        |name| stack.lookup(name),
-    )
-    .unwrap();
-    stack.configure_relay(&mut config);
-    let snapshot = stack.snapshot();
-    assert!(snapshot.validate_config(&config).is_ok());
-    let original_port = config.relay.host_port;
-    config.relay.host_port = 19999;
-    assert!(snapshot.validate_config(&config).is_err());
-    config.relay.host_port = original_port;
-    let original_key = config.mobile.mostro_pubkey.clone();
-    config.mobile.mostro_pubkey = nostr_sdk::prelude::Keys::generate().public_key().to_hex();
-    assert!(snapshot.validate_config(&config).is_err());
-    config.mobile.mostro_pubkey = original_key;
-    for actor in ["alice", "bob"] {
-        let wallet = if actor == "alice" {
-            &mut config.wallets.alice
-        } else {
-            &mut config.wallets.bob
-        };
-        let mortsom_environment::WalletConfig::Lnd { host, .. } = wallet else {
-            panic!("LND expected");
-        };
-        let original = host.clone();
-        *host = "https://127.0.0.1:9999".into();
-        assert!(snapshot.validate_config(&config).is_err());
-        let wallet = if actor == "alice" {
-            &mut config.wallets.alice
-        } else {
-            &mut config.wallets.bob
-        };
-        let mortsom_environment::WalletConfig::Lnd { host, .. } = wallet else {
-            panic!("LND expected");
-        };
-        *host = original;
-    }
+#[test]
+fn credential_references_live_under_the_stack_directory() {
+    // Act / Assert
+    assert_eq!(
+        credential_reference(Path::new("/s"), "MORTSOM_ALICE_LND_CERT").unwrap(),
+        Path::new("/s/local/creds/alice/tls.cert")
+    );
+    assert_eq!(
+        credential_reference(Path::new("/s"), "MORTSOM_BOB_LND_MACAROON").unwrap(),
+        Path::new("/s/local/creds/bob/admin.macaroon")
+    );
+    assert!(credential_reference(Path::new("/s"), "MORTSOM_CAROL_LND_CERT").is_none());
+    assert!(credential_reference(Path::new("/s"), "MORTSOM_MOSTRO_PUBKEY").is_none());
 }

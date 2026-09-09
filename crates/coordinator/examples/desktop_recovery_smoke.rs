@@ -85,7 +85,7 @@ async fn prepare(
 ) -> Result<(Config, StackSnapshot, DesktopOptions)> {
     let (config, stack) = desktop::load(
         Path::new("config/desktop.example.toml"),
-        Path::new("../ortsom"),
+        Path::new("stack"),
         &TokioRunner,
         &RealHost,
     )

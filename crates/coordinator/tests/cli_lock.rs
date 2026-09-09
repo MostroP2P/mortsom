@@ -23,8 +23,8 @@ fn busy_host_blocks_mutations_before_loading_config_or_starting_processes() {
             .args([
                 "--config",
                 "/missing/config",
-                "--ortsom-dir",
-                "/missing/ortsom",
+                "--stack-dir",
+                "/missing/stack",
             ])
             .args(args)
             .assert()

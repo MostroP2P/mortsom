@@ -1,4 +1,4 @@
-//! Preparation of v2 clients attached to an existing Ortsom stack.
+//! Preparation of v2 clients attached to the regtest stack.
 use crate::{Config, run::DesktopOptions, stack::StackContext};
 use mortsom_android_driver::process::{Command, CommandRunner, run_ok};
 use mortsom_desktop_driver::Platform;
@@ -8,11 +8,11 @@ use std::time::Duration;
 /// Loads explicit caps and lane, resolving the stack connection references.
 pub async fn load(
     config: &Path,
-    checkout: &Path,
+    stack_dir: &Path,
     runner: &dyn CommandRunner,
     host: &dyn crate::doctor::HostProbe,
 ) -> Result<(Config, crate::stack::StackSnapshot), String> {
-    let stack = StackContext::resolve(checkout, runner)
+    let stack = StackContext::resolve(stack_dir, runner)
         .await
         .map_err(|e| e.to_string())?;
     let mut config =

@@ -42,9 +42,9 @@ pub struct Cli {
     /// Configuration file (a `<name>.local.toml` overlay is merged if present).
     #[arg(long, global = true, default_value = DEFAULT_CONFIG)]
     pub config: PathBuf,
-    /// Ortsom checkout owning the persistent regtest stack.
-    #[arg(long, global = true, default_value = "../ortsom")]
-    pub ortsom_dir: PathBuf,
+    /// Directory holding the stack's compose file and its generated state.
+    #[arg(long, global = true, default_value = "stack")]
+    pub stack_dir: PathBuf,
     /// Subcommand.
     #[command(subcommand)]
     pub command: Command,
@@ -53,7 +53,7 @@ pub struct Cli {
 /// Top-level commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Manage the persistent regtest environment through the Ortsom CLI.
+    /// Create, inspect or destroy the regtest environment.
     Stack {
         /// Lifecycle action.
         #[command(subcommand)]
@@ -172,15 +172,47 @@ pub enum StackAction {
     Down,
 }
 
-async fn stack_cli(checkout: &std::path::Path, action: StackAction) -> ExitCode {
-    let (action, image) = match action {
-        StackAction::Up { mostro_image } => ("up", mostro_image),
-        StackAction::Status => ("status", None),
-        StackAction::Down => ("down", None),
+async fn stack_cli(stack_dir: &std::path::Path, action: StackAction) -> ExitCode {
+    use crate::stack::{self, Layout};
+    let layout = match Layout::new(stack_dir) {
+        Ok(layout) => layout,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
     };
-    let image = image.unwrap_or_else(|| crate::stack::DEFAULT_MOSTRO_IMAGE.to_owned());
-    let binary = crate::stack::binary(checkout);
-    match crate::stack::invoke_with_image(&TokioRunner, checkout, &binary, action, &image).await {
+    let outcome = match action {
+        StackAction::Up { mostro_image } => {
+            let options = stack::UpOptions {
+                image: mostro_image.unwrap_or_else(|| stack::DEFAULT_MOSTRO_IMAGE.to_owned()),
+                timing: stack::Timing::default(),
+            };
+            stack::up(&TokioRunner, &stack::LiveRelay, &layout, &options)
+                .await
+                .map(|descriptor| {
+                    format!(
+                        "stack ready\ndaemon      {}\nimage       {}\n",
+                        descriptor.daemon_pubkey, descriptor.daemon_image.reference
+                    )
+                })
+        }
+        StackAction::Status => match stack::status(&TokioRunner, &layout).await {
+            Ok(status) => {
+                print!("{}", status.render());
+                // Non-zero until usable, so the command can be waited on.
+                return if status.is_ready() {
+                    ExitCode::SUCCESS
+                } else {
+                    ExitCode::from(1)
+                };
+            }
+            Err(error) => Err(error),
+        },
+        StackAction::Down => stack::down(&TokioRunner, &layout)
+            .await
+            .map(|()| "stack removed\n".to_owned()),
+    };
+    match outcome {
         Ok(output) => {
             print!("{output}");
             ExitCode::SUCCESS
@@ -283,7 +315,7 @@ pub async fn run(cli: Cli) -> ExitCode {
     eprint!(
         "{}",
         crate::banner::render(
-            &crate::banner::caption(&cli.command, &cli.config, &cli.ortsom_dir),
+            &crate::banner::caption(&cli.command, &cli.config, &cli.stack_dir),
             use_color_on_stderr()
         )
     );
@@ -298,17 +330,17 @@ pub async fn run(cli: Cli) -> ExitCode {
         }
     };
     match cli.command {
-        Command::Stack { action } => stack_cli(&cli.ortsom_dir, action).await,
+        Command::Stack { action } => stack_cli(&cli.stack_dir, action).await,
         Command::List => list_scenarios(),
         Command::Cleanup {
             run,
             attribute_order,
-        } => cleanup_command(&cli.config, &cli.ortsom_dir, &run, &attribute_order).await,
+        } => cleanup_command(&cli.config, &cli.stack_dir, &run, &attribute_order).await,
         Command::Publish {
             run,
             out,
             screenshots,
-        } => publish_command(&cli.config, &cli.ortsom_dir, &run, &out, &screenshots),
+        } => publish_command(&cli.config, &cli.stack_dir, &run, &out, &screenshots),
         Command::Accounting { lane } => accounting_command(&cli.config, lane.as_deref()),
         Command::Parity {
             run_a,
@@ -324,7 +356,7 @@ pub async fn run(cli: Cli) -> ExitCode {
         } => {
             run_command(
                 &cli.config,
-                &cli.ortsom_dir,
+                &cli.stack_dir,
                 scenarios,
                 tag,
                 platform,
@@ -356,7 +388,7 @@ pub async fn run(cli: Cli) -> ExitCode {
             } else {
                 crate::doctor::run_desktop_doctor(
                     &cli.config,
-                    &cli.ortsom_dir,
+                    &cli.stack_dir,
                     &crate::doctor::DesktopDoctorOptions {
                         platform,
                         artifact: app_artifact,

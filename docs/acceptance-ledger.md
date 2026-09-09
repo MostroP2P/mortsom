@@ -17,6 +17,8 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260909T180201Z-8743a4025779` | Linux | happy_buy | **Passed** on the Mortsom-owned stack (`mortsom stack up`, no Ortsom checkout) | None. Hold and payout settled once each; order resolved |
+| `20260909T175938Z-905f12907c4d` | Linux | happy_sell | **Passed** on the Mortsom-owned stack (`mortsom stack up`, no Ortsom checkout) | None. Hold and payout settled once each; order resolved |
 | `20260909T122846Z-31d9701a9752` | Web | happy_sell | **Passed** on app `f1f995f` (book event checked for order id, lock acquisition races the request promise) | None. Hold and payout settled once each |
 | `20260909T114337Z-b620dfafd3fc` | Web | happy_sell | **Passed** on app `59a047e` (origin-wide Web Locks around document writes, guarded payout write, author check on fetched events) | None. Hold and payout settled once each |
 | `20260909T110604Z-a5d6eaee777a` | Web | happy_buy | **Passed** on app `0e65bd0` (seller completes from the public success event) | None. Hold and payout settled once each. Part of the 2026-09-09 four-cell timing batch |

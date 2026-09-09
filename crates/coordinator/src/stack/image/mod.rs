@@ -1,10 +1,12 @@
 //! Immutable identity checks for the daemon image selected at stack up.
-use std::{path::Path, time::Duration};
+use std::time::Duration;
 
 use mortsom_android_driver::process::{Command, CommandRunner, run_ok};
 use serde::Deserialize;
 
 use super::StackError;
+use super::compose::{Compose, DAEMON_SERVICE};
+use super::layout::Layout;
 
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(30);
 const IMAGE_FORMAT: &str = r#"{"id":{{json .Id}},"digests":{{json .RepoDigests}}}"#;
@@ -67,30 +69,16 @@ pub(super) async fn resolve(
     })
 }
 
-/// Checks the actual running container selected by the sibling Compose project.
+/// Checks the daemon container this project is actually running.
 pub(super) async fn verify_running(
     runner: &dyn CommandRunner,
-    checkout: &Path,
+    compose: &Compose,
+    layout: &Layout,
     expected: &ExpectedImage,
 ) -> Result<(), StackError> {
     let output = run_ok(
         runner,
-        &Command::new(
-            "env",
-            &[
-                &format!("--chdir={}", checkout.display()),
-                "COMPOSE_PROJECT_NAME=ortsom-regtest",
-                "docker",
-                "compose",
-                "-f",
-                "ci/regtest/compose.yml",
-                "--profile",
-                "daemon",
-                "ps",
-                "-q",
-                "mostro",
-            ],
-        ),
+        &compose.command(&["--profile", "daemon", "ps", "-q", DAEMON_SERVICE]),
         INSPECT_TIMEOUT,
     )
     .await?;
@@ -100,7 +88,7 @@ pub(super) async fn verify_running(
             "expected exactly one Mostro container in the selected stack",
         ));
     }
-    super::ownership::verify_container(runner, checkout, container).await?;
+    super::ownership::verify_container(runner, layout, container).await?;
     let output = run_ok(
         runner,
         &Command::new(

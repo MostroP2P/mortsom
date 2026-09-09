@@ -4,7 +4,7 @@ use crate::recovery_store::FileJournal;
 
 pub(super) async fn cleanup_desktop(
     config_path: &std::path::Path,
-    checkout: &std::path::Path,
+    stack_dir: &std::path::Path,
     run: &mortsom_common::RunId,
     attributions: &[String],
 ) -> Option<ExitCode> {
@@ -18,7 +18,7 @@ pub(super) async fn cleanup_desktop(
         return None;
     }
     Some(
-        match recover(config_path, checkout, &root, attributions).await {
+        match recover(config_path, stack_dir, &root, attributions).await {
             Ok(code) => code,
             Err(error) => fail(error),
         },
@@ -139,7 +139,7 @@ fn fail(error: String) -> ExitCode {
 }
 async fn recover(
     config_path: &std::path::Path,
-    checkout: &std::path::Path,
+    stack_dir: &std::path::Path,
     root: &std::path::Path,
     attributions: &[String],
 ) -> Result<ExitCode, String> {
@@ -165,7 +165,7 @@ async fn recover(
         return Ok(ExitCode::SUCCESS);
     }
     let (config, stack) =
-        crate::desktop::load(config_path, checkout, &TokioRunner, &RealHost).await?;
+        crate::desktop::load(config_path, stack_dir, &TokioRunner, &RealHost).await?;
     if stack.fingerprint()? != manifest.stack {
         return Err("recovery stack identity changed; preserve evidence and resolve the recorded environment first".into());
     }

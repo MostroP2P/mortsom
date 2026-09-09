@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into();
     let (config, _) = desktop::load(
         Path::new("config/desktop.example.toml"),
-        Path::new("../ortsom"),
+        Path::new("stack"),
         &TokioRunner,
         &RealHost,
     )

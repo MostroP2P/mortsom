@@ -1,4 +1,4 @@
-//! Read-only prerequisites for clients attached to the persistent regtest stack.
+//! Read-only prerequisites for clients attached to the regtest stack.
 use std::path::{Path, PathBuf};
 
 use mortsom_android_driver::process::CommandRunner;
@@ -20,7 +20,7 @@ pub struct DesktopDoctorOptions {
 /// Checks the selected desktop platform without launching a client or paying.
 pub async fn run_desktop_doctor(
     config_path: &Path,
-    checkout: &Path,
+    stack_dir: &Path,
     options: &DesktopDoctorOptions,
     host: &dyn HostProbe,
     net: &dyn NetProbes,
@@ -37,13 +37,13 @@ pub async fn run_desktop_doctor(
     let stack = if options.no_network {
         None
     } else {
-        match StackContext::resolve(checkout, runner).await {
+        match StackContext::resolve(stack_dir, runner).await {
             Ok(stack) => {
-                report.push("ortsom-stack", CheckStatus::Pass, "public status is ready");
+                report.push("stack", CheckStatus::Pass, "ready");
                 Some(stack)
             }
             Err(error) => {
-                report.push("ortsom-stack", CheckStatus::Fail, error.to_string());
+                report.push("stack", CheckStatus::Fail, error.to_string());
                 None
             }
         }

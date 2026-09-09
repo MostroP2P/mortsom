@@ -1,0 +1,16 @@
+# Daemon limits the stack declares to the harness (spec section 5, step 3).
+# Recorded in every run's stack fingerprint. The windows must equal the
+# values in mostro-settings.tpl.toml; a test fails when they drift apart.
+
+# Untaken order lifetime the reaper enforces.
+order_expiration_secs = 300
+# [lightning].hold_invoice_expiration_window
+hold_invoice_expiry_secs = 120
+# [mostro].expiration_seconds
+buyer_invoice_deadline_secs = 120
+# [lightning].invoice_expiration_window
+payout_invoice_min_expiry_secs = 300
+# [lightning].max_inflight_payouts_per_destination
+max_inflight_payouts_per_destination = 2
+# Concurrent payout dispatch capacity built into the daemon release.
+payout_dispatch_permits = 8

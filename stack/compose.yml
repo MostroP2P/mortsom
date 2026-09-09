@@ -1,0 +1,133 @@
+# Mortsom's regtest world: one chain, three Lightning nodes, one relay and the
+# daemon under test (spec section 5). Nothing here reaches mainnet and nothing
+# needs a secret from outside: bitcoind mines its own coins, the nodes run
+# with --noseedbackup, the relay keeps its events in memory, and the daemon's
+# identity is minted by `mortsom stack up` for this stack alone.
+#
+# Roles never overlap: lnd-alice and lnd-bob are the two actors, lnd-carol is
+# the daemon's escrow node and is never driven as an actor.
+#
+# The bitcoind RPC credentials below are not secrets: the RPC port is not
+# published, so only services on this Compose network can reach it, and the
+# chain it guards is a throwaway regtest chain.
+#
+# The daemon sits behind a profile. It can only start once `stack up` has
+# written local/config/settings.toml and copied carol's credentials into
+# local/config/lnd/, so a bare `docker compose up` never boots it by accident.
+
+name: mortsom-regtest
+
+x-lnd: &lnd
+  image: polarlightning/lnd:0.19.1-beta
+  depends_on:
+    bitcoind:
+      condition: service_healthy
+  restart: on-failure
+
+services:
+  bitcoind:
+    image: polarlightning/bitcoind:29.0
+    command: >
+      bitcoind -regtest -server -printtoconsole
+      -rpcbind=0.0.0.0 -rpcallowip=0.0.0.0/0
+      -rpcuser=mortsom -rpcpassword=mortsom
+      -txindex -fallbackfee=0.0002
+      -zmqpubrawblock=tcp://0.0.0.0:28334
+      -zmqpubrawtx=tcp://0.0.0.0:28335
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "bitcoin-cli",
+          "-regtest",
+          "-rpcuser=mortsom",
+          "-rpcpassword=mortsom",
+          "getblockchaininfo",
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  # Each node's TLS certificate must also cover 127.0.0.1: the harness dials
+  # the published port from the host, and a certificate that only names the
+  # container fails every gRPC handshake on a hostname mismatch.
+  lnd-alice:
+    <<: *lnd
+    command: >
+      lnd --noseedbackup --alias=alice
+      --listen=0.0.0.0:9735 --rpclisten=0.0.0.0:10009 --restlisten=0.0.0.0:8080
+      --externalip=lnd-alice
+      --tlsextradomain=lnd-alice --tlsextradomain=localhost --tlsextraip=127.0.0.1
+      --bitcoin.active --bitcoin.regtest --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind:18443
+      --bitcoind.rpcuser=mortsom --bitcoind.rpcpass=mortsom
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28334
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
+      --maxpendingchannels=10 --accept-keysend --trickledelay=50
+    ports:
+      - "10001:10009"
+
+  lnd-bob:
+    <<: *lnd
+    command: >
+      lnd --noseedbackup --alias=bob
+      --listen=0.0.0.0:9735 --rpclisten=0.0.0.0:10009 --restlisten=0.0.0.0:8080
+      --externalip=lnd-bob
+      --tlsextradomain=lnd-bob --tlsextradomain=localhost --tlsextraip=127.0.0.1
+      --bitcoin.active --bitcoin.regtest --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind:18443
+      --bitcoind.rpcuser=mortsom --bitcoind.rpcpass=mortsom
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28334
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
+      --maxpendingchannels=10 --accept-keysend --trickledelay=50
+    ports:
+      - "10002:10009"
+
+  lnd-carol:
+    <<: *lnd
+    command: >
+      lnd --noseedbackup --alias=carol
+      --listen=0.0.0.0:9735 --rpclisten=0.0.0.0:10009 --restlisten=0.0.0.0:8080
+      --externalip=lnd-carol
+      --tlsextradomain=lnd-carol --tlsextradomain=localhost --tlsextraip=127.0.0.1
+      --bitcoin.active --bitcoin.regtest --bitcoin.node=bitcoind
+      --bitcoind.rpchost=bitcoind:18443
+      --bitcoind.rpcuser=mortsom --bitcoind.rpcpass=mortsom
+      --bitcoind.zmqpubrawblock=tcp://bitcoind:28334
+      --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
+      --maxpendingchannels=10 --accept-keysend --trickledelay=50
+    ports:
+      - "10003:10009"
+
+  # The relay listens on 7000 inside its container and is published on the
+  # host's loopback at the same port. The daemon shares this container's
+  # network namespace (below), so `ws://127.0.0.1:7000` is the relay from
+  # the daemon's side and from the host's side alike: the URL the daemon
+  # advertises in its relay list is one a client on this host can dial.
+  relay:
+    image: scsibug/nostr-rs-relay:latest
+    volumes:
+      - ./relay-config.toml:/usr/src/app/config.toml:ro
+    ports:
+      - "127.0.0.1:7000:7000"
+
+  mostro:
+    # The pinned release is the default; `stack up --mostro-image` puts a
+    # branch build under the same harness and records it in the fingerprint.
+    image: ${MORTSOM_MOSTRO_IMAGE:-mostrop2p/mostro:v0.18.7}
+    profiles: ["daemon"]
+    # /config is a bind mount owned by the invoking user, and settings.toml
+    # is mode 600 because it carries the daemon's key. The image's own user
+    # is uid 1000, which is not every operator's uid; as a foreign user the
+    # daemon could neither read its settings nor create its database, so
+    # `stack up` passes the real ids.
+    user: "${MORTSOM_UID:-1000}:${MORTSOM_GID:-1000}"
+    # Shares the relay's network namespace: see the relay service. Compose
+    # DNS still resolves lnd-carol from there.
+    network_mode: "service:relay"
+    depends_on:
+      - relay
+      - lnd-carol
+    volumes:
+      - ./local/config:/config
+    restart: on-failure

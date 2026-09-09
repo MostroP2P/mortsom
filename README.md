@@ -13,10 +13,8 @@ Accepted live cells: **Linux 2/2, Web 2/2**. Web required app v2 changes (Indexe
 upstream as MostroP2P/app#408; build the clients from the app's `main`. See [docs/acceptance-ledger.md](docs/acceptance-ledger.md) for every attempt and
 [docs/HANDOFF.md](docs/HANDOFF.md) for the current plan.
 
-**Transitional dependency.** The spec requires `mortsom stack up` to build the regtest stack on its own. The
-current implementation still delegates to a sibling [Ortsom](https://github.com/MostroP2P/ortsom) checkout
-at `../ortsom`, built in release or debug. Until the stack implementation lands, that checkout is required for
-`stack up`, `stack status` and every run. It is the one item in this guide that contradicts the spec.
+The regtest stack is Mortsom's own: `mortsom stack up` builds it from nothing with Docker alone, and both
+Linux cells were re-run against it on 2026-09-09.
 
 ## Quick start
 
@@ -43,7 +41,6 @@ Default layout:
 ~/dev/
   mortsom/     this repository
   mobilev2/    checkout of MostroP2P/app with the automation contract
-  ortsom/      transitional; see Status
 ```
 
 | For | Requirements |
@@ -94,11 +91,25 @@ merges its optional `<name>.local.toml` overlay.
 ./target/debug/mortsom stack down
 ```
 
+The stack is the Compose project in [stack/](stack/): a regtest `bitcoind`, LND nodes for Alice, Bob and
+Carol (the daemon's escrow node), an in-memory Nostr relay on `127.0.0.1:7000` and `mostrod`. Nothing else is
+needed: the chain mines its own coins.
+
 `stack up` pulls the pinned daemon release (`mostrop2p/mostro:v0.18.7`, the version the accepted cells ran
-against), builds or updates the stack and verifies the running container matches the pulled digest. Pass
-`--mostro-image <reference>` to install another build; the reference is recorded in the stack fingerprint. Do not run it before every scenario: it can regenerate the daemon identity, after which
-both clients must be rebuilt. `stack down` destroys the environment and its credentials; it is never
-evidence that an order was cancelled or a payment refunded.
+against), starts the chain, nodes and relay, funds the nodes, opens one balanced channel from each actor to
+Carol, mints a daemon identity for this stack, starts the daemon as your user and waits for its info event on
+the relay. It is re-runnable: funded wallets and open channels are left alone. Every `up` mints a new daemon
+identity, after which both clients must be rebuilt, so do not run it before every scenario. Pass
+`--mostro-image <reference>` to install another build; the reference is recorded in the stack fingerprint.
+
+Generated state lives in the gitignored `stack/local/`: the actors' node credentials, the daemon's settings
+(which hold its key, owner-only) and database, and `public.json`, the descriptor every command reads to
+attach. `stack status` exits non-zero until the stack is usable, so it can be waited on. `stack down` stops
+the services, removes their volumes and deletes `stack/local/`; it is never evidence that an order was
+cancelled or a payment refunded. Both `up` and `down` refuse containers another directory created.
+
+`--stack-dir` selects another directory holding the same files; the default is `stack`, so run the binary
+from the repository root.
 
 ## Building the app
 

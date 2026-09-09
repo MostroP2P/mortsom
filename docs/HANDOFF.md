@@ -3,7 +3,7 @@
 Read [spec.md](../spec.md) first; it is normative. This file says where the work is and what comes next.
 Repository content is English; the operator conversation is Spanish.
 
-## Where things stand (2026-09-09)
+## Where things stand (2026-09-09, evening)
 
 **The checkpoint is met: all four cells are accepted.** Linux `happy_sell` and `happy_buy`, Web `happy_sell`
 and `happy_buy`, each a funded regtest trade driven end to end through the real app v2 UI, with the hold
@@ -15,25 +15,22 @@ console step log (#20) and the banner (#21). The app's `main` carries the change
 `d49f3c1`): the IndexedDB stores, opening the store on the web at all, and the origin-wide coordination
 around document writes. App issue #233 is closed; its leftovers are tracked in app issue #409.
 
+**The stack is Mortsom's own.** `mortsom stack up` builds spec section 5 from `stack/` with Docker alone:
+chain, three nodes with balanced channels to Carol, relay, and a daemon with an identity minted per stack.
+Both Linux cells were re-run against it on 2026-09-09 (`20260909T175938Z-905f12907c4d` sell,
+`20260909T180201Z-8743a4025779` buy), each settling the hold and the payout once and resolving its order.
+The Web cells were not re-run on the new stack; the stack is the same for both platforms, and the Web bundle
+must be rebuilt for the new daemon identity before a Web run.
+
 No journal is retained, no harness process is left running, and the regtest stack stays up by design.
 
 ## What is left
 
 1. **Isolate the frozen Android path.** `crates/android-driver` and `crates/app-adapters/mobile-legacy`
    still build by default. Put them behind a Cargo feature so the default workspace is desktop and Web only.
-2. **Own the stack.** Replace the Ortsom delegation in `crates/coordinator/src/stack/` with Mortsom's own
-   implementation of spec section 5. The largest item; it needs its own short plan before starting.
-3. **Measure coverage.** The spec requires 80% of lines under `cargo llvm-cov`. Last measured at 83.88%
+2. **Measure coverage.** The spec requires 80% of lines under `cargo llvm-cov`. Last measured at 83.88%
    several commits ago (`5c764ba`); it has not been re-run since.
-4. **Further scenarios**, when the operator asks. The spec's deferred list (section 14) is the roadmap.
-
-## Spec versus code
-
-The spec requires `mortsom stack up/status/down` to build the regtest stack without any external tool. The
-code still delegates to a sibling Ortsom checkout through `--ortsom-dir` (default `../ortsom`), and
-`config/desktop.example.toml` still resolves connection references from that checkout. Until item 2 lands,
-every command below needs that checkout present and built. The README says so in its quick start, and the
-banner names the checkout, not the config, on `stack` commands for the same reason.
+3. **Further scenarios**, when the operator asks. The spec's deferred list (section 14) is the roadmap.
 
 ## Workspace
 
@@ -41,22 +38,24 @@ banner names the checkout, not the config, on `stack` commands for the same reas
 |---|---|---|
 | Mortsom | `/home/negrunch/dev/mortsom` | `main` |
 | App v2 | `/home/negrunch/dev/mobilev2` | `main` (PR #408 merged, `d49f3c1`) |
-| Ortsom (transitional dependency) | `/home/negrunch/dev/ortsom` | its own branch; only its built CLI is used |
+
+Ortsom's own stack (`ortsom-regtest`) was stopped, not destroyed, to free the shared host ports; `docker
+compose -p ortsom-regtest start` brings it back, after `mortsom stack down`. The two cannot run together.
 
 Run `git status --short` and `git log -8 --oneline` in each before continuing, and never discard unrelated
 operator changes.
 
 ## Environment
 
-The persistent `ortsom-regtest` stack is up: bitcoind, relay, mostrod 0.18.7 (protocol 2) and LND alice, bob
-and carol. Relay `ws://127.0.0.1:7000`; LND host ports 10001, 10002, 10003.
+The `mortsom-regtest` stack is up: bitcoind, relay, mostrod 0.18.7 (protocol 2) and LND alice, bob and
+carol. Relay `ws://127.0.0.1:7000`; LND host ports 10001, 10002, 10003. Its state is under `stack/local/`.
 
-Use `stack status`, not `stack up`. `stack up` pulls and may regenerate the daemon identity, which requires
-rebuilding both clients, and is never evidence of a cancellation or a refund.
+Use `stack status`, not `stack up`. Every `stack up` mints a new daemon identity, which requires rebuilding
+both clients, and is never evidence of a cancellation or a refund.
 
-**Both client bundles predate the app's current `main`** — they were built from branch commits before the
-#408 merge. Rebuild them before the next live run, sequentially, because bridge generation writes shared
-source files:
+The Linux bundle was rebuilt for the current daemon identity from the app's `main`. **The Web bundle was
+not**; rebuild it before a Web run. Build sequentially, because bridge generation writes shared source
+files:
 
 ```sh
 cargo run -p mortsom-coordinator --example prepare_client -- linux
@@ -98,7 +97,7 @@ relay for that run's window. A journal with no events at all is removed offline,
 
 The console now prints each step, each observed screen state and each cleanup decision as it happens; the
 full timeline, screenshots and accessibility trees stay in `artifacts/<run-id>/`. To watch the daemon at the
-same time: `docker logs -f ortsom-regtest-mostro-1`, and `ortsom-regtest-lnd-carol-1` for its node.
+same time: `docker logs -f mortsom-regtest-mostro-1`, and `mortsom-regtest-lnd-carol-1` for its node.
 
 ## Known environment caveats
 
@@ -119,6 +118,6 @@ completed task after fmt, strict clippy and meaningful tests.
 
 ## Last verification
 
-636 workspace tests passed, zero failed, on `main` at `46afaa2`; formatting and strict clippy clean. App v2
-at `d49f3c1`: 343 Flutter tests passed, native and wasm32 clippy clean. Coverage has not been re-measured
-since 83.88% at `5c764ba`.
+649 workspace tests passed, zero failed, on the own-stack branch; formatting and strict clippy clean. App
+v2 at `d49f3c1`: 343 Flutter tests passed, native and wasm32 clippy clean. Coverage has not been
+re-measured since 83.88% at `5c764ba`.
