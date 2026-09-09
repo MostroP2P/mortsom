@@ -94,6 +94,7 @@ impl Attempt {
         let summary = self.summary.as_ref()?;
         Some(RunView {
             run_id: summary.run_id.to_string(),
+            run_passed: summary.passed,
             outcome: summary
                 .results
                 .iter()
@@ -107,6 +108,8 @@ impl Attempt {
 /// One finished run as the family report shows it.
 struct RunView {
     run_id: String,
+    /// The run's own verdict, which already folds in cleanup and checks.
+    run_passed: bool,
     outcome: Option<mortsom_scenario_kit::outcome::Outcome>,
     cleanup_clean: Option<bool>,
 }
@@ -132,6 +135,12 @@ impl Batch {
             return;
         };
         let label = match &run.outcome {
+            // A scenario that passed inside a run that did not (an order
+            // left unresolved, a failed check) is not a pass of the family.
+            Some(Outcome::Passed) if !run.run_passed => {
+                self.failed += 1;
+                "passed, but the run failed (see its checks and cleanup)".to_owned()
+            }
             Some(Outcome::Passed) => {
                 self.passed += 1;
                 "passed".to_owned()
@@ -439,9 +448,26 @@ mod batch_tests {
     fn view(outcome: Option<Outcome>, clean: Option<bool>) -> RunView {
         RunView {
             run_id: "run-1".into(),
+            run_passed: clean != Some(false),
             outcome,
             cleanup_clean: clean,
         }
+    }
+
+    /// A scenario's own pass is not the family's when its run left an
+    /// order unresolved: the run's verdict wins, and the family fails.
+    #[test]
+    fn a_passed_scenario_in_a_run_that_did_not_pass_fails_the_family() {
+        let mut batch = Batch::default();
+        batch.record(
+            "cancel_after_take_unpaid",
+            Some(view(Some(Outcome::Passed), Some(false))),
+        );
+        assert_eq!(batch.code(), ExitCode::from(1));
+        let report = batch.render();
+        assert!(report.contains("passed, but the run failed"), "{report}");
+        assert!(report.contains("cleanup UNRESOLVED"));
+        assert!(report.ends_with("0 passed, 1 failed, 0 skipped, 0 not run"));
     }
 
     /// A family passes only when every scenario passed or was skipped with

@@ -50,7 +50,7 @@ pub async fn create_order(
     let id = visible
         .id
         .ok_or_else(|| ScenarioError::product("the app shows no id for the created order"))?;
-    let order = OrderReference::with_kind(id.clone(), draft.kind);
+    let order = OrderReference::from_draft(id.clone(), draft);
     ctx.cleanup.register(actor, &order);
     ctx.journal
         .record(RecoveryEvent::OrderFound {

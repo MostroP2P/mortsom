@@ -104,26 +104,29 @@ pub async fn expect_relay_state_absent(
     }
 }
 
-/// The values of a tag on the daemon's latest event for `order`, once one
-/// exists: the `fa` tag carries the fiat amount, or a range's two bounds.
+/// The values of a tag on the daemon's newest event for `order`, waiting
+/// for a first one when none exists yet: the `fa` tag carries the fiat
+/// amount, or a range's two bounds.
 pub async fn relay_order_tag(
     ctx: &Context,
     order: &OrderReference,
     tag: &str,
 ) -> Result<Vec<String>, ScenarioError> {
     let id = order.id.clone();
-    let event = ctx
-        .relay
-        .wait_for(ctx.state_timeout, |e| {
-            e.kind == ORDER_EVENT_KIND && e.tag("d") == Some(id.as_str())
-        })
-        .await
-        .ok_or_else(|| {
-            ScenarioError::relay(format!(
-                "no relay event for order {} within {:?}",
-                order.id, ctx.state_timeout
-            ))
-        })?;
+    let is_order = |e: &mortsom_observers::relay::ObservedEvent| {
+        e.kind == ORDER_EVENT_KIND && e.tag("d") == Some(id.as_str())
+    };
+    let newest = ctx.relay.snapshot().into_iter().rev().find(is_order);
+    let event = match newest {
+        Some(event) => Some(event),
+        None => ctx.relay.wait_for(ctx.state_timeout, is_order).await,
+    }
+    .ok_or_else(|| {
+        ScenarioError::relay(format!(
+            "no relay event for order {} within {:?}",
+            order.id, ctx.state_timeout
+        ))
+    })?;
     let values = event
         .tags
         .iter()

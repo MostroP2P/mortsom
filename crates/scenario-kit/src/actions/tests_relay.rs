@@ -150,6 +150,18 @@ async fn the_fiat_tag_of_the_order_event_is_read_with_every_value() {
     );
     assert_eq!(relay_order_tag(&ctx, &order, "amt").await.unwrap(), ["0"]);
     assert!(relay_order_tag(&ctx, &order, "premium").await.is_err());
+
+    // A later revision is the one read, not the first ever published.
+    daemon.publish(
+        ORDER_EVENT_KIND,
+        &[
+            &["d", ORDER],
+            &["s", "in-progress"],
+            &["fa", "2"],
+            &["amt", "1800"],
+        ],
+    );
+    assert_eq!(relay_order_tag(&ctx, &order, "fa").await.unwrap(), ["2"]);
 }
 
 /// The rating proof is a reputation event the daemon publishes after the

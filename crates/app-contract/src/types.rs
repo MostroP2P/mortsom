@@ -215,6 +215,11 @@ pub struct OrderReference {
     /// The maker's side, when known; helps a taker find the right book tab.
     #[serde(default)]
     pub kind: Option<OrderKind>,
+    /// Whether the daemon sizes the sats (market price or range) rather
+    /// than the maker: the amounts it asks for are then bounded by the
+    /// per-order cap, not by the run's fixed amount.
+    #[serde(default)]
+    pub priced_by_daemon: bool,
 }
 
 impl OrderReference {
@@ -223,6 +228,7 @@ impl OrderReference {
         Self {
             id: id.into(),
             kind: None,
+            priced_by_daemon: false,
         }
     }
 
@@ -231,6 +237,16 @@ impl OrderReference {
         Self {
             id: id.into(),
             kind: Some(kind),
+            priced_by_daemon: false,
+        }
+    }
+
+    /// Reference to an order created from `draft`.
+    pub fn from_draft(id: impl Into<String>, draft: &OrderDraft) -> Self {
+        Self {
+            id: id.into(),
+            kind: Some(draft.kind),
+            priced_by_daemon: matches!(draft.price, OrderPrice::Market { .. }),
         }
     }
 }
@@ -299,6 +315,15 @@ mod draft_tests {
         assert_eq!(range.fiat, FiatAmount::Range { min: 1, max: 3 });
         assert_eq!(range.price, OrderPrice::Market { premium: 0 });
         assert!(range.is_range());
+    }
+
+    #[test]
+    fn a_reference_remembers_who_prices_the_order() {
+        let fixed = OrderDraft::fixed(OrderKind::Sell, 1000, "USD", 1, "cash");
+        assert!(!OrderReference::from_draft("o1", &fixed).priced_by_daemon);
+        let market = OrderDraft::market(OrderKind::Sell, "USD", 1, "cash");
+        assert!(OrderReference::from_draft("o1", &market).priced_by_daemon);
+        assert!(!OrderReference::new("o1").priced_by_daemon);
     }
 
     #[test]
