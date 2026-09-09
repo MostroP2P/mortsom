@@ -2,12 +2,17 @@
 
 use mostro_core::prelude::{
     NOSTR_DISPUTE_EVENT_KIND, NOSTR_INFO_EVENT_KIND, NOSTR_ORDER_EVENT_KIND,
+    NOSTR_RATING_EVENT_KIND,
 };
 use nostr_sdk::prelude::{Event, Filter, Kind, PublicKey};
 
-/// Kinds published by the daemon that describe it rather than an order.
-const DAEMON_KINDS: [Kind; 3] = [
+/// Kinds published by the daemon that describe it, or a user's reputation,
+/// rather than an order. A rating event names the rated trade key in its
+/// `d` tag, which the run never learns, so every one the daemon publishes
+/// during the run is kept: on the run relay they all belong to it.
+const DAEMON_KINDS: [Kind; 4] = [
     Kind::Custom(NOSTR_INFO_EVENT_KIND),
+    Kind::Custom(NOSTR_RATING_EVENT_KIND),
     Kind::RelayList,
     Kind::Metadata,
 ];

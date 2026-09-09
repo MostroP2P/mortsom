@@ -92,6 +92,18 @@ pub trait AppAdapter: Send + Sync {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<(), AdapterError>;
+    /// Finds a range order in the book and takes it at `fiat_amount`, which
+    /// the app asks for before the take. A fixed order never asks.
+    async fn find_and_take_order_at(
+        &self,
+        _device: &DeviceContext<'_>,
+        _order: &OrderReference,
+        _fiat_amount: u64,
+    ) -> Result<(), AdapterError> {
+        Err(AdapterError::contract(
+            "taking a range order at an amount is not supported",
+        ))
+    }
     /// Hands off the hold invoice along `path`.
     ///
     /// On [`PaymentPath::Nwc`] the app pays it with its connected wallet and
@@ -174,6 +186,18 @@ pub trait AppAdapter: Send + Sync {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<Vec<String>, AdapterError>;
+    /// Rates the counterpart of a completed order with `score` stars (1-5)
+    /// and returns once the app shows the trade as rated.
+    async fn rate_counterpart(
+        &self,
+        _device: &DeviceContext<'_>,
+        _order: &OrderReference,
+        _score: u8,
+    ) -> Result<(), AdapterError> {
+        Err(AdapterError::contract(
+            "rating a counterpart is not supported",
+        ))
+    }
     /// Cancels the order from the pay-invoice screen instead of paying.
     async fn cancel_payment(
         &self,

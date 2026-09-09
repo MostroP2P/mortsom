@@ -447,13 +447,13 @@ fn app_with_orders() -> FakeUi {
 }
 
 fn draft() -> OrderDraft {
-    OrderDraft {
-        kind: mortsom_app_contract::OrderKind::Sell,
-        amount_sats: 1000,
-        fiat_code: "USD".into(),
-        fiat_amount: 1,
-        payment_method: "cash".into(),
-    }
+    OrderDraft::fixed(
+        mortsom_app_contract::OrderKind::Sell,
+        1000,
+        "USD",
+        1,
+        "cash",
+    )
 }
 
 #[tokio::test]

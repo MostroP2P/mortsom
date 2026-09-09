@@ -22,6 +22,10 @@ pub enum Capability {
     Nwc,
     /// Creating fixed-price orders.
     CreateOrder,
+    /// Creating orders priced at the market rate.
+    MarketPriceOrder,
+    /// Creating orders with a fiat range and taking them at an amount.
+    RangeOrder,
     /// Discovering and taking an order.
     TakeOrder,
     /// Paying the hold invoice through the connected wallet.
@@ -54,12 +58,14 @@ pub enum Capability {
 
 impl Capability {
     /// Every capability, in declaration order.
-    pub const ALL: [Capability; 18] = [
+    pub const ALL: [Capability; 20] = [
         Capability::Onboarding,
         Capability::CustomNodeSelection,
         Capability::LocalRelayConfiguration,
         Capability::Nwc,
         Capability::CreateOrder,
+        Capability::MarketPriceOrder,
+        Capability::RangeOrder,
         Capability::TakeOrder,
         Capability::HoldInvoicePayment,
         Capability::ExternalWallet,
@@ -83,6 +89,8 @@ impl Capability {
             Capability::LocalRelayConfiguration => "local-relay-configuration",
             Capability::Nwc => "nwc",
             Capability::CreateOrder => "create-order",
+            Capability::MarketPriceOrder => "market-price-order",
+            Capability::RangeOrder => "range-order",
             Capability::TakeOrder => "take-order",
             Capability::HoldInvoicePayment => "hold-invoice-payment",
             Capability::ExternalWallet => "external-wallet",

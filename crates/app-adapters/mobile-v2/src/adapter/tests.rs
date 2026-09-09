@@ -504,13 +504,7 @@ fn app_with_orders() -> FakeUi {
 }
 
 fn draft() -> OrderDraft {
-    OrderDraft {
-        kind: OrderKind::Sell,
-        amount_sats: 1000,
-        fiat_code: "USD".into(),
-        fiat_amount: 1,
-        payment_method: "cash".into(),
-    }
+    OrderDraft::fixed(OrderKind::Sell, 1000, "USD", 1, "cash")
 }
 
 #[tokio::test]
@@ -895,5 +889,7 @@ async fn a_manual_invoice_form_for_another_order_is_never_reused() {
     );
 }
 
+#[path = "tests_pricing.rs"]
+mod pricing;
 #[path = "tests_take.rs"]
 mod take;

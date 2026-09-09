@@ -70,8 +70,8 @@ pub async fn create_order(
         TimelineKind::Step,
         Some(actor.as_str()),
         format!(
-            "created {:?} order {id} ({} sats, {} {})",
-            draft.kind, draft.amount_sats, draft.fiat_amount, draft.fiat_code
+            "created {:?} order {id} ({}, {} {})",
+            draft.kind, draft.price, draft.fiat, draft.fiat_code
         ),
         Some(step),
     );
@@ -97,6 +97,33 @@ pub async fn take_order(
         TimelineKind::Step,
         Some(actor.as_str()),
         format!("took order {}", order.id),
+        Some(step),
+    );
+    Ok(())
+}
+
+/// Takes the range `order` as `actor` at `fiat_amount`.
+pub async fn take_order_at(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+    fiat_amount: u64,
+) -> Result<(), ScenarioError> {
+    let session = ctx.actor(actor)?;
+    ctx.adapter
+        .find_and_take_order_at(&session.device(ctx.ui_timeout), order, fiat_amount)
+        .await?;
+    let step = ctx
+        .evidence
+        .checkpoint(actor.as_str(), "take-order", session.ui.as_ref())
+        .await;
+    ctx.timeline.push(
+        TimelineKind::Step,
+        Some(actor.as_str()),
+        format!(
+            "took range order {} at {fiat_amount} {}",
+            order.id, ctx.fiat_code
+        ),
         Some(step),
     );
     Ok(())
@@ -421,6 +448,12 @@ pub async fn wait_relay_state(
 #[path = "actions/hold.rs"]
 mod hold;
 pub use hold::{expect_hold_refunded, pay_hold_invoice, settle_hold_payment};
+#[path = "actions/rating.rs"]
+mod rating;
+pub use rating::{RATING_EVENT_KIND, rate_counterpart, wait_rating_published};
+#[path = "actions/relay.rs"]
+mod relay;
+pub use relay::{expect_relay_state_absent, relay_cursor, relay_order_tag, wait_relay_state_since};
 
 mod buyer_invoice;
 
@@ -645,3 +678,6 @@ pub fn is_observable(path: PaymentPath) -> bool {
 #[cfg(test)]
 #[path = "actions/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "actions/tests_relay.rs"]
+mod tests_relay;

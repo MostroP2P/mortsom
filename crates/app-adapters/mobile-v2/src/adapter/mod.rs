@@ -63,6 +63,8 @@ impl AppAdapter for MobileV2Adapter {
             Capability::LocalRelayConfiguration,
             Capability::Nwc,
             Capability::CreateOrder,
+            Capability::MarketPriceOrder,
+            Capability::RangeOrder,
             Capability::TakeOrder,
             Capability::HoldInvoicePayment,
             Capability::ExternalWallet,
@@ -180,7 +182,22 @@ impl AppAdapter for MobileV2Adapter {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<(), AdapterError> {
-        orders::find_and_take(device, order, order.kind.unwrap_or(OrderKind::Sell)).await
+        orders::find_and_take(device, order, order.kind.unwrap_or(OrderKind::Sell), None).await
+    }
+
+    async fn find_and_take_order_at(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+        fiat_amount: u64,
+    ) -> Result<(), AdapterError> {
+        orders::find_and_take(
+            device,
+            order,
+            order.kind.unwrap_or(OrderKind::Sell),
+            Some(fiat_amount),
+        )
+        .await
     }
 
     async fn pay_hold_invoice(
@@ -239,6 +256,15 @@ impl AppAdapter for MobileV2Adapter {
         order: &OrderReference,
     ) -> Result<Vec<String>, AdapterError> {
         orders::visible_actions(device, order).await
+    }
+
+    async fn rate_counterpart(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+        score: u8,
+    ) -> Result<(), AdapterError> {
+        orders::rate_counterpart(device, order, score).await
     }
 
     async fn cancel_payment(

@@ -1,11 +1,11 @@
-//! Order journeys in the v2 app: create a fixed-price order, discover and
-//! take it (amount asked on the take screen), pay the hold invoice through
-//! NWC, generate the buyer invoice, report fiat sent, release, cancel and
-//! observe the displayed state.
+//! Order journeys in the v2 app: create an order (fixed, market or range
+//! priced), discover and take it (amount asked on the take screen for a
+//! range), pay the hold invoice through NWC, generate the buyer invoice,
+//! report fiat sent, release, rate, cancel and observe the displayed state.
 
 use mortsom_app_contract::{
-    AdapterError, AppOrderState, CancelOutcome, DeviceContext, OrderDraft, OrderKind,
-    OrderReference, OrderState, PaymentHandoff, PaymentPath, VisibleOrder,
+    AdapterError, AppOrderState, CancelOutcome, DeviceContext, FiatAmount, OrderDraft, OrderKind,
+    OrderPrice, OrderReference, OrderState, PaymentHandoff, PaymentPath, VisibleOrder,
 };
 use mortsom_common::Secret;
 
@@ -19,8 +19,10 @@ const TRADES_ITEM_PREFIX: &str = "trades.item.";
 /// Poll interval while waiting for the new trade row.
 const NEW_TRADE_POLL: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Creates a fixed-price order and returns it with the id shown in the
-/// trades list.
+/// Highest star on the rating screen.
+const MAX_RATING: u8 = 5;
+
+/// Creates an order and returns it with the id shown in the trades list.
 pub async fn create(
     device: &DeviceContext<'_>,
     draft: &OrderDraft,
@@ -44,30 +46,15 @@ pub async fn create(
         Ids::ORDER_CREATE_CURRENCY_SEARCH,
     )
     .await?;
-    type_into(
-        device,
-        Ids::ORDER_CREATE_FIAT_AMOUNT,
-        &draft.fiat_amount.to_string(),
-    )
-    .await?;
+    enter_fiat_amount(device, draft.fiat).await?;
     type_into(
         device,
         Ids::ORDER_CREATE_PAYMENT_METHOD,
         &draft.payment_method,
     )
     .await?;
-    // Whether the form already offers a sats field is a question about the
-    // whole form, not about the part of it the keyboard has not covered.
-    if !listed(device, Ids::ORDER_CREATE_SATS_AMOUNT).await? {
-        tap(device, Ids::ORDER_CREATE_PRICE_TYPE).await?;
-    }
-    type_into(
-        device,
-        Ids::ORDER_CREATE_SATS_AMOUNT,
-        &draft.amount_sats.to_string(),
-    )
-    .await?;
-    // The sats field is numeric, so the keyboard is still up over the
+    enter_price(device, draft).await?;
+    // The last field is numeric, so the keyboard is still up over the
     // bottom of the form -- submit included.
     dismiss_keyboard(device).await;
     // A still-enabled button does not prove the daemon rejected the first
@@ -86,13 +73,74 @@ pub async fn create(
     })
 }
 
+/// Fills the fiat side of the form: one amount, or the range toggle and
+/// its two bounds.
+async fn enter_fiat_amount(
+    device: &DeviceContext<'_>,
+    fiat: FiatAmount,
+) -> Result<(), AdapterError> {
+    match fiat {
+        FiatAmount::Exact(amount) => {
+            type_into(device, Ids::ORDER_CREATE_FIAT_AMOUNT, &amount.to_string()).await
+        }
+        FiatAmount::Range { min, max } => {
+            tap(device, Ids::ORDER_CREATE_RANGE).await?;
+            type_into(device, Ids::ORDER_CREATE_FIAT_MIN, &min.to_string()).await?;
+            type_into(device, Ids::ORDER_CREATE_FIAT_MAX, &max.to_string()).await
+        }
+    }
+}
+
+/// Sets the price type. The form starts on market price and the toggle
+/// reveals the sats field; a range order locks the toggle on market, since
+/// the protocol prices ranges at market only.
+///
+/// Whether the form already offers a sats field is a question about the
+/// whole form, not about the part of it the keyboard has not covered.
+async fn enter_price(device: &DeviceContext<'_>, draft: &OrderDraft) -> Result<(), AdapterError> {
+    let sats_listed = listed(device, Ids::ORDER_CREATE_SATS_AMOUNT).await?;
+    match draft.price {
+        OrderPrice::Fixed { amount_sats } => {
+            if draft.is_range() {
+                return Err(AdapterError::contract(
+                    "a range order cannot carry a fixed price: the app locks it to market",
+                ));
+            }
+            if !sats_listed {
+                tap(device, Ids::ORDER_CREATE_PRICE_TYPE).await?;
+            }
+            type_into(
+                device,
+                Ids::ORDER_CREATE_SATS_AMOUNT,
+                &amount_sats.to_string(),
+            )
+            .await
+        }
+        OrderPrice::Market { premium } => {
+            // The premium slider is not part of the automation contract; the
+            // form's default of no premium is the only market price driven.
+            if premium != 0 {
+                return Err(AdapterError::contract(
+                    "a market premium other than zero is not part of the contract",
+                ));
+            }
+            if sats_listed {
+                tap(device, Ids::ORDER_CREATE_PRICE_TYPE).await?;
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Opens the book on the side listing `order`, opens it and takes it. The
-/// v2 take screen asks the fiat amount for range orders only; a fixed
-/// order shows the confirm button directly.
+/// v2 take screen asks the fiat amount for range orders only, right after
+/// the take button; a fixed order goes straight to its invoice form or
+/// trade detail, so `fiat_amount` is given for a range order and only then.
 pub async fn find_and_take(
     device: &DeviceContext<'_>,
     order: &OrderReference,
     kind: OrderKind,
+    fiat_amount: Option<u64>,
 ) -> Result<(), AdapterError> {
     go_home(device).await?;
     // The tabs are named by their visible label, and each lists the opposite
@@ -106,6 +154,14 @@ pub async fn find_and_take(
     tap(device, tab).await?;
     tap(device, &Ids::order_book_item(&order.id)).await?;
     tap(device, Ids::ORDER_TAKE_CONFIRM).await?;
+    if let Some(amount) = fiat_amount {
+        // The amount dialog is the app's own proof the order is a range:
+        // a fixed order never shows it, and typing an amount into nothing
+        // would take the order at whatever the maker set.
+        expect(device, Ids::ORDER_TAKE_AMOUNT).await?;
+        type_into(device, Ids::ORDER_TAKE_AMOUNT, &amount.to_string()).await?;
+        tap(device, Ids::ORDER_TAKE_AMOUNT_CONFIRM).await?;
+    }
     let form = match kind {
         OrderKind::Sell => Ids::INVOICE_TEXT,
         OrderKind::Buy => Ids::PAY_INVOICE_TEXT,
@@ -122,6 +178,26 @@ pub async fn find_and_take(
             "take did not reach the expected invoice form or trade detail",
         )),
     }
+}
+
+/// Rates the counterpart from the trade detail: the rate action, one star,
+/// submit; the app returns to the same trade's detail.
+pub async fn rate_counterpart(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+    score: u8,
+) -> Result<(), AdapterError> {
+    if score == 0 || score > MAX_RATING {
+        return Err(AdapterError::contract(format!(
+            "rating score {score} is outside 1-{MAX_RATING}"
+        )));
+    }
+    open_trade(device, order).await?;
+    tap(device, Ids::TRADE_RATE).await?;
+    tap(device, &Ids::rate_star(score)).await?;
+    tap(device, Ids::TRADE_RATE_SUBMIT).await?;
+    expect(device, Ids::ORDER_STATUS).await?;
+    verify_order_id(device, Ids::ORDER_ID, order).await
 }
 
 /// Opens the trade detail of `order` from the trades list.

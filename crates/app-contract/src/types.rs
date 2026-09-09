@@ -1,5 +1,6 @@
 //! Shared value types of the application contract.
 
+use std::fmt;
 use std::path::PathBuf;
 
 use mortsom_common::{Lane, Secret};
@@ -73,20 +74,128 @@ pub enum OrderKind {
     Buy,
 }
 
-/// What to create. Only fixed-price orders are supported: `amount_sats`
-/// is always entered explicitly and market-rate orders are out of scope.
+/// How the fiat side of an order is sized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum FiatAmount {
+    /// One fiat amount.
+    Exact(u64),
+    /// A range the taker picks an amount from; the daemon spawns the
+    /// remainder as a new order once the take completes.
+    Range {
+        /// Smallest amount a taker may pick.
+        min: u64,
+        /// Largest amount a taker may pick.
+        max: u64,
+    },
+}
+
+impl fmt::Display for FiatAmount {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            FiatAmount::Exact(amount) => write!(f, "{amount}"),
+            FiatAmount::Range { min, max } => write!(f, "{min}-{max}"),
+        }
+    }
+}
+
+/// How the sats side of an order is priced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OrderPrice {
+    /// The maker names the sats.
+    Fixed {
+        /// Sats amount.
+        amount_sats: u64,
+    },
+    /// The daemon resolves the sats from the exchange rate when the order
+    /// is taken, adjusted by a whole-percent premium.
+    Market {
+        /// Premium over the market rate, in percent.
+        premium: i32,
+    },
+}
+
+impl fmt::Display for OrderPrice {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OrderPrice::Fixed { amount_sats } => write!(f, "{amount_sats} sats"),
+            OrderPrice::Market { premium } => write!(f, "market {premium:+}%"),
+        }
+    }
+}
+
+/// What to create.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrderDraft {
     /// Side.
     pub kind: OrderKind,
-    /// Sats amount (fixed price).
-    pub amount_sats: u64,
     /// Fiat currency code.
     pub fiat_code: String,
-    /// Fiat amount.
-    pub fiat_amount: u64,
+    /// Fiat amount, exact or a range.
+    pub fiat: FiatAmount,
     /// Payment method label.
     pub payment_method: String,
+    /// Sats pricing.
+    pub price: OrderPrice,
+}
+
+impl OrderDraft {
+    /// A fixed-price order for one fiat amount: the ordinary trade.
+    pub fn fixed(
+        kind: OrderKind,
+        amount_sats: u64,
+        fiat_code: impl Into<String>,
+        fiat_amount: u64,
+        payment_method: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            fiat_code: fiat_code.into(),
+            fiat: FiatAmount::Exact(fiat_amount),
+            payment_method: payment_method.into(),
+            price: OrderPrice::Fixed { amount_sats },
+        }
+    }
+
+    /// A market-priced order for one fiat amount, at no premium.
+    pub fn market(
+        kind: OrderKind,
+        fiat_code: impl Into<String>,
+        fiat_amount: u64,
+        payment_method: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            fiat_code: fiat_code.into(),
+            fiat: FiatAmount::Exact(fiat_amount),
+            payment_method: payment_method.into(),
+            price: OrderPrice::Market { premium: 0 },
+        }
+    }
+
+    /// A range order. The protocol prices ranges at market only, so the
+    /// price is market at no premium.
+    pub fn range(
+        kind: OrderKind,
+        fiat_code: impl Into<String>,
+        min: u64,
+        max: u64,
+        payment_method: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            fiat_code: fiat_code.into(),
+            fiat: FiatAmount::Range { min, max },
+            payment_method: payment_method.into(),
+            price: OrderPrice::Market { premium: 0 },
+        }
+    }
+
+    /// Whether the taker picks the amount.
+    pub fn is_range(&self) -> bool {
+        matches!(self.fiat, FiatAmount::Range { .. })
+    }
 }
 
 /// An order as the app displays it after creation.
@@ -168,4 +277,42 @@ pub enum CancelOutcome {
     AlreadyClosed,
     /// The app does not show this order.
     NotFound,
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod draft_tests {
+    use super::*;
+
+    #[test]
+    fn the_three_draft_shapes_name_their_pricing() {
+        let fixed = OrderDraft::fixed(OrderKind::Sell, 1000, "USD", 1, "cash");
+        assert_eq!(fixed.price, OrderPrice::Fixed { amount_sats: 1000 });
+        assert_eq!(fixed.fiat, FiatAmount::Exact(1));
+        assert!(!fixed.is_range());
+
+        let market = OrderDraft::market(OrderKind::Buy, "USD", 2, "cash");
+        assert_eq!(market.price, OrderPrice::Market { premium: 0 });
+        assert!(!market.is_range());
+
+        let range = OrderDraft::range(OrderKind::Sell, "USD", 1, 3, "cash");
+        assert_eq!(range.fiat, FiatAmount::Range { min: 1, max: 3 });
+        assert_eq!(range.price, OrderPrice::Market { premium: 0 });
+        assert!(range.is_range());
+    }
+
+    #[test]
+    fn drafts_render_for_the_timeline_and_round_trip_through_json() {
+        let range = OrderDraft::range(OrderKind::Sell, "USD", 1, 3, "cash");
+        assert_eq!(range.fiat.to_string(), "1-3");
+        assert_eq!(range.price.to_string(), "market +0%");
+        assert_eq!(
+            OrderPrice::Fixed { amount_sats: 1000 }.to_string(),
+            "1000 sats"
+        );
+        let json = serde_json::to_string(&range).unwrap();
+        assert!(json.contains("\"range\""), "{json}");
+        let back: OrderDraft = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, range);
+    }
 }

@@ -25,7 +25,15 @@ pub(super) async fn prepare(
     let session = ctx.actor(actor)?;
     let device = session.device(ctx.ui_timeout);
     let requested = ctx.adapter.buyer_invoice_amount(&device, order).await?;
-    validate_request(requested, ctx.amount_sats)?;
+    // A market-priced order is sized by the daemon, not by the run's fixed
+    // amount, so the bound is the per-order spend cap the operator set.
+    let cap = ctx
+        .budget
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .caps()
+        .max_order_sats;
+    validate_request(requested, cap)?;
     let invoice = node
         .make_invoice(requested, &format!("mortsom {}", order.id))
         .await
