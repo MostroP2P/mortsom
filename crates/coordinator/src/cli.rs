@@ -2,6 +2,7 @@
 
 mod maintenance;
 mod recover;
+mod recover_audit;
 mod run;
 use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};
 use run::run_command;

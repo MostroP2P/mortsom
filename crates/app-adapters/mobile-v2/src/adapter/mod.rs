@@ -256,6 +256,13 @@ impl AppAdapter for MobileV2Adapter {
     ) -> Result<AppOrderState, AdapterError> {
         orders::observe(device, order).await
     }
+    async fn observe_order_detail(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<AppOrderState, AdapterError> {
+        orders::observe_detail(device, order).await
+    }
 }
 
 #[cfg(test)]

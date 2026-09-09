@@ -144,6 +144,16 @@ pub async fn observe(
     if let Some(state) = invoice_form_state(device, order).await? {
         return Ok(state);
     }
+    observe_detail(device, order).await
+}
+
+/// Reads the status the trade detail shows, leaving any open form. The forms
+/// answer a fixed waiting label while they are up; the detail is where the
+/// daemon's next status (the request for an invoice, say) becomes visible.
+pub async fn observe_detail(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<AppOrderState, AdapterError> {
     open_trade(device, order).await?;
     verify_order_id(device, Ids::ORDER_ID, order).await?;
     let raw = label(device, Ids::ORDER_STATUS).await?;

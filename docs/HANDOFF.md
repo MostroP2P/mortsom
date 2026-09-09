@@ -69,8 +69,8 @@ private recovery state to gain space.
   identity and outbox stores; the identity stub had made every order creation fail once the store was open).
   The Web bundle under test was built from `e3ac458`.
 - **Harness changes on this branch** (`feat/web-happy-paths`): operator attribution for journals whose order
-  the app never listed (`--attribute-order actor=order-id` or `actor=none`), relay-confirmed closure of
-  unlisted orders, Web presses and focusing clicks that wait for the node to rest, verified picker choices,
+  the app never listed (`--attribute-order actor=order-id` or `actor=none`, both checked against the
+  daemon's order events on the relay since the run started), relay-confirmed closure of unlisted orders, Web presses and focusing clicks that wait for the node to rest, verified picker choices,
   bounded settle for order-id readouts, re-entry of a dropped buyer invoice, cancel from invoice and payment
   forms, and providing the buyer invoice only after the daemon asks for it.
 - **Environment caveat.** The Claude Code session's memory guard killed background tasks and, once, both

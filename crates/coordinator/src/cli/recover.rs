@@ -24,23 +24,31 @@ pub(super) async fn cleanup_desktop(
         },
     )
 }
-/// Records operator attributions `actor=order-id` as the order of that
-/// actor's still-unresolved submission.
+/// Records operator attributions for a still-unresolved submission, each
+/// checked against what the daemon published on the relay during the run.
 ///
 /// A submission whose order the app never listed (a Web client without a
 /// trades store, a crash between publish and confirmation) leaves the journal
 /// unresolved forever: discovery reads the app's trade list, and the relay
-/// observer only follows orders it was told about. The operator, who can read
-/// the daemon and relay directly, names the order here. The attribution is
-/// only a name: cleanup still has to see that order closed on the relay, or
-/// close it through the UI, before the journal can be resolved.
-pub(super) fn attribute_orders(journal: &FileJournal, specs: &[String]) -> Result<(), String> {
+/// observer only follows orders it was told about. The operator names the
+/// order here, or states with `none` that none was created. Neither is
+/// taken on faith: `actor=order-id` must name an order the daemon published
+/// during the run that the submission did not already know, and `actor=none`
+/// is refused while the daemon shows any order created during the run that
+/// the journal does not know and that is still open. Even then the
+/// attribution only names the order: cleanup must still see it closed on
+/// the relay, or close it through the UI, before the journal resolves.
+pub(super) fn attribute_orders(
+    journal: &FileJournal,
+    specs: &[String],
+    audit: &super::recover_audit::RelayAudit,
+) -> Result<(), String> {
     use mortsom_android_driver::avd::Actor;
     use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
     for spec in specs {
-        let (actor, order_id) = spec
-            .split_once('=')
-            .ok_or_else(|| format!("attribution `{spec}` must be `actor=order-id`"))?;
+        let (actor, order_id) = spec.split_once('=').ok_or_else(|| {
+            format!("attribution `{spec}` must be `actor=order-id` or `actor=none`")
+        })?;
         let actor = Actor::ALL
             .into_iter()
             .find(|a| a.as_str() == actor)
@@ -51,29 +59,58 @@ pub(super) fn attribute_orders(journal: &FileJournal, specs: &[String]) -> Resul
             ));
         }
         let events = journal.events();
-        let open = events.iter().enumerate().any(|(index, event)| {
-            matches!(event, RecoveryEvent::SubmissionStarted { actor: a, .. } if *a == actor)
-                && !events[index + 1..].iter().any(|later| {
-                    matches!(later,
-                        RecoveryEvent::OrderFound { actor: a, .. }
-                        | RecoveryEvent::SubmissionAbandoned { actor: a } if *a == actor)
-                })
+        let open_submission = events.iter().enumerate().find_map(|(index, event)| {
+            let RecoveryEvent::SubmissionStarted {
+                actor: a,
+                known_orders,
+            } = event
+            else {
+                return None;
+            };
+            let resolved = events[index + 1..].iter().any(|later| {
+                matches!(later,
+                    RecoveryEvent::OrderFound { actor: a, .. }
+                    | RecoveryEvent::SubmissionAbandoned { actor: a } if *a == actor)
+            });
+            (*a == actor && !resolved).then(|| known_orders.clone())
         });
-        if !open {
+        let Some(known_orders) = open_submission else {
             return Err(format!(
                 "attribution `{spec}`: {} has no unresolved submission in this journal",
                 actor.as_str()
             ));
-        }
+        };
         if order_id == "none" {
-            // `none` is the operator's statement, checked against the daemon
-            // and the relay, that the submission never produced an order.
+            let open = audit.open_unknown(&known_orders);
+            if !open.is_empty() {
+                let ids: Vec<String> = open
+                    .iter()
+                    .map(|o| format!("{} ({})", o.id, o.status))
+                    .collect();
+                return Err(format!(
+                    "attribution `{spec}` refused: the daemon published orders during this run that \
+                     the journal does not know and that are still open: {}; attribute the right one \
+                     instead",
+                    ids.join(", ")
+                ));
+            }
             journal.record(RecoveryEvent::SubmissionAbandoned { actor })?;
             println!(
-                "recovery: operator recorded that {}'s unresolved submission produced no order",
-                actor.as_str()
+                "recovery: {}'s unresolved submission produced no order (relay audited since {})",
+                actor.as_str(),
+                audit.since
             );
             continue;
+        }
+        if known_orders.iter().any(|known| known == order_id) {
+            return Err(format!(
+                "attribution `{spec}` refused: {order_id} existed before the submission started"
+            ));
+        }
+        if !audit.published(order_id) {
+            return Err(format!(
+                "attribution `{spec}` refused: the daemon published no order {order_id} during this run"
+            ));
         }
         journal.record(RecoveryEvent::OrderFound {
             actor,
@@ -111,7 +148,6 @@ async fn recover(
         println!("recovery {} already completed", journal.snapshot().run_id);
         return Ok(ExitCode::SUCCESS);
     }
-    attribute_orders(&journal, attributions)?;
     let manifest = journal.snapshot();
     if manifest.events.is_empty() || manifest.resolution_verified {
         for actor in mortsom_android_driver::avd::Actor::ALL {
@@ -132,6 +168,22 @@ async fn recover(
         crate::desktop::load(config_path, checkout, &TokioRunner, &RealHost).await?;
     if stack.fingerprint()? != manifest.stack {
         return Err("recovery stack identity changed; preserve evidence and resolve the recorded environment first".into());
+    }
+    if !attributions.is_empty() {
+        let since = manifest
+            .run_id
+            .started_at()
+            .ok_or("cannot audit the relay: the run id carries no start time")?
+            .timestamp()
+            .max(0) as u64;
+        let audit = super::recover_audit::fetch(
+            &stack.relay_url,
+            &stack.daemon_pubkey,
+            since,
+            std::time::Duration::from_secs(config.mostro.health_timeout_secs),
+        )
+        .await?;
+        attribute_orders(&journal, attributions, &audit)?;
     }
     let bundle = Arc::new(
         crate::fingerprint::CapturedBundle::resume(&root.join("bundle"), manifest.bundle)
@@ -254,13 +306,32 @@ mod tests {
 
     const ORDER: &str = "3d2c95a2-1209-4e9a-b7b1-10150154213d";
 
+    fn audit(orders: &[(&str, &str)]) -> super::super::recover_audit::RelayAudit {
+        super::super::recover_audit::RelayAudit {
+            since: 1,
+            orders: orders
+                .iter()
+                .map(|(id, status)| super::super::recover_audit::AuditedOrder {
+                    id: (*id).to_owned(),
+                    status: (*status).to_owned(),
+                    created_at: 2,
+                })
+                .collect(),
+        }
+    }
+
     #[test]
     fn an_attribution_names_the_order_of_an_unresolved_submission() {
         let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
             actor: Actor::Alice,
             known_orders: vec![],
         }]);
-        attribute_orders(&journal, &[format!("alice={ORDER}")]).unwrap();
+        attribute_orders(
+            &journal,
+            &[format!("alice={ORDER}")],
+            &audit(&[(ORDER, "expired")]),
+        )
+        .unwrap();
         assert!(journal.events().iter().any(|e| matches!(
             e,
             RecoveryEvent::OrderFound { actor: Actor::Alice, order } if order.id == ORDER
@@ -273,7 +344,7 @@ mod tests {
             actor: Actor::Alice,
             known_orders: vec![],
         }]);
-        attribute_orders(&journal, &["alice=none".to_owned()]).unwrap();
+        attribute_orders(&journal, &["alice=none".to_owned()], &audit(&[])).unwrap();
         assert!(journal.events().iter().any(|e| matches!(
             e,
             RecoveryEvent::SubmissionAbandoned {
@@ -282,7 +353,7 @@ mod tests {
         )));
         assert!(!crate::run::recovery::unresolved_submissions(&journal));
         // Resolved once: a second statement has nothing open to attach to.
-        assert!(attribute_orders(&journal, &["alice=none".to_owned()]).is_err());
+        assert!(attribute_orders(&journal, &["alice=none".to_owned()], &audit(&[])).is_err());
     }
 
     #[test]
@@ -297,7 +368,14 @@ mod tests {
                 order: mortsom_app_contract::OrderReference::new("other"),
             },
         ]);
-        assert!(attribute_orders(&resolved, &[format!("alice={ORDER}")]).is_err());
+        assert!(
+            attribute_orders(
+                &resolved,
+                &[format!("alice={ORDER}")],
+                &audit(&[(ORDER, "pending")])
+            )
+            .is_err()
+        );
 
         let (_dir, open) = journal_with(vec![RecoveryEvent::SubmissionStarted {
             actor: Actor::Alice,
@@ -311,7 +389,12 @@ mod tests {
             "alice=not a uuid".to_owned(),
         ] {
             assert!(
-                attribute_orders(&open, std::slice::from_ref(&bad)).is_err(),
+                attribute_orders(
+                    &open,
+                    std::slice::from_ref(&bad),
+                    &audit(&[(ORDER, "pending")])
+                )
+                .is_err(),
                 "{bad}"
             );
         }
@@ -320,5 +403,58 @@ mod tests {
             1,
             "a refused attribution records nothing"
         );
+    }
+
+    /// `none` is a claim about the daemon, so the daemon is asked: while it
+    /// shows an order created during the run that the journal does not know
+    /// and that is still open, the claim is refused.
+    #[test]
+    fn none_is_refused_while_the_relay_shows_an_unknown_open_order() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec!["known-before".into()],
+        }]);
+        let refused = attribute_orders(
+            &journal,
+            &["alice=none".to_owned()],
+            &audit(&[("known-before", "pending"), (ORDER, "pending")]),
+        )
+        .unwrap_err();
+        assert!(refused.contains(ORDER), "{refused}");
+        assert_eq!(journal.events().len(), 1);
+
+        // Closed orders and orders known before the submission do not count.
+        attribute_orders(
+            &journal,
+            &["alice=none".to_owned()],
+            &audit(&[("known-before", "pending"), (ORDER, "expired")]),
+        )
+        .unwrap();
+    }
+
+    /// An attributed id must be an order the daemon published during the
+    /// run, and not one the submission already knew about.
+    #[test]
+    fn an_attributed_order_must_be_new_to_the_submission_and_on_the_relay() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![ORDER.into()],
+        }]);
+        let refused = attribute_orders(
+            &journal,
+            &[format!("alice={ORDER}")],
+            &audit(&[(ORDER, "expired")]),
+        )
+        .unwrap_err();
+        assert!(refused.contains("existed before"), "{refused}");
+
+        let (_dir, fresh) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![],
+        }]);
+        let refused =
+            attribute_orders(&fresh, &[format!("alice={ORDER}")], &audit(&[])).unwrap_err();
+        assert!(refused.contains("published no order"), "{refused}");
+        assert_eq!(fresh.events().len(), 1);
     }
 }

@@ -165,6 +165,11 @@ A healthy checks table above a failed scenario is still a failed run.
 ./target/debug/mortsom cleanup <run-id>
 ```
 
+When the app never listed the order a submission created, name it with `--attribute-order alice=<order-id>`,
+or state `alice=none` when the daemon created none. Both are checked against the daemon's order events on the
+relay for the run's window: an id must have been published then and not be known before the submission, and
+`none` is refused while any unknown order from that window is still open.
+
 Recovery reopens the same Alice and Bob identities from protected storage under
 `$HOME/.local/state/mortsom/recovery/<run-id>`, cancels through ordinary UI controls and deletes the profiles
 only after verified resolution. It never creates a new identity, retries a payment or releases escrow. A new

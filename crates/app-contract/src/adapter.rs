@@ -153,6 +153,19 @@ pub trait AppAdapter: Send + Sync {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<AppOrderState, AdapterError>;
+    /// Reads the order's state from its detail screen only, leaving any
+    /// invoice or payment form that is open. A form reports a fixed waiting
+    /// state for as long as it is on screen, so a wait for the daemon to
+    /// *change* something must not read it; the detail reflects the change.
+    /// Adapters without such a distinction read the same thing as
+    /// [`Self::observe_order`].
+    async fn observe_order_detail(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<AppOrderState, AdapterError> {
+        self.observe_order(device, order).await
+    }
     /// Names of the trade actions the app currently offers for `order`
     /// (normalized: `pay-invoice`, `add-invoice`, `fiat-sent`, `release`,
     /// `cancel`, `dispute`, `rate`), used by unauthorized-action checks.

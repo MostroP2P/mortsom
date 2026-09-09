@@ -178,12 +178,14 @@ pub async fn wait_app_state(
     }
 }
 
-/// Waits until `actor`'s app renders one of the raw `labels` for `order`,
-/// bounded by the state timeout. Finer than [`wait_app_state`]: several
-/// daemon statuses map to one [`OrderState`], and a journey sometimes has to
-/// wait for a particular one -- the buyer may only hand in a payout invoice
-/// once the daemon has asked for it, which the app shows as
-/// `waiting-invoice` while the coarser state is still `taken`.
+/// Waits until `actor`'s trade detail renders one of the raw `labels` for
+/// `order`, bounded by the state timeout. Finer than [`wait_app_state`]:
+/// several daemon statuses map to one [`OrderState`], and a journey sometimes
+/// has to wait for a particular one -- the buyer may only hand in a payout
+/// invoice once the daemon has asked for it, which the detail shows as
+/// `waiting-invoice` while the coarser state is still `taken`. The detail is
+/// read on purpose: an open form reports a fixed waiting label for as long as
+/// it is up, so it cannot prove that the daemon's request has arrived.
 pub async fn wait_app_label(
     ctx: &Context,
     actor: Actor,
@@ -194,7 +196,7 @@ pub async fn wait_app_label(
     let device = session.device(ctx.ui_timeout);
     let normalize = |raw: &str| raw.trim().to_ascii_lowercase().replace(['_', ' '], "-");
     let found = wait_until(ctx.state_timeout, STATE_POLL, || async {
-        match ctx.adapter.observe_order(&device, order).await {
+        match ctx.adapter.observe_order_detail(&device, order).await {
             Ok(state) if labels.contains(&normalize(&state.raw_label).as_str()) => {
                 Some(Ok(state.raw_label))
             }
