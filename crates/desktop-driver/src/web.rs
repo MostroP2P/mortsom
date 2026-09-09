@@ -209,11 +209,7 @@ impl UiSession for WebSession {
         self.wait(id, false, timeout).await
     }
     async fn tap(&self, id: &str) -> Result<(), AppiumError> {
-        Ok(self
-            .session()
-            .await?
-            .click(&self.element(id).await?)
-            .await?)
+        crate::web_input::press(&self.session().await?, id, Duration::from_secs(5)).await
     }
     async fn type_text(&self, id: &str, text: &str) -> Result<(), AppiumError> {
         crate::web_input::enter(&self.session().await?, id, text, Duration::from_secs(5)).await

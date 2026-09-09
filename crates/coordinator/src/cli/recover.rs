@@ -45,16 +45,18 @@ pub(super) fn attribute_orders(journal: &FileJournal, specs: &[String]) -> Resul
             .into_iter()
             .find(|a| a.as_str() == actor)
             .ok_or_else(|| format!("attribution `{spec}`: unknown actor `{actor}`"))?;
-        if !is_uuid_like(order_id) {
+        if order_id != "none" && !is_uuid_like(order_id) {
             return Err(format!(
-                "attribution `{spec}`: `{order_id}` is not an order id"
+                "attribution `{spec}`: `{order_id}` is not an order id (or `none`)"
             ));
         }
         let events = journal.events();
         let open = events.iter().enumerate().any(|(index, event)| {
             matches!(event, RecoveryEvent::SubmissionStarted { actor: a, .. } if *a == actor)
                 && !events[index + 1..].iter().any(|later| {
-                    matches!(later, RecoveryEvent::OrderFound { actor: a, .. } if *a == actor)
+                    matches!(later,
+                        RecoveryEvent::OrderFound { actor: a, .. }
+                        | RecoveryEvent::SubmissionAbandoned { actor: a } if *a == actor)
                 })
         });
         if !open {
@@ -62,6 +64,16 @@ pub(super) fn attribute_orders(journal: &FileJournal, specs: &[String]) -> Resul
                 "attribution `{spec}`: {} has no unresolved submission in this journal",
                 actor.as_str()
             ));
+        }
+        if order_id == "none" {
+            // `none` is the operator's statement, checked against the daemon
+            // and the relay, that the submission never produced an order.
+            journal.record(RecoveryEvent::SubmissionAbandoned { actor })?;
+            println!(
+                "recovery: operator recorded that {}'s unresolved submission produced no order",
+                actor.as_str()
+            );
+            continue;
         }
         journal.record(RecoveryEvent::OrderFound {
             actor,
@@ -253,6 +265,24 @@ mod tests {
             e,
             RecoveryEvent::OrderFound { actor: Actor::Alice, order } if order.id == ORDER
         )));
+    }
+
+    #[test]
+    fn none_records_that_a_submission_produced_no_order_and_closes_it() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![],
+        }]);
+        attribute_orders(&journal, &["alice=none".to_owned()]).unwrap();
+        assert!(journal.events().iter().any(|e| matches!(
+            e,
+            RecoveryEvent::SubmissionAbandoned {
+                actor: Actor::Alice
+            }
+        )));
+        assert!(!crate::run::recovery::unresolved_submissions(&journal));
+        // Resolved once: a second statement has nothing open to attach to.
+        assert!(attribute_orders(&journal, &["alice=none".to_owned()]).is_err());
     }
 
     #[test]
