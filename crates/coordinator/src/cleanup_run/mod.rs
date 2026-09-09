@@ -25,6 +25,7 @@ use tracing::{info, warn};
 use crate::artifacts::files;
 use crate::config::MaintenanceConfig as Config;
 
+pub mod lookalike;
 mod platform;
 
 /// File the command writes into the run directory when it exists.

@@ -157,6 +157,10 @@ pub(super) async fn cleanup_command(
             return ExitCode::from(2);
         }
     };
+    if let Some(hint) = mistyped_run_hint(&config, &run_id) {
+        eprintln!("{hint}");
+        return ExitCode::from(2);
+    }
     let env = |name: &str| std::env::var(name).ok();
     let deps = crate::cleanup_run::CleanupDeps {
         runner: &TokioRunner,
@@ -170,4 +174,27 @@ pub(super) async fn cleanup_command(
     } else {
         ExitCode::from(1)
     }
+}
+
+/// Refuses a run id that matches nothing on this host but is a typo away
+/// from a run that does exist, naming the command the operator meant.
+fn mistyped_run_hint(
+    config: &crate::config::MaintenanceConfig,
+    run_id: &mortsom_common::RunId,
+) -> Option<String> {
+    use crate::cleanup_run::lookalike::{run_ids_in, suggest_known_runs};
+    let artifacts = std::path::Path::new(&config.run.artifacts_dir);
+    if artifacts.join(run_id.as_str()).is_dir() {
+        return None;
+    }
+    let recovery = RealHost.env("HOME").and_then(|home| {
+        crate::recovery_store::FileJournal::directory(std::path::Path::new(&home)).ok()
+    });
+    let mut known = run_ids_in(artifacts);
+    known.extend(recovery.iter().flat_map(|dir| run_ids_in(dir)));
+    let suggestions = suggest_known_runs(run_id.as_str(), known.iter().map(String::as_str));
+    let closest = suggestions.first()?;
+    Some(format!(
+        "run {run_id} is not known on this host; did you mean `mortsom cleanup {closest}`?"
+    ))
 }
