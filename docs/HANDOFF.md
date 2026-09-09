@@ -28,7 +28,7 @@ the commands below work only with that checkout present and built. The README sa
 | Project | Path | Branch |
 |---|---|---|
 | Mortsom | `/home/negrunch/dev/mortsom` | `feat/v2-desktop-web` |
-| App v2 | `/home/negrunch/dev/mobilev2` | `feat/mortsom-linux-accessibility`, at `0ed7efb` |
+| App v2 | `/home/negrunch/dev/mobilev2` | `main` (PR #408 merged, `d49f3c1`) |
 | Ortsom (transitional dependency) | `/home/negrunch/dev/ortsom` | `feat/public-stack-status` |
 
 Mortsom and app commits are local; nothing has been pushed from these branches. Run `git status --short`
