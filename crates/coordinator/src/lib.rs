@@ -5,6 +5,7 @@ pub mod accounting;
 pub mod apk;
 pub mod app_setup;
 pub mod artifacts;
+pub mod banner;
 pub mod bootstrap;
 pub mod cleanup_run;
 pub mod cli;
