@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 pub(super) fn publish_command(
     config_path: &std::path::Path,
-    checkout: &std::path::Path,
+    stack_dir: &std::path::Path,
     run_id: &str,
     out: &std::path::Path,
     screenshots: &str,
@@ -18,16 +18,18 @@ pub(super) fn publish_command(
             return ExitCode::from(2);
         }
     };
-    let config =
-        match crate::config::PublishSettings::load_for_run(config_path, checkout, &run_id, |name| {
-            RealHost.env(name)
-        }) {
-            Ok(config) => config,
-            Err(e) => {
-                eprintln!("{e}");
-                return ExitCode::from(2);
-            }
-        };
+    let config = match crate::config::PublishSettings::load_for_run(
+        config_path,
+        stack_dir,
+        &run_id,
+        |name| RealHost.env(name),
+    ) {
+        Ok(config) => config,
+        Err(e) => {
+            eprintln!("{e}");
+            return ExitCode::from(2);
+        }
+    };
     let screenshots = match screenshots.parse() {
         Ok(policy) => policy,
         Err(e) => {
@@ -127,13 +129,13 @@ pub(super) fn accounting_command(config_path: &std::path::Path, lane: Option<&st
 
 pub(super) async fn cleanup_command(
     config_path: &std::path::Path,
-    checkout: &std::path::Path,
+    stack_dir: &std::path::Path,
     run_id: &str,
     attributions: &[String],
 ) -> ExitCode {
     if let Ok(run) = run_id.parse::<mortsom_common::RunId>()
         && let Some(result) =
-            super::recover::cleanup_desktop(config_path, checkout, &run, attributions).await
+            super::recover::cleanup_desktop(config_path, stack_dir, &run, attributions).await
     {
         return result;
     }

@@ -10,7 +10,7 @@ fn command(root: &Path) -> assert_cmd::Command {
         .env_clear()
         .env("HOME", root)
         .env("PATH", "/missing-tools")
-        .args(["--ortsom-dir", root.to_str().unwrap()]);
+        .args(["--stack-dir", root.to_str().unwrap()]);
     command
 }
 
@@ -22,7 +22,7 @@ fn fixture(root: &Path) -> String {
     )
     .unwrap();
     let secret = root
-        .join("ci/regtest/creds/alice/admin.macaroon")
+        .join("local/creds/alice/admin.macaroon")
         .display()
         .to_string();
     for run in ["run-a", "run-b"] {

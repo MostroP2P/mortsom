@@ -767,7 +767,7 @@ async fn desktop_offline_doctor_checks_only_its_platform_and_never_calls_stack()
     for platform in [Platform::Linux, Platform::Web] {
         let report = run_desktop_doctor(
             Path::new("/nonexistent/config.toml"),
-            Path::new("/nonexistent/ortsom"),
+            Path::new("/nonexistent/stack"),
             &DesktopDoctorOptions {
                 platform,
                 artifact: None,

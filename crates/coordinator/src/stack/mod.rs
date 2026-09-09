@@ -1,110 +1,134 @@
-//! Attachment to the persistent regtest stack owned by the Ortsom CLI.
+//! Mortsom's own regtest stack (spec section 5): a Compose project this
+//! checkout creates, inspects and destroys, with nothing but Docker.
 
+mod compose;
 mod connections;
-pub use connections::credential_reference;
+mod descriptor;
 mod fingerprint;
 mod image;
-pub use fingerprint::StackFingerprint;
+mod layout;
 mod metadata;
-pub use metadata::{DaemonImage, DeclaredLimits, StackSnapshot};
+mod nodes;
 mod ownership;
+mod status;
+mod up;
+
+pub use compose::Compose;
+pub use connections::credential_reference;
+pub use descriptor::Descriptor;
+pub use fingerprint::StackFingerprint;
+pub use layout::{Layout, PROJECT};
+pub use metadata::{DaemonImage, DeclaredLimits, StackSnapshot};
+pub use status::Status;
+pub use up::{Timing, UpOptions, up};
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
-use mortsom_android_driver::process::{Command, CommandRunner, ProcessError, run_ok};
+use async_trait::async_trait;
+use mortsom_android_driver::process::{CommandRunner, ProcessError};
 use nostr_sdk::prelude::PublicKey;
 use thiserror::Error;
 
 /// Stack boundary failures. Child output is redacted before presentation.
 #[derive(Debug, Error)]
 pub enum StackError {
-    /// Missing stack metadata or invalid public identity.
+    /// Missing stack state, a refused mutation or an unusable service.
     #[error("stack is not configured: {0}; run `mortsom stack up` first")]
     Configuration(String),
-    /// External lifecycle command failed.
+    /// A Docker command failed.
     #[error(transparent)]
     Process(ProcessError),
 }
 
-/// Non-secret connection references exported by an existing Ortsom stack.
+/// The daemon release `stack up` installs unless the operator selects
+/// another (spec section 5). A fixed tag keeps accepted runs reproducible:
+/// a floating `latest` would swap the daemon under the harness whenever
+/// upstream publishes, and with it the protocol behaviour being tested.
+pub const DEFAULT_MOSTRO_IMAGE: &str = "mostrop2p/mostro:v0.18.7";
+
+/// How `up` learns that the daemon is alive on the relay.
+#[async_trait]
+pub trait InfoProbe: Send + Sync {
+    /// Whether `pubkey` has published its info event on `relay_url`.
+    async fn daemon_published_info(&self, relay_url: &str, pubkey: PublicKey) -> bool;
+}
+
+/// Fetches the info event from the real relay.
+pub struct LiveRelay;
+
+const INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+#[async_trait]
+impl InfoProbe for LiveRelay {
+    async fn daemon_published_info(&self, relay_url: &str, pubkey: PublicKey) -> bool {
+        mortsom_environment::daemon::probe_daemon(
+            &[relay_url.to_owned()],
+            pubkey,
+            INFO_FETCH_TIMEOUT,
+        )
+        .await
+        .info
+        .is_some()
+    }
+}
+
+/// Non-secret connection references of a usable stack.
 #[derive(Debug)]
 pub struct StackContext {
     values: BTreeMap<String, String>,
     relay_url: String,
     relay_port: u16,
-    /// Actual running container image identity.
+    /// Image the daemon was started from and verified against.
     pub daemon_image: DaemonImage,
     /// Operator expectations; scenario observations must verify them.
     pub declared_limits: DeclaredLimits,
 }
 
-#[derive(serde::Deserialize)]
-struct PublicStatus {
-    schema_version: u32,
-    ready: bool,
-    daemon_pubkey: Option<String>,
-    connections: connections::Connections,
-    daemon_image: DaemonImage,
-    declared_limits: DeclaredLimits,
-}
-
 impl StackContext {
-    /// Queries the versioned public CLI status, never a private settings file.
-    pub async fn resolve(checkout: &Path, runner: &dyn CommandRunner) -> Result<Self, StackError> {
-        let root = checkout
-            .canonicalize()
-            .map_err(|e| StackError::Configuration(e.to_string()))?;
-        ownership::verify(runner, &root).await?;
-        let mut command = stack_command(&root, &binary(&root), "status");
-        command.args.push("--json".into());
-        let output = run_ok(runner, &command, Duration::from_secs(60)).await?;
-        let descriptor: PublicStatus = serde_json::from_str(&output.stdout).map_err(|_| {
-            StackError::Configuration(
-                "invalid or incomplete public status; rebuild Ortsom with public endpoint, image and limit metadata support".into(),
-            )
-        })?;
-        if descriptor.schema_version != 1 || !descriptor.ready {
+    /// Attaches to the stack in `dir`; refuses one that is not ready.
+    pub async fn resolve(dir: &Path, runner: &dyn CommandRunner) -> Result<Self, StackError> {
+        let layout = Layout::new(dir)?;
+        ownership::verify(runner, &layout).await?;
+        let status = status::inspect(runner, &layout).await?;
+        let Some(descriptor) = status.descriptor.clone() else {
             return Err(StackError::Configuration(
-                "unsupported or unready public stack status".into(),
+                "no daemon identity is recorded here".into(),
             ));
+        };
+        if !status.is_ready() {
+            return Err(StackError::Configuration(format!(
+                "the stack is not ready:\n{}",
+                status.render()
+            )));
         }
-        descriptor.daemon_image.validate()?;
-        descriptor.declared_limits.validate()?;
-        let key = descriptor
-            .daemon_pubkey
-            .as_deref()
-            .and_then(|s| PublicKey::parse(s).ok())
-            .ok_or_else(|| StackError::Configuration("missing daemon public key".into()))?;
+        let key = PublicKey::parse(&descriptor.daemon_pubkey)
+            .map_err(|_| StackError::Configuration("invalid daemon public key".into()))?;
         let relay_url = descriptor.connections.relay_url.clone();
-        let (relay_port, mut values) = descriptor.connections.resolve(&root)?;
-        values.extend([
-            ("MORTSOM_MOSTRO_PUBKEY".into(), key.to_hex()),
-            (
-                "MORTSOM_MOSTRO_SETTINGS_FILE".into(),
-                root.join("ci/regtest/config/settings.toml")
-                    .display()
-                    .to_string(),
-            ),
-        ]);
+        let mut values = descriptor.connections.values();
+        values.insert("MORTSOM_MOSTRO_PUBKEY".into(), key.to_hex());
+        values.insert(
+            "MORTSOM_MOSTRO_SETTINGS_FILE".into(),
+            layout.settings_file().display().to_string(),
+        );
         Ok(Self {
             values,
             relay_url,
-            relay_port,
+            relay_port: connections::RELAY_PORT,
             daemon_image: descriptor.daemon_image,
             declared_limits: descriptor.declared_limits,
         })
     }
 
-    /// Captures only public facts; private credential references stay in memory.
+    /// Captures only public facts; credential paths stay in memory.
     pub fn snapshot(&self) -> StackSnapshot {
         StackSnapshot {
             daemon_pubkey: self.values["MORTSOM_MOSTRO_PUBKEY"].clone(),
             relay_url: self.relay_url.clone(),
-            wallet_endpoints: ["alice", "bob"]
+            wallet_endpoints: connections::ACTOR_PORTS
                 .into_iter()
-                .map(|actor| {
+                .map(|(actor, _)| {
                     let key = format!("MORTSOM_{}_LND_HOST", actor.to_uppercase());
                     (actor.into(), self.values[&key].clone())
                 })
@@ -119,94 +143,32 @@ impl StackContext {
         self.values.get(name).cloned()
     }
 
-    /// Applies the actual persistent relay binding to shared configuration.
+    /// Applies the actual relay binding to shared configuration.
     pub fn configure_relay(&self, config: &mut crate::Config) {
         config.relay.host_port = self.relay_port;
         config.mostro.relays = vec![self.relay_url.clone()];
     }
 }
 
-/// Explicit command plan; the external CLI owns all stack mutations.
-pub fn stack_command(checkout: &Path, binary: &Path, action: &str) -> Command {
-    Command::new(
-        "env",
-        &[
-            &format!("--chdir={}", checkout.display()),
-            "COMPOSE_PROJECT_NAME=ortsom-regtest",
-            &binary.display().to_string(),
-            "stack",
-            action,
-        ],
+/// Inspects the stack without changing it.
+pub async fn status(runner: &dyn CommandRunner, layout: &Layout) -> Result<Status, StackError> {
+    ownership::verify(runner, layout).await?;
+    status::inspect(runner, layout).await
+}
+
+/// Stops the services, removes their volumes and deletes every generated
+/// credential and identity. Refuses containers another directory created.
+pub async fn down(runner: &dyn CommandRunner, layout: &Layout) -> Result<(), StackError> {
+    ownership::verify(runner, layout).await?;
+    tracing::info!("tearing the stack down");
+    let compose = Compose::new(layout, None);
+    compose::require(
+        runner,
+        &compose.command(&["--profile", "daemon", "down", "-v", "--remove-orphans"]),
+        Duration::from_secs(600),
     )
-}
-
-/// The daemon release `stack up` installs unless the operator selects
-/// another (spec section 5). A fixed tag keeps accepted runs reproducible:
-/// a floating `latest` would swap the daemon under the harness whenever
-/// upstream publishes, and with it the protocol behaviour being tested.
-pub const DEFAULT_MOSTRO_IMAGE: &str = "mostrop2p/mostro:v0.18.7";
-
-/// Invokes one Ortsom stack action with the pinned daemon release, without
-/// automatic cleanup on failure.
-pub async fn invoke(
-    runner: &dyn CommandRunner,
-    checkout: &Path,
-    binary: &Path,
-    action: &str,
-) -> Result<String, StackError> {
-    invoke_with_image(runner, checkout, binary, action, DEFAULT_MOSTRO_IMAGE).await
-}
-
-/// Invokes one Ortsom stack action; `image` is the daemon reference `up`
-/// pulls, verifies and hands to the stack. Other actions ignore it.
-pub async fn invoke_with_image(
-    runner: &dyn CommandRunner,
-    checkout: &Path,
-    binary: &Path,
-    action: &str,
-    image: &str,
-) -> Result<String, StackError> {
-    let root = checkout
-        .canonicalize()
-        .map_err(|e| StackError::Configuration(e.to_string()))?;
-    let checkout = root.as_path();
-    if matches!(action, "up" | "down") {
-        ownership::verify(runner, checkout).await?;
-    }
-    let mut cmd = stack_command(checkout, binary, action);
-    let mut expected = None;
-    if action == "up" {
-        // Pull the selected release and resolve it to an immutable digest
-        // before creating services; a failed pull never falls back to a
-        // cached image.
-        run_ok(
-            runner,
-            &Command::new("docker", &["pull", image]),
-            Duration::from_secs(600),
-        )
-        .await?;
-        let image = image::resolve(runner, image).await?;
-        cmd.args
-            .extend(["--mostro-image".into(), image.reference.clone()]);
-        expected = Some(image);
-    }
-    let out = run_ok(runner, &cmd, Duration::from_secs(1800)).await?;
-    if let Some(expected) = expected {
-        image::verify_running(runner, checkout, &expected).await?;
-        StackContext::resolve(checkout, runner).await?;
-    }
-    Ok(mortsom_common::Redactor::default().redact(&out.stdout))
-}
-
-/// Finds a built sibling CLI without building or importing its source.
-pub fn binary(checkout: &Path) -> PathBuf {
-    for profile in ["release", "debug"] {
-        let path = checkout.join("target").join(profile).join("ortsom");
-        if let Ok(path) = path.canonicalize() {
-            return path;
-        }
-    }
-    PathBuf::from("ortsom")
+    .await?;
+    up::remove_dir(&layout.local_dir())
 }
 
 #[cfg(test)]

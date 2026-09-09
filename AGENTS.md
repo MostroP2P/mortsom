@@ -12,9 +12,9 @@ normative. When resuming interrupted work, also read `docs/HANDOFF.md`. The
 immediate acceptance target is happy_sell and happy_buy on both Linux and Web.
 
 Ortsom (`../ortsom`) is the sibling harness for the daemon and protocol. It is
-reading material for how a regtest stack is built; Mortsom must not depend on
-it at runtime and never copies its source. The current code still delegates
-`stack` commands to it; that is a known gap tracked in `docs/HANDOFF.md`.
+reading material for how a regtest stack is built; Mortsom does not depend on
+it at runtime and never copies its source. `mortsom stack up` builds Mortsom's
+own stack from `stack/`.
 
 ## Language policy
 

@@ -1,0 +1,66 @@
+# mostrod settings for Mortsom's regtest stack. TEST VALUES, never production.
+#
+# `mortsom stack up` renders this file into stack/local/config/settings.toml,
+# replacing __NSEC__ with a key minted for the stack; no key is committed.
+# Paths are inside the daemon container, where local/config is mounted as
+# /config. The windows here are the ones stack/limits.toml declares to the
+# harness; a test keeps the two files in step.
+
+[lightning]
+lnd_cert_file = '/config/lnd/tls.cert'
+lnd_macaroon_file = '/config/lnd/admin.macaroon'
+lnd_grpc_host = 'https://lnd-carol:10009'
+invoice_expiration_window = 300
+hold_invoice_cltv_delta = 144
+hold_invoice_expiration_window = 120
+payment_attempts = 2
+payment_retries_interval = 15
+max_inflight_payouts_per_destination = 2
+
+[nostr]
+nsec_privkey = '__NSEC__'
+# The relay as seen from the daemon's network namespace, which is the
+# relay container's own; the same URL is valid on the host.
+relays = ['ws://127.0.0.1:7000']
+
+[mostro]
+name = "Mostro regtest"
+about = "Ephemeral daemon under test in Mortsom's regtest stack."
+fee = 0.01
+max_routing_fee = 0.001
+max_order_amount = 1000000
+min_payment_amount = 100
+expiration_hours = 1
+# Taker-action window in seconds: waiting-payment and waiting-buyer-invoice.
+expiration_seconds = 120
+user_rates_sent_interval_seconds = 30
+max_expiration_days = 1
+publish_relays_interval = 60
+# No proof of work: it only slows the stack down on a relay nobody else reaches.
+pow = 0
+publish_mostro_info_interval = 30
+bitcoin_price_api_url = "https://api.yadio.io"
+fiat_currencies_accepted = ['USD', 'EUR', 'ARS']
+max_orders_per_response = 100
+# mostrod refuses to start below 0.1, so the dev fee cannot be switched off.
+dev_fee_percentage = 0.30
+publish_exchange_rates_to_nostr = false
+exchange_rates_update_interval_seconds = 300
+# Protocol v2 (NIP-44 direct messages, kind 14) is what the app v2 speaks.
+transport = "nip44"
+active_pubkeys_refresh_interval = 10
+
+[database]
+url = "sqlite:///config/mostro.db"
+
+[rpc]
+enabled = false
+listen_address = "127.0.0.1"
+port = 50051
+
+[price]
+update_interval_seconds = 300
+
+[price.providers.yadio]
+enabled = true
+url = "https://api.yadio.io"

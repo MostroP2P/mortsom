@@ -1,5 +1,5 @@
-# Persistent Ortsom regtest stack. Values are resolved from its connection
-# references in memory; credentials are never copied into configuration.
+# Mortsom's regtest stack (`mortsom stack up`). Values are resolved from
+# its connection references in memory; credentials never enter configuration.
 [mobile]
 profile = "mobile-v2"
 source_dir = "../mobilev2"

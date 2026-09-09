@@ -3,7 +3,7 @@ use super::*;
 
 pub(super) async fn run_command(
     config_path: &std::path::Path,
-    checkout: &std::path::Path,
+    stack_dir: &std::path::Path,
     scenarios: Vec<String>,
     tag: Option<String>,
     platform: mortsom_desktop_driver::Platform,
@@ -24,7 +24,7 @@ pub(super) async fn run_command(
             .map(|config| (config, None))
             .map_err(|e| e.to_string())
     } else {
-        crate::desktop::load(config_path, checkout, &TokioRunner, &RealHost)
+        crate::desktop::load(config_path, stack_dir, &TokioRunner, &RealHost)
             .await
             .map(|(config, stack)| (config, Some(stack)))
     };

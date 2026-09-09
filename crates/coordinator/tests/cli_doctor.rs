@@ -135,7 +135,7 @@ fn web_prebuilt_doctor_does_not_require_android_or_build_tools() {
     assert!(names.contains(&"chromedriver"));
     assert!(names.contains(&"chromium"));
     assert!(
-        !names.contains(&"ortsom-stack"),
+        !names.contains(&"stack"),
         "offline doctor must not query stack"
     );
 }

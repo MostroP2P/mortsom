@@ -17,25 +17,25 @@ impl PublishSettings {
     /// Resolves publication settings without Docker or daemon/wallet connections.
     pub fn load_with(
         path: &Path,
-        checkout: &Path,
+        stack_dir: &Path,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
-        Self::load_inner(path, checkout, None, lookup)
+        Self::load_inner(path, stack_dir, None, lookup)
     }
 
     /// Uses recorded platform identity to preserve Android versus desktop credential resolution.
     pub fn load_for_run(
         path: &Path,
-        checkout: &Path,
+        stack_dir: &Path,
         run_id: &mortsom_common::RunId,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
-        Self::load_inner(path, checkout, Some(run_id), lookup)
+        Self::load_inner(path, stack_dir, Some(run_id), lookup)
     }
 
     fn load_inner(
         path: &Path,
-        checkout: &Path,
+        stack_dir: &Path,
         run_id: Option<&mortsom_common::RunId>,
         lookup: impl Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
@@ -59,16 +59,16 @@ impl PublishSettings {
         let desktop = platform.map_or(raw.get("android").is_none(), |platform| {
             platform != mortsom_desktop_driver::Platform::Android
         });
-        let needs_checkout = desktop
+        let needs_stack_dir = desktop
             && references
                 .iter()
                 .any(|name| crate::stack::credential_reference(Path::new("/"), name).is_some());
-        let root = if needs_checkout {
+        let root = if needs_stack_dir {
             Some(
-                checkout
+                stack_dir
                     .canonicalize()
                     .map_err(|source| ConfigError::Read {
-                        path: checkout.display().to_string(),
+                        path: stack_dir.display().to_string(),
                         source,
                     })?,
             )
@@ -147,7 +147,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recorded_android_uses_environment_credentials_without_an_ortsom_checkout() {
+    fn recorded_android_uses_environment_credentials_without_a_stack_directory() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("desktop.toml");
         let text = include_str!("../../../../config/desktop.example.toml").replace(
@@ -160,7 +160,7 @@ mod tests {
         std::fs::write(run.join("environment.json"), r#"{"platform":"android"}"#).unwrap();
         let settings = PublishSettings::load_for_run(
             &path,
-            Path::new("/missing/ortsom"),
+            Path::new("/missing/stack"),
             &"android-run".parse().unwrap(),
             |name| {
                 Some(if name == "REPORTS" {
@@ -180,11 +180,11 @@ mod tests {
     }
 
     #[test]
-    fn nwc_publication_keeps_known_values_without_needing_an_ortsom_checkout() {
+    fn nwc_publication_keeps_known_values_without_needing_a_stack_directory() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("publish.toml");
         std::fs::write(&path, "[run]\nartifacts_dir='env:REPORTS'\nlane='local'\n[wallets.alice]\nkind='nwc'\nuri='env:ALICE_URI'\n[wallets.bob]\nkind='nwc'\nuri='env:BOB_URI'\n").unwrap();
-        let settings = PublishSettings::load_with(&path, Path::new("/missing/ortsom"), |name| {
+        let settings = PublishSettings::load_with(&path, Path::new("/missing/stack"), |name| {
             Some(
                 match name {
                     "REPORTS" => "reports",
@@ -202,7 +202,7 @@ mod tests {
                 .redact("known-alice-credential known-bob-credential")
                 .contains("known-")
         );
-        assert!(PublishSettings::load_with(&path, Path::new("/missing/ortsom"), |_| None).is_err());
+        assert!(PublishSettings::load_with(&path, Path::new("/missing/stack"), |_| None).is_err());
     }
 
     #[test]
@@ -222,7 +222,7 @@ mod tests {
             secret.expose()
                 == root
                     .path()
-                    .join("ci/regtest/creds/alice/admin.macaroon")
+                    .join("local/creds/alice/admin.macaroon")
                     .to_str()
                     .unwrap()
         }));
