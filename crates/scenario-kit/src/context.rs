@@ -103,6 +103,19 @@ impl ActorSession {
 /// wallet service's latency.
 #[async_trait]
 pub trait NodeWallet: Send + Sync {
+    /// Maximum routing fee enforced by this payment edge.
+    fn routing_fee_cap_sats(&self) -> u64 {
+        0
+    }
+    /// Cancels only a caller-authorized, journal-tracked incoming invoice.
+    async fn cancel_invoice(&self, _hash: &str) -> Result<(), String> {
+        Err("invoice cancellation is not supported by this node wallet".into())
+    }
+    /// Counts settled ledger records under this exact hash and direction.
+    /// This must not count repeated observations or multipath HTLC attempts.
+    async fn settled_record_count(&self, _hash: &str, _incoming: bool) -> Result<usize, String> {
+        Err("settlement record enumeration is not supported by this node wallet".into())
+    }
     /// Issues an invoice for `sats`, to be typed into the app.
     async fn make_invoice(&self, sats: u64, memo: &str) -> Result<Secret, String>;
 
@@ -135,6 +148,8 @@ pub struct PendingHold {
 
 /// Everything a scenario can reach.
 pub struct Context {
+    /// Durable pre-action recovery boundary.
+    pub journal: Arc<dyn crate::journal::RecoveryJournal>,
     /// Application adapter.
     pub adapter: Arc<dyn AppAdapter>,
     /// Alice and Bob.

@@ -197,6 +197,11 @@ fn describe(outcome: &Outcome) -> String {
 /// per order: only pending entries are visited.
 pub async fn sweep_cleanup(ctx: &Context) {
     for entry in ctx.cleanup.pending() {
+        // Orders reopened from a recovery journal were never scoped into
+        // this observer; the relay confirmation below needs them to be.
+        if let Err(e) = ctx.relay.add_order(&entry.order.id).await {
+            warn!(order = %entry.order.id, error = %e, "cannot scope observer to order");
+        }
         let result = cleanup_order(ctx, entry.actor, &entry.order).await;
         ctx.timeline.push(
             TimelineKind::Cleanup,
@@ -209,17 +214,50 @@ pub async fn sweep_cleanup(ctx: &Context) {
 }
 
 async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> CleanupResult {
+    if ctx.journal.enabled()
+        && let Ok(session) = ctx.actor(maker)
+        && ctx
+            .adapter
+            .observe_order(&session.device(ctx.ui_timeout), order)
+            .await
+            .is_ok_and(|state| state.state == OrderState::PayoutPending)
+    {
+        return match mortsom_scenario_kit::actions::wait_app_state(
+            ctx,
+            maker,
+            order,
+            OrderState::Completed,
+        )
+        .await
+        {
+            Ok(_) => CleanupResult::Done {
+                outcome: CancelOutcome::AlreadyClosed,
+            },
+            Err(error) => CleanupResult::Failed {
+                message: error.to_string(),
+            },
+        };
+    }
     let outcome = match cancel_as(ctx, maker, order).await {
+        Ok(CancelOutcome::NotFound) => {
+            return CleanupResult::Done {
+                outcome: CancelOutcome::NotFound,
+            };
+        }
         Ok(outcome) => outcome,
         Err(message) => return CleanupResult::Failed { message },
     };
-    if outcome != CancelOutcome::Cancelled {
-        return CleanupResult::Done { outcome };
-    }
     // The maker's request alone closes an unfunded order; a funded one
-    // needs the counterpart's agreement.
+    // needs the counterpart's agreement. The maker's screen cannot tell
+    // the two apart: app v2 marks the order cancelled on the request itself,
+    // so a "closed" label is trusted only once the relay carries it.
     match observed_state(ctx, maker, order).await {
-        Some(state) if state.is_terminal() => return CleanupResult::Done { outcome },
+        Some(state) if state.is_terminal() => {
+            match confirm_closed(ctx, order, state, outcome).await {
+                CleanupResult::Failed { .. } if state == OrderState::Cancelled => {}
+                confirmed => return confirmed,
+            }
+        }
         Some(OrderState::Active | OrderState::FiatSent) => {}
         Some(state) => {
             return CleanupResult::Failed {
@@ -242,12 +280,36 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
         Err(message) => return CleanupResult::Failed { message },
     }
     match observed_state(ctx, maker, order).await {
-        Some(state) if state.is_terminal() => CleanupResult::Done { outcome },
+        Some(state) if state.is_terminal() => confirm_closed(ctx, order, state, outcome).await,
         Some(state) => CleanupResult::Failed {
             message: format!("still {state} after both sides cancelled"),
         },
         None => CleanupResult::Failed {
             message: "state unreadable after both sides cancelled".into(),
+        },
+    }
+}
+
+/// The daemon closes an order, not a screen. A `cancelled` label is accepted
+/// only once the relay carries the daemon's own `canceled` status for that
+/// order: a funded order whose maker asked to cancel shows the request in the
+/// UI while the daemon still holds the escrow and waits for the counterpart.
+async fn confirm_closed(
+    ctx: &Context,
+    order: &OrderReference,
+    state: OrderState,
+    outcome: CancelOutcome,
+) -> CleanupResult {
+    if state != OrderState::Cancelled {
+        return CleanupResult::Done { outcome };
+    }
+    match mortsom_scenario_kit::actions::wait_relay_state(ctx, order, OrderState::Cancelled).await {
+        Ok(()) => CleanupResult::Done { outcome },
+        Err(_) => CleanupResult::Failed {
+            message: format!(
+                "the UI shows order {} cancelled but the relay never published canceled for it",
+                order.id
+            ),
         },
     }
 }

@@ -4,16 +4,17 @@ Guidance for AI agents and human contributors working on Mortsom.
 
 ## Project
 
-Mortsom is a black-box, end-to-end test harness for the Mostro **mobile
-application**. It drives two installations of the app (Alice and Bob) on
-independent Android devices, like real users, against a locally operated
-Mostro daemon and a run-owned Nostr relay. Read `spec.md` before touching
-anything — it is the design document this codebase implements, and every
-phase in §17 has an exit gate that must pass before the next phase starts.
+Mortsom is a black-box, end-to-end test harness for Mostro app v2. It drives
+independent Alice/Bob clients on Linux (default) or Web against a local regtest
+stack that Mortsom itself owns. Android remains the selectable frozen path and
+is not being extended. Read `spec.md` before touching anything; it is
+normative. When resuming interrupted work, also read `docs/HANDOFF.md`. The
+immediate acceptance target is happy_sell and happy_buy on both Linux and Web.
 
-Ortsom (`../ortsom`) is the sibling harness for the daemon and protocol. The
-two projects share concepts and selected artifacts, never source code or a
-runner.
+Ortsom (`../ortsom`) is the sibling harness for the daemon and protocol. It is
+reading material for how a regtest stack is built; Mortsom must not depend on
+it at runtime and never copies its source. The current code still delegates
+`stack` commands to it; that is a known gap tracked in `docs/HANDOFF.md`.
 
 ## Language policy
 
@@ -29,7 +30,7 @@ messages, error strings, and artifacts. No exceptions.
   source https://github.com/MostroP2P/protocol) is normative for everything on
   the wire. **Protocol v1 (gift-wrap transport) is obsolete**; never implement
   or accommodate it.
-- The mobile app repository (`../mobile`, later `../mobilev2`) owns the
+- The app v2 repository (`../mobilev2`, upstream `MostroP2P/app`) owns the
   accessibility identifiers and bootstrap hooks documented in its
   `docs/automation-contract.md`. Mortsom owns automation, scenarios,
   environment orchestration and reports. A change to a semantic identifier,

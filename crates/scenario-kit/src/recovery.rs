@@ -503,6 +503,7 @@ mod tests {
         let daemon = Keys::generate();
         // A detached observer scoped to a daemon key we control.
         let ctx = Context {
+            journal: Arc::new(crate::journal::NoJournal),
             relay: Arc::new(mortsom_observers::relay::RelayObserver::detached(
                 ObserverScope::daemon_only(daemon.public_key()),
             )),
@@ -605,6 +606,7 @@ mod tests {
         let daemon = Keys::generate();
         let ctx = context_with(adapter(OrderState::Active), relay.clone());
         let ctx = Context {
+            journal: Arc::new(crate::journal::NoJournal),
             relay: Arc::new(mortsom_observers::relay::RelayObserver::detached(
                 ObserverScope::daemon_only(daemon.public_key()),
             )),
@@ -786,7 +788,7 @@ mod tests {
     /// The refused attempt is the expected one, and the device must come
     /// back online whatever happened to it.
     #[tokio::test]
-    async fn a_refused_offline_payment_restores_connectivity_and_keeps_the_state() {
+    async fn an_ambiguous_offline_payment_restores_connectivity_and_retains_budget() {
         let adapter = Arc::new(StateAdapter(Mutex::new(OrderState::Taken)));
         let mut ctx = context(adapter);
         ctx.mainnet = Some(crate::context::MainnetClearance {
@@ -816,8 +818,18 @@ mod tests {
             summaries.iter().any(|s| s == "connectivity restored"),
             "{summaries:?}"
         );
-        // The reservation is released, so the refused attempt costs nothing.
+        // A UI error after invoking the NWC path cannot prove no payment began.
+        // Keep its budget in flight until the wallet resolves the ambiguity.
         let budget = ctx.budget.lock().unwrap();
-        assert_eq!(budget.totals().reserved_sats, 0, "{:?}", budget.totals());
+        assert_eq!(
+            budget.totals().reserved_sats,
+            ctx.amount_sats,
+            "{:?}",
+            budget.totals()
+        );
+        assert_eq!(
+            budget.ledger()[0].status,
+            crate::budget::EntryStatus::InFlight
+        );
     }
 }

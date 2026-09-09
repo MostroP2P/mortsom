@@ -12,9 +12,12 @@ name = "mortsom"
 path = "src/main.rs"
 
 [dependencies]
+tempfile.workspace = true
+sha2.workspace = true
 mortsom-common = { workspace = true }
 mortsom-app-contract = { workspace = true }
 mortsom-android-driver = { workspace = true }
+mortsom-desktop-driver.workspace = true
 mortsom-environment = { workspace = true }
 mortsom-observers = { workspace = true }
 mortsom-scenario-kit = { workspace = true }
@@ -35,6 +38,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
+rustix.workspace = true
 mostro-core = { workspace = true }
 nostr-sdk = { workspace = true }
 nwc = { workspace = true }
@@ -44,7 +48,6 @@ inventory = { workspace = true }
 mortsom-android-driver = { workspace = true, features = ["testing"] }
 # `start_paused`: a test may assert a deadline without waiting for it.
 tokio = { workspace = true, features = ["test-util"] }
-tempfile = { workspace = true }
 assert_cmd = { workspace = true }
 predicates = { workspace = true }
 

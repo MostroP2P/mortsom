@@ -116,7 +116,7 @@ pub fn local_overlay_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{stem}{LOCAL_OVERLAY_SUFFIX}"))
 }
 
-fn read_layered(path: &Path) -> Result<Value, ConfigError> {
+pub(super) fn read_layered(path: &Path) -> Result<Value, ConfigError> {
     if !path.exists() {
         return Err(ConfigError::Read {
             path: path.display().to_string(),
@@ -133,7 +133,7 @@ fn read_layered(path: &Path) -> Result<Value, ConfigError> {
         .map_err(|e| ConfigError::Parse(e.to_string()))
 }
 
-fn reject_literal_secrets(raw: &Value) -> Result<(), ConfigError> {
+pub(super) fn reject_literal_secrets(raw: &Value) -> Result<(), ConfigError> {
     for key in ENV_ONLY_KEYS {
         let Some(value) = lookup_dotted(raw, key) else {
             continue;
@@ -182,6 +182,41 @@ mod tests {
             "/../../mortsom.toml.example"
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn desktop_configuration_does_not_require_an_android_section() {
+        let mut value: Value = toml::from_str(&example()).unwrap();
+        value.as_table_mut().unwrap().remove("android");
+        let config = Config::from_toml_str(&toml::to_string(&value).unwrap(), lookup).unwrap();
+        assert!(config.android.is_none());
+        assert!(config.require_android().is_err());
+        assert_eq!(config.ui_timeout_secs(), 30);
+    }
+
+    #[test]
+    fn shared_deadline_overrides_legacy_android_and_rejects_zero() {
+        let mut value: Value = toml::from_str(&example()).unwrap();
+        value["android"]
+            .as_table_mut()
+            .unwrap()
+            .insert("ui_timeout_secs".into(), Value::Integer(17));
+        let config = Config::from_toml_str(&toml::to_string(&value).unwrap(), lookup).unwrap();
+        assert_eq!(config.ui_timeout_secs(), 17);
+        value.as_table_mut().unwrap().insert(
+            "ui".into(),
+            toml::Value::Table(toml::Table::from_iter([(
+                "timeout_secs".into(),
+                Value::Integer(45),
+            )])),
+        );
+        let config = Config::from_toml_str(&toml::to_string(&value).unwrap(), lookup).unwrap();
+        assert_eq!(config.ui_timeout_secs(), 45);
+        value["ui"]["timeout_secs"] = Value::Integer(0);
+        assert!(matches!(
+            Config::from_toml_str(&toml::to_string(&value).unwrap(), lookup),
+            Err(ConfigError::Invalid(_))
+        ));
     }
 
     #[test]

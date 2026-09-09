@@ -10,7 +10,7 @@ use mortsom_app_contract::{
 use mortsom_common::Secret;
 
 use super::nav::go_home;
-use super::{dismiss_keyboard, expect, label, listed, present, tap, tap_unless_taken, type_into};
+use super::{dismiss_keyboard, expect, label, listed, present, tap, type_into};
 use crate::selectors::Ids;
 use crate::states::from_v2_label;
 
@@ -65,21 +65,12 @@ pub async fn create(
     // The sats field is numeric, so the keyboard is still up over the
     // bottom of the form -- submit included.
     dismiss_keyboard(device).await;
-    // The keyboard closing moves the button as it is pressed, so the first
-    // press is the one the app is most likely to drop.
-    // Submit publishes the order and waits on the network before the
-    // confirmation draws, so it is given the whole UI budget to answer --
-    // and asked again only if the form is still there, unsubmitted. A
-    // second press the app did act on publishes a second live order that
-    // `new_trade_id` never returns and cleanup never cancels.
-    tap_unless_taken(
-        device,
-        Ids::ORDER_CREATE_SUBMIT,
-        Ids::ORDER_CONFIRM_HOME,
-        device.ui_timeout,
-    )
-    .await?;
-    tap(device, Ids::ORDER_CONFIRM_HOME).await?;
+    // A still-enabled button does not prove the daemon rejected the first
+    // request. Submit once, then resolve its outcome through public UI.
+    tap(device, Ids::ORDER_CREATE_SUBMIT).await?;
+    if super::appears_within(device, Ids::ORDER_CONFIRM_HOME, device.ui_timeout).await? {
+        tap(device, Ids::ORDER_CONFIRM_HOME).await?;
+    }
     let id = new_trade_id(device, &known_before).await?;
     let state = observe(device, &OrderReference::with_kind(id.clone(), draft.kind))
         .await?
@@ -110,7 +101,22 @@ pub async fn find_and_take(
     tap(device, tab).await?;
     tap(device, &Ids::order_book_item(&order.id)).await?;
     tap(device, Ids::ORDER_TAKE_CONFIRM).await?;
-    expect(device, Ids::ORDER_STATUS).await
+    let form = match kind {
+        OrderKind::Sell => Ids::INVOICE_TEXT,
+        OrderKind::Buy => Ids::PAY_INVOICE_TEXT,
+    };
+    match super::first_present(device, &[form, Ids::ORDER_STATUS]).await? {
+        Some(id) if id == form => {
+            invoice_form_state(device, order).await?.ok_or_else(|| {
+                AdapterError::contract("take invoice form disappeared before verification")
+            })?;
+            Ok(())
+        }
+        Some(_) => verify_order_id(device, Ids::ORDER_ID, order).await,
+        None => Err(AdapterError::contract(
+            "take did not reach the expected invoice form or trade detail",
+        )),
+    }
 }
 
 /// Opens the trade detail of `order` from the trades list.
@@ -130,7 +136,11 @@ pub async fn observe(
     device: &DeviceContext<'_>,
     order: &OrderReference,
 ) -> Result<AppOrderState, AdapterError> {
+    if let Some(state) = invoice_form_state(device, order).await? {
+        return Ok(state);
+    }
     open_trade(device, order).await?;
+    verify_order_id(device, Ids::ORDER_ID, order).await?;
     let raw = label(device, Ids::ORDER_STATUS).await?;
     let state = from_v2_label(&raw).ok_or_else(|| {
         AdapterError::product(format!(
@@ -151,8 +161,11 @@ pub async fn pay_hold_invoice(
     order: &OrderReference,
     path: PaymentPath,
 ) -> Result<PaymentHandoff, AdapterError> {
-    open_trade(device, order).await?;
-    tap(device, Ids::TRADE_PAY_INVOICE).await?;
+    if !present(device, Ids::PAY_INVOICE_TEXT).await? {
+        open_trade(device, order).await?;
+        tap(device, Ids::TRADE_PAY_INVOICE).await?;
+    }
+    verify_order_id(device, Ids::PAY_ORDER_ID, order).await?;
     let invoice = label(device, Ids::PAY_INVOICE_TEXT)
         .await?
         .trim()
@@ -180,36 +193,120 @@ pub async fn pay_hold_invoice(
     })
 }
 
-/// Provides the buyer invoice through the connected wallet.
-///
-/// v2 asks NWC for the invoice and submits it in one step, so there is
-/// nothing to confirm: opening the screen is the whole action. The invoice
-/// is read back for payment correlation and is optional — the screen may
-/// already have left by the time it is looked for.
-///
-/// The manual form appearing instead means NWC could not produce an
-/// invoice. The harness has no invoice to type, so that is reported rather
-/// than worked around.
+async fn verify_order_id(
+    device: &DeviceContext<'_>,
+    id: &str,
+    order: &OrderReference,
+) -> Result<(), AdapterError> {
+    if label(device, id).await?.trim() != order.id {
+        return Err(AdapterError::contract(
+            "invoice or trade screen belongs to a different order",
+        ));
+    }
+    Ok(())
+}
+
+/// Manual invoice screens are waiting states only when their public order ID
+/// matches. Reading them must not leave the form before its next user action.
+async fn invoice_form_state(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<Option<AppOrderState>, AdapterError> {
+    for (form, id, raw) in [
+        (Ids::INVOICE_TEXT, Ids::INVOICE_ORDER_ID, "waiting-invoice"),
+        (Ids::PAY_INVOICE_TEXT, Ids::PAY_ORDER_ID, "waiting-payment"),
+    ] {
+        if present(device, form).await? {
+            verify_order_id(device, id, order).await?;
+            return Ok(Some(AppOrderState {
+                state: OrderState::Taken,
+                raw_label: raw.into(),
+            }));
+        }
+    }
+    Ok(None)
+}
+
+/// Opens the exact order's manual invoice form without replacing an existing
+/// form for that same order. Its public order ID binds the amount to the trade.
+async fn open_buyer_invoice(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<(), AdapterError> {
+    if present(device, Ids::INVOICE_TEXT).await?
+        && present(device, Ids::INVOICE_ORDER_ID).await?
+        && label(device, Ids::INVOICE_ORDER_ID).await?.trim() == order.id
+    {
+        return Ok(());
+    }
+    open_trade(device, order).await?;
+    tap(device, Ids::TRADE_ADD_INVOICE).await?;
+    if present(device, Ids::INVOICE_MANUAL).await? {
+        tap(device, Ids::INVOICE_MANUAL).await?;
+    }
+    expect(device, Ids::INVOICE_TEXT).await?;
+    if label(device, Ids::INVOICE_ORDER_ID).await?.trim() != order.id {
+        return Err(AdapterError::contract(
+            "buyer invoice form belongs to a different order",
+        ));
+    }
+    Ok(())
+}
+
+/// Reads the daemon-requested sats shown to the user before an invoice exists.
+pub async fn buyer_invoice_amount(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<u64, AdapterError> {
+    open_buyer_invoice(device, order).await?;
+    let raw = label(device, Ids::INVOICE_AMOUNT).await?;
+    let raw = raw.trim();
+    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err(AdapterError::contract(
+            "buyer invoice amount is not unsigned whole sats",
+        ));
+    }
+    raw.parse::<u64>()
+        .ok()
+        .filter(|amount| *amount > 0)
+        .ok_or_else(|| {
+            AdapterError::product("buyer invoice amount is zero or outside the supported range")
+        })
+}
+
+/// Submits a supplied invoice through the public manual form, or uses the
+/// existing connected-wallet flow when no invoice is supplied.
 pub async fn provide_buyer_invoice(
     device: &DeviceContext<'_>,
     order: &OrderReference,
     supplied: Option<&Secret>,
 ) -> Result<Option<Secret>, AdapterError> {
-    open_trade(device, order).await?;
-    tap(device, Ids::TRADE_ADD_INVOICE).await?;
     if let Some(invoice) = supplied {
-        // The caller issued this one on a node it holds. With no wallet
-        // connected the app opens the manual form directly; `invoice.manual`
-        // only exists on the path where a connected wallet failed, so it is
-        // tapped when it is there and skipped when it is not.
-        if present(device, Ids::INVOICE_MANUAL).await? {
-            tap(device, Ids::INVOICE_MANUAL).await?;
-        }
+        open_buyer_invoice(device, order).await?;
         type_into(device, Ids::INVOICE_TEXT, invoice.expose()).await?;
+        let entered = Secret::new(
+            device
+                .ui
+                .text_of(Ids::INVOICE_TEXT)
+                .await
+                .map_err(|_| AdapterError::contract("cannot verify buyer invoice text"))?,
+        );
+        if entered.expose().trim() != invoice.expose().trim() {
+            return Err(AdapterError::contract(
+                "buyer invoice field did not accept the supplied invoice",
+            ));
+        }
         tap(device, Ids::INVOICE_SUBMIT).await?;
-        expect(device, Ids::ORDER_ADD_FAB).await?;
+        expect(device, Ids::ORDER_STATUS).await?;
+        if label(device, Ids::ORDER_ID).await?.trim() != order.id {
+            return Err(AdapterError::contract(
+                "buyer invoice returned to a different trade",
+            ));
+        }
         return Ok(Some(invoice.clone()));
     }
+    open_trade(device, order).await?;
+    tap(device, Ids::TRADE_ADD_INVOICE).await?;
     if present(device, Ids::INVOICE_MANUAL).await? || present(device, Ids::INVOICE_TEXT).await? {
         return Err(AdapterError::product(
             "the app fell back to the manual invoice form: the connected wallet did not generate one",
@@ -249,7 +346,7 @@ pub async fn cancel_if_open(
 ) -> Result<CancelOutcome, AdapterError> {
     go_home(device).await?;
     tap(device, Ids::NAV_TRADES).await?;
-    if !present(device, &Ids::trades_item(&order.id)).await? {
+    if !super::appears_within(device, &Ids::trades_item(&order.id), device.ui_timeout).await? {
         return Ok(CancelOutcome::NotFound);
     }
     tap(device, &Ids::trades_item(&order.id)).await?;
@@ -259,7 +356,9 @@ pub async fn cancel_if_open(
         return Ok(CancelOutcome::AlreadyClosed);
     }
     if !present(device, Ids::TRADE_CANCEL).await? {
-        return Ok(CancelOutcome::AlreadyClosed);
+        return Err(AdapterError::contract(
+            "cancel control is absent without a confirmed terminal order state",
+        ));
     }
     tap(device, Ids::TRADE_CANCEL).await?;
     tap(device, Ids::TRADE_CANCEL_CONFIRM).await?;

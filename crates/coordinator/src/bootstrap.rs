@@ -52,13 +52,26 @@ pub async fn bootstrap_actor(
     recorder: &StepRecorder,
     checks: &mut DoctorReport,
 ) -> ActorSetup {
-    let actor = device.actor.as_str();
     let ctx = DeviceContext {
         actor: device.actor,
         ui: device.session.as_ref(),
-        ui_timeout: Duration::from_secs(config.android.ui_timeout_secs),
+        ui_timeout: Duration::from_secs(config.ui_timeout_secs()),
     };
-    let wallet = match device.actor {
+    bootstrap_session(config, adapter, ctx, env, artifacts, recorder, checks).await
+}
+
+/// The same bootstrap journey for any public UI session.
+pub async fn bootstrap_session(
+    config: &Config,
+    adapter: &dyn AppAdapter,
+    ctx: DeviceContext<'_>,
+    env: &TestEnvironment,
+    artifacts: &RunArtifacts,
+    recorder: &StepRecorder,
+    checks: &mut DoctorReport,
+) -> ActorSetup {
+    let actor = ctx.actor.as_str();
+    let wallet = match ctx.actor {
         Actor::Alice => &config.wallets.alice,
         Actor::Bob => &config.wallets.bob,
     };

@@ -164,9 +164,10 @@ pub async fn check_daemon(
     pubkey: PublicKey,
     run_relay: Option<&RunRelay>,
     report: &mut DoctorReport,
-) {
+) -> Option<DaemonInfo> {
     let probe = net.daemon(relays, pubkey).await;
     evaluate_daemon_with_run_relay(&probe, relays, run_relay, now_unix(), report);
+    probe.info
 }
 
 /// Pure evaluation of a daemon probe, with an injectable clock and the
@@ -345,11 +346,11 @@ pub async fn check_wallet(
     wallet: &WalletConfig,
     caps: Liquidity,
     report: &mut DoctorReport,
-) {
+) -> Option<WalletProbe> {
     let name = format!("wallet {label}");
     if let Some(unresolved) = unresolved_credential(wallet) {
         report.push(name, CheckStatus::Skip, unresolved);
-        return;
+        return None;
     }
     match net.wallet(label, wallet).await {
         Ok(probe) => {
@@ -394,8 +395,12 @@ pub async fn check_wallet(
                 (CheckStatus::Pass, detail)
             };
             report.push(name, status, detail);
+            Some(probe)
         }
-        Err(e) => report.push(name, CheckStatus::Fail, e.to_string()),
+        Err(e) => {
+            report.push(name, CheckStatus::Fail, e.to_string());
+            None
+        }
     }
 }
 

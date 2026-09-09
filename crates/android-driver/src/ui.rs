@@ -198,6 +198,8 @@ pub mod tests_support {
     pub struct ScriptedUi {
         present: Mutex<Vec<String>>,
         labels: Mutex<BTreeMap<String, String>>,
+        text: Mutex<BTreeMap<String, mortsom_common::Secret>>,
+        ignored_text: Mutex<Vec<String>>,
         calls: Mutex<Vec<String>>,
         on_tap: Mutex<BTreeMap<String, Vec<String>>>,
         /// Elements that disappear after `id` is tapped (navigation away).
@@ -217,9 +219,18 @@ pub mod tests_support {
         swallowed: Mutex<BTreeMap<String, u32>>,
         /// Controls the app has greyed out while it works.
         disabled: Mutex<Vec<String>>,
+        end_failures: Mutex<u32>,
     }
 
     impl ScriptedUi {
+        /// Acknowledges edits without accepting their values for this control.
+        pub fn ignore_text(&self, id: &str) {
+            self.ignored_text.lock().unwrap().push(id.into());
+        }
+        /// Injects transient shutdown failures while retaining this fake session.
+        pub fn fail_end_times(&self, failures: u32) {
+            *self.end_failures.lock().unwrap() = failures;
+        }
         /// Marks `ids` as present.
         pub fn present(&self, ids: &[&str]) {
             self.present
@@ -341,29 +352,34 @@ pub mod tests_support {
         pub fn has_anywhere(&self, id: &str) -> bool {
             self.has(id) || self.below.lock().unwrap().iter().any(|p| p == id)
         }
+
+        /// One probe against a possibly still-drawing element: consumes a
+        /// pending frame and reports whether the element is up yet.
+        fn drawn(&self, id: &str) -> bool {
+            let mut pending = self.pending.lock().unwrap();
+            match pending.get_mut(id) {
+                Some(left) if *left > 0 => {
+                    *left -= 1;
+                    false
+                }
+                Some(_) => {
+                    pending.remove(id);
+                    true
+                }
+                None => true,
+            }
+        }
     }
 
     #[async_trait]
     impl UiSession for ScriptedUi {
         async fn exists(&self, id: &str) -> Result<bool, AppiumError> {
-            let drawn = {
-                let mut pending = self.pending.lock().unwrap();
-                match pending.get_mut(id) {
-                    Some(left) if *left > 0 => {
-                        *left -= 1;
-                        false
-                    }
-                    Some(_) => {
-                        pending.remove(id);
-                        true
-                    }
-                    None => true,
-                }
-            };
-            Ok(drawn && self.has(id) && !self.covered(id))
+            Ok(self.drawn(id) && self.has(id) && !self.covered(id))
         }
         async fn exists_anywhere(&self, id: &str) -> Result<bool, AppiumError> {
-            Ok(self.has_anywhere(id) && !self.covered(id))
+            // An element the screen has not drawn yet is absent below the
+            // fold as much as above it: scrolling cannot find it either.
+            Ok(self.drawn(id) && self.has_anywhere(id) && !self.covered(id))
         }
         async fn wait_for(&self, id: &str, _: Duration) -> Result<(), AppiumError> {
             // A wait scrolls before it gives up, so it sees below the fold --
@@ -427,10 +443,28 @@ pub mod tests_support {
                 .lock()
                 .unwrap()
                 .push(format!("type {id} ({} chars)", text.len()));
+            if !self
+                .ignored_text
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|ignored| ignored == id)
+            {
+                self.text
+                    .lock()
+                    .unwrap()
+                    .insert(id.into(), mortsom_common::Secret::new(text));
+            }
             Ok(())
         }
-        async fn text_of(&self, _: &str) -> Result<String, AppiumError> {
-            Ok(String::new())
+        async fn text_of(&self, id: &str) -> Result<String, AppiumError> {
+            Ok(self
+                .text
+                .lock()
+                .unwrap()
+                .get(id)
+                .map(|value| value.expose().to_owned())
+                .unwrap_or_default())
         }
         async fn is_enabled(&self, id: &str) -> Result<bool, AppiumError> {
             Ok(!self.disabled.lock().unwrap().iter().any(|d| d == id))
@@ -476,6 +510,15 @@ pub mod tests_support {
             Ok(())
         }
         async fn end(&self) -> Result<(), AppiumError> {
+            let mut failures = self.end_failures.lock().unwrap();
+            if *failures > 0 {
+                *failures -= 1;
+                self.calls.lock().unwrap().push("end failed".into());
+                return Err(AppiumError::WebDriver(
+                    crate::webdriver::WebDriverError::Transport("injected cleanup failure".into()),
+                ));
+            }
+            self.calls.lock().unwrap().push("end session".into());
             Ok(())
         }
     }

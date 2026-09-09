@@ -175,24 +175,26 @@ async fn the_keyboard_is_put_away_before_the_order_is_submitted() {
     );
 }
 
-/// A tap that lands while the app is rebuilding a screen is swallowed: the
-/// control is there, the driver hits it, and nothing happens. Waiting
-/// longer cannot help -- nobody is going to act on it. Submit is the tap
-/// this bites, because the keyboard closing just above it moves the button
-/// as it is pressed; a real Polar run left the order form on screen with
-/// every field filled and `order.confirm.home` never arriving.
+/// A lost acknowledgement cannot safely distinguish a dropped tap from an order
+/// accepted by the daemon. Preserve uncertainty and never create a second order.
 #[tokio::test]
-async fn a_swallowed_submit_is_tapped_again() {
+async fn a_swallowed_submit_is_reported_without_retrying_publication() {
     let ui = app_with_orders();
     adapter().onboard(&device(&ui), &env()).await.unwrap();
     ui.swallows_taps(Ids::ORDER_CREATE_SUBMIT, 1);
-
-    let order = adapter()
-        .create_order(&device(&ui), &draft())
-        .await
-        .unwrap();
-
-    assert_eq!(order.id.as_deref(), Some("o1"), "the order was submitted");
+    assert!(
+        adapter()
+            .create_order(&device(&ui), &draft())
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        ui.calls()
+            .iter()
+            .filter(|call| *call == "tap order.create.submit")
+            .count(),
+        1
+    );
 }
 
 /// Submit is not a button that may be pressed twice: the first press
@@ -211,12 +213,12 @@ async fn a_submit_the_app_took_is_not_sent_twice() {
     ui.on_tap_hide(Ids::ORDER_CREATE_SUBMIT, &[Ids::ORDER_CREATE_SUBMIT]);
     ui.appears_after(Ids::ORDER_CONFIRM_HOME, 6);
 
-    let order = adapter()
-        .create_order(&device(&ui), &draft())
-        .await
-        .unwrap();
+    let outcome = adapter().create_order(&device(&ui), &draft()).await;
 
-    assert_eq!(order.id.as_deref(), Some("o1"), "the order was submitted");
+    assert!(
+        outcome.is_err(),
+        "late confirmation is an uncertain outcome"
+    );
     let submits = ui
         .calls()
         .iter()
@@ -242,12 +244,12 @@ async fn a_submit_still_working_is_waited_for_not_pressed_again() {
     ui.disables(&[Ids::ORDER_CREATE_SUBMIT]);
     ui.appears_after(Ids::ORDER_CONFIRM_HOME, 6);
 
-    let order = adapter()
-        .create_order(&device(&ui), &draft())
-        .await
-        .unwrap();
+    let outcome = adapter().create_order(&device(&ui), &draft()).await;
 
-    assert_eq!(order.id.as_deref(), Some("o1"), "the order was submitted");
+    assert!(
+        outcome.is_err(),
+        "late confirmation is an uncertain outcome"
+    );
     let submits = ui
         .calls()
         .iter()
@@ -341,6 +343,38 @@ async fn node_selection_uses_the_dialog_only_when_the_default_is_shown() {
     assert!(!new_calls.contains(&"tap settings.relays.add".to_owned()));
 }
 
+/// A retained profile's relay list is not drawn the instant the relays
+/// route opens. Asking once and moving on read "not listed", opened the add
+/// dialog, and the app answered that the relay was already there while the
+/// dialog covered the list -- which a live recovery reported as the relay
+/// row not appearing within the whole UI timeout.
+#[tokio::test]
+async fn a_relay_list_that_is_still_drawing_is_waited_for_not_re_added() {
+    let ui = fresh_app();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.on_tap_relabel(
+        Ids::NODE_CUSTOM_CONFIRM,
+        Ids::SETTINGS_MOSTRO_NODE_PUBKEY,
+        PUBKEY,
+    );
+    adapter()
+        .configure_node_and_relay(&device(&ui), &env())
+        .await
+        .unwrap();
+
+    ui.appears_after(RELAY_ROW, 3);
+    let before = ui.calls().len();
+    adapter()
+        .configure_node_and_relay(&device(&ui), &env())
+        .await
+        .unwrap();
+    let new_calls = &ui.calls()[before..];
+    assert!(
+        !new_calls.contains(&"tap settings.relays.add".to_owned()),
+        "{new_calls:?}"
+    );
+}
+
 #[tokio::test]
 async fn nwc_setup_types_the_uri_without_recording_it() {
     let ui = fresh_app();
@@ -430,7 +464,12 @@ fn app_with_orders() -> FakeUi {
     );
     ui.on_tap(
         Ids::TRADE_PAY_INVOICE,
-        &[Ids::PAY_INVOICE_TEXT, Ids::PAY_NWC, Ids::PAY_CANCEL],
+        &[
+            Ids::PAY_INVOICE_TEXT,
+            Ids::PAY_ORDER_ID,
+            Ids::PAY_NWC,
+            Ids::PAY_CANCEL,
+        ],
     );
     // With a wallet connected v2 generates and submits the buyer invoice in
     // one step; the readout is all the screen leaves behind.
@@ -451,6 +490,7 @@ fn app_with_orders() -> FakeUi {
     ui.label(Ids::ORDER_STATUS, "pending");
     ui.label(Ids::ORDER_ID, "o1");
     ui.label(Ids::PAY_INVOICE_TEXT, "lnbc1000n1secretinvoice");
+    ui.label(Ids::PAY_ORDER_ID, "o1");
     ui.label(Ids::INVOICE_NWC_TEXT, "lnbc1000n1buyerinvoice");
     ui
 }
@@ -526,6 +566,47 @@ async fn trade_actions_drive_the_v2_controls_and_map_v2_states() {
 }
 
 #[tokio::test]
+async fn cancellation_waits_for_the_trade_list_to_finish_navigation() {
+    let ui = app_with_orders();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    ui.label(Ids::ORDER_STATUS, "pending");
+    ui.appears_after("trades.item.o1", 2);
+
+    assert_eq!(
+        a.cancel_if_open(&device(&ui), &OrderReference::new("o1"))
+            .await
+            .unwrap(),
+        CancelOutcome::Cancelled
+    );
+    assert!(ui.calls().contains(&"tap trade.cancel.confirm".to_owned()));
+}
+
+#[tokio::test]
+async fn missing_cancel_control_does_not_prove_an_open_or_unknown_order_is_closed() {
+    for status in ["active", "loading", "unknown-state"] {
+        let ui = app_with_orders();
+        let a = adapter();
+        a.onboard(&device(&ui), &env()).await.unwrap();
+        a.create_order(&device(&ui), &draft()).await.unwrap();
+        ui.label(Ids::ORDER_STATUS, status);
+        ui.on_tap_hide("trades.item.o1", &[Ids::TRADE_CANCEL]);
+
+        let error = a
+            .cancel_if_open(&device(&ui), &OrderReference::new("o1"))
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            error.category,
+            mortsom_common::FailureCategory::AutomationContract
+        );
+        assert!(!ui.calls().contains(&"tap trade.cancel.confirm".to_owned()));
+    }
+}
+
+#[tokio::test]
 async fn loading_status_keeps_the_caller_waiting_and_cancel_paths_work() {
     let ui = app_with_orders();
     let a = adapter();
@@ -559,9 +640,14 @@ fn app_without_a_wallet() -> FakeUi {
     // and the pay screen offers no auto-pay button.
     ui.on_tap(
         Ids::TRADE_ADD_INVOICE,
-        &[Ids::INVOICE_TEXT, Ids::INVOICE_SUBMIT],
+        &[
+            Ids::INVOICE_TEXT,
+            Ids::INVOICE_SUBMIT,
+            Ids::INVOICE_ORDER_ID,
+        ],
     );
-    ui.on_tap(Ids::INVOICE_SUBMIT, &[Ids::ORDER_ADD_FAB]);
+    ui.label(Ids::INVOICE_ORDER_ID, "o1");
+    ui.on_tap(Ids::INVOICE_SUBMIT, &[Ids::ORDER_STATUS, Ids::ORDER_ID]);
     ui
 }
 
@@ -641,3 +727,140 @@ async fn a_supplied_buyer_invoice_is_typed_into_the_manual_form() {
     assert!(calls.contains("tap invoice.submit"));
     assert!(!calls.contains("mortsominvoice"), "{calls}");
 }
+
+#[tokio::test]
+async fn an_enabled_submit_after_a_confirmation_timeout_is_never_republished() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.appears_after(Ids::ORDER_CONFIRM_HOME, 100);
+    let _outcome = adapter().create_order(&device(&ui), &draft()).await;
+    assert_eq!(
+        ui.calls()
+            .iter()
+            .filter(|call| *call == "tap order.create.submit")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn recovery_refuses_an_empty_identity_without_generating_a_replacement() {
+    let ui = fresh_app();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.label(Ids::KEYS_PUBLIC_KEY, "");
+    let error = adapter().existing_identity(&device(&ui)).await.unwrap_err();
+    assert!(error.message.contains("identity is missing"));
+    assert!(!ui.calls().iter().any(|call| call == "tap keys.generate"));
+}
+
+#[tokio::test]
+async fn buyer_invoice_reads_the_requested_amount_and_reuses_the_open_form() {
+    let ui = app_without_a_wallet();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    ui.on_tap(
+        Ids::TRADE_ADD_INVOICE,
+        &[
+            Ids::INVOICE_TEXT,
+            Ids::INVOICE_SUBMIT,
+            Ids::INVOICE_ORDER_ID,
+            "invoice.amount",
+        ],
+    );
+    ui.label("invoice.amount", "999");
+    let order = OrderReference::new("o1");
+    assert_eq!(
+        a.buyer_invoice_amount(&device(&ui), &order).await.unwrap(),
+        999
+    );
+    a.provide_buyer_invoice(&device(&ui), &order, Some(&Secret::new("private-invoice")))
+        .await
+        .unwrap();
+    assert_eq!(
+        ui.calls()
+            .iter()
+            .filter(|call| *call == "tap trade.addInvoice")
+            .count(),
+        1
+    );
+    assert_eq!(
+        ui.calls()
+            .iter()
+            .filter(|call| *call == "tap invoice.submit")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn buyer_invoice_refuses_zero_or_non_numeric_amounts_before_submission() {
+    for value in ["0", "-1", "999 sats", "1.5", "18446744073709551616"] {
+        let ui = app_without_a_wallet();
+        let a = adapter();
+        a.onboard(&device(&ui), &env()).await.unwrap();
+        a.create_order(&device(&ui), &draft()).await.unwrap();
+        ui.on_tap(
+            Ids::TRADE_ADD_INVOICE,
+            &[
+                Ids::INVOICE_TEXT,
+                Ids::INVOICE_SUBMIT,
+                Ids::INVOICE_ORDER_ID,
+                "invoice.amount",
+            ],
+        );
+        ui.label("invoice.amount", value);
+        assert!(
+            a.buyer_invoice_amount(&device(&ui), &OrderReference::new("o1"))
+                .await
+                .is_err()
+        );
+        assert!(!ui.calls().iter().any(|call| call == "tap invoice.submit"));
+    }
+}
+
+#[tokio::test]
+async fn an_ignored_manual_invoice_edit_is_never_submitted() {
+    let ui = app_without_a_wallet();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    ui.ignore_text(Ids::INVOICE_TEXT);
+    let error = a
+        .provide_buyer_invoice(
+            &device(&ui),
+            &OrderReference::new("o1"),
+            Some(&Secret::new("private-invoice")),
+        )
+        .await
+        .unwrap_err();
+    assert!(!error.message.contains("private-invoice"));
+    assert!(!ui.calls().iter().any(|call| call == "tap invoice.submit"));
+}
+
+#[tokio::test]
+async fn a_manual_invoice_form_for_another_order_is_never_reused() {
+    let ui = app_without_a_wallet();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    ui.present(&[Ids::INVOICE_TEXT, Ids::INVOICE_ORDER_ID]);
+    ui.label(Ids::INVOICE_ORDER_ID, "other-order");
+    let error = a
+        .provide_buyer_invoice(
+            &device(&ui),
+            &OrderReference::new("o1"),
+            Some(&Secret::new("private-invoice")),
+        )
+        .await
+        .unwrap_err();
+    assert!(error.message.contains("different order"));
+    assert!(
+        !ui.calls()
+            .iter()
+            .any(|call| call == "tap invoice.submit" || call.starts_with("type invoice.text"))
+    );
+}
+
+#[path = "tests_take.rs"]
+mod take;

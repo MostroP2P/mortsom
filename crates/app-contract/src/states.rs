@@ -18,6 +18,8 @@ pub enum OrderState {
     Active,
     /// Buyer reported the fiat payment.
     FiatSent,
+    /// Seller released escrow; the buyer payout is still unresolved.
+    PayoutPending,
     /// Seller released; sats settled to the buyer.
     Completed,
     /// Cancelled before completion.
@@ -30,11 +32,12 @@ pub enum OrderState {
 
 impl OrderState {
     /// Every state, in lifecycle order.
-    pub const ALL: [OrderState; 8] = [
+    pub const ALL: [OrderState; 9] = [
         OrderState::Pending,
         OrderState::Taken,
         OrderState::Active,
         OrderState::FiatSent,
+        OrderState::PayoutPending,
         OrderState::Completed,
         OrderState::Cancelled,
         OrderState::Expired,
@@ -48,6 +51,7 @@ impl OrderState {
             OrderState::Taken => "taken",
             OrderState::Active => "active",
             OrderState::FiatSent => "fiat-sent",
+            OrderState::PayoutPending => "payout-pending",
             OrderState::Completed => "completed",
             OrderState::Cancelled => "cancelled",
             OrderState::Expired => "expired",
@@ -74,8 +78,9 @@ impl OrderState {
             Pending => matches!(next, Taken | Cancelled | Expired),
             Taken => matches!(next, Active | Cancelled | Expired | Pending),
             Active => matches!(next, FiatSent | Cancelled | Disputed | Expired),
-            FiatSent => matches!(next, Completed | Disputed | Cancelled),
-            Disputed => matches!(next, Completed | Cancelled),
+            FiatSent => matches!(next, PayoutPending | Completed | Disputed | Cancelled),
+            PayoutPending => matches!(next, Completed),
+            Disputed => matches!(next, PayoutPending | Completed | Cancelled),
             Completed | Cancelled | Expired => false,
         }
     }
@@ -86,11 +91,8 @@ impl OrderState {
     /// mostro-core (`s` tag of kind 38383 or the app's readout of the same
     /// value); `payment-failed` is an app-local readout (the buyer payout
     /// failed after release), accepted so the adapter never mistakes it for
-    /// an unknown state. Intermediate statuses map to the last durable
-    /// business state they belong to: `settled-hold-invoice` (the app's
-    /// "paying sats") stays FiatSent because settlement is asserted only on
-    /// `success` (spec §8), even though the app treats it as terminal for
-    /// its own session bookkeeping.
+    /// an unknown state. Escrow settlement and a failed buyer payment stay
+    /// nonterminal: the payout may still complete after a daemon retry.
     pub fn from_protocol_status(status: &str) -> Option<OrderState> {
         Some(match status.trim() {
             "pending" => OrderState::Pending,
@@ -100,7 +102,10 @@ impl OrderState {
             | "waiting-maker-bond"
             | "in-progress" => OrderState::Taken,
             "active" => OrderState::Active,
-            "fiat-sent" | "settled-hold-invoice" | "payment-failed" => OrderState::FiatSent,
+            "fiat-sent" => OrderState::FiatSent,
+            "payout-pending" | "settled-hold-invoice" | "payment-failed" => {
+                OrderState::PayoutPending
+            }
             "success" | "completed-by-admin" | "settled-by-admin" => OrderState::Completed,
             "canceled" | "cooperatively-canceled" | "canceled-by-admin" => OrderState::Cancelled,
             "expired" => OrderState::Expired,
@@ -160,7 +165,7 @@ mod tests {
         );
         assert_eq!(
             OrderState::from_protocol_status("settled-hold-invoice"),
-            Some(OrderState::FiatSent)
+            Some(OrderState::PayoutPending)
         );
         assert_eq!(
             OrderState::from_protocol_status("success"),
@@ -196,9 +201,29 @@ mod tests {
     }
 
     #[test]
+    fn escrow_release_is_nonterminal_and_cannot_regress_to_fiat_exchange() {
+        let pending = OrderState::from_protocol_status("settled-hold-invoice").unwrap();
+        assert_eq!(pending.as_str(), "payout-pending");
+        assert!(!pending.is_terminal());
+        assert!(OrderState::FiatSent.may_transition_to(pending));
+        assert!(OrderState::Disputed.may_transition_to(pending));
+        assert!(pending.may_transition_to(OrderState::Completed));
+        for invalid in [
+            OrderState::FiatSent,
+            OrderState::Active,
+            OrderState::Cancelled,
+        ] {
+            assert!(!pending.may_transition_to(invalid));
+        }
+        for label in ["payout-pending", "payment-failed"] {
+            assert_eq!(OrderState::from_protocol_status(label), Some(pending));
+        }
+    }
+
+    #[test]
     fn happy_path_is_legal_and_skipping_payment_is_not() {
         use OrderState::*;
-        let path = [Pending, Taken, Active, FiatSent, Completed];
+        let path = [Pending, Taken, Active, FiatSent, PayoutPending, Completed];
         for pair in path.windows(2) {
             assert!(pair[0].may_transition_to(pair[1]), "{pair:?}");
         }

@@ -174,12 +174,27 @@ pub fn publish_run(
     out: &Path,
     options: PublishOptions,
 ) -> Result<PublishManifest, PublishError> {
-    let run_dir = Path::new(&config.run.artifacts_dir).join(run_id);
+    publish_artifacts(
+        &crate::config::PublishSettings::from(config),
+        run_id,
+        out,
+        options,
+    )
+}
+
+/// Sanitizes existing evidence using only artifact settings and known secrets.
+pub fn publish_artifacts(
+    settings: &crate::config::PublishSettings,
+    run_id: &str,
+    out: &Path,
+    options: PublishOptions,
+) -> Result<PublishManifest, PublishError> {
+    let run_dir = Path::new(&settings.artifacts.artifacts_dir).join(run_id);
     if !run_dir.is_dir() {
         return Err(PublishError::MissingRun(run_dir));
     }
-    let redactor = Redactor::new().with_secrets(config.wallets.secrets());
-    let secrets = config.wallets.secrets();
+    let redactor = Redactor::new().with_secrets(&settings.secrets);
+    let secrets = settings.secrets.iter().collect::<Vec<_>>();
     std::fs::create_dir_all(out).map_err(|source| PublishError::Io {
         path: out.to_path_buf(),
         source,

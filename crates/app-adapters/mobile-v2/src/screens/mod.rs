@@ -193,6 +193,26 @@ pub async fn dismiss_keyboard(device: &DeviceContext<'_>) {
     }
 }
 
+/// Whether `id` shows up anywhere in a list within `patience`. A list is
+/// drawn after its route: what is absent on the first probe may be there on
+/// the next, so a single `listed` call reads a loading screen as an answer.
+pub async fn listed_within(
+    device: &DeviceContext<'_>,
+    id: &str,
+    patience: std::time::Duration,
+) -> Result<bool, AdapterError> {
+    let deadline = tokio::time::Instant::now() + patience;
+    loop {
+        if listed(device, id).await? {
+            return Ok(true);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(SCREEN_POLL).await;
+    }
+}
+
 /// Whether `id` is present right now.
 pub async fn present(device: &DeviceContext<'_>, id: &str) -> Result<bool, AdapterError> {
     device

@@ -10,6 +10,9 @@ use async_trait::async_trait;
 use thiserror::Error;
 use tokio::sync::Mutex;
 
+#[cfg(target_os = "linux")]
+mod group;
+
 /// A command to run: program, arguments and extra environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
@@ -142,35 +145,129 @@ pub struct TokioRunner;
 pub struct TokioChild {
     child: Mutex<tokio::process::Child>,
     pid: Option<u32>,
+    stopped: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
 impl ChildProcess for TokioChild {
     async fn kill(&self) -> Result<(), ProcessError> {
         let mut child = self.child.lock().await;
-        if let Ok(Some(_)) = child.try_wait() {
+        if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
             return Ok(());
         }
-        #[cfg(unix)]
-        if let Some(pid) = self.pid {
-            // Kill the whole process group first; the child itself is the
-            // group leader because it was spawned with `process_group(0)`.
-            let _ = tokio::process::Command::new("kill")
-                .args(["-9", "--", &format!("-{pid}")])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await;
+        #[cfg(not(target_os = "linux"))]
+        if child.try_wait().map_err(process_cleanup_error)?.is_some() {
+            self.stopped
+                .store(true, std::sync::atomic::Ordering::Release);
+            return Ok(());
         }
-        child.kill().await.map_err(|e| ProcessError::Spawn {
-            command: "kill".into(),
-            message: e.to_string(),
-        })
+        #[cfg(target_os = "linux")]
+        self.stop_owned_group().await?;
+        #[cfg(all(unix, not(target_os = "linux")))]
+        if let Some(pid) = self.pid {
+            let status = tokio::process::Command::new("kill")
+                .args(["-9", "--", &format!("-{pid}")])
+                .status()
+                .await
+                .map_err(process_cleanup_error)?;
+            if !status.success() {
+                return Err(process_cleanup_error("process group kill failed"));
+            }
+        }
+        #[cfg(not(unix))]
+        child.start_kill().map_err(process_cleanup_error)?;
+        child.wait().await.map_err(process_cleanup_error)?;
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::Release);
+        Ok(())
     }
 
     async fn is_alive(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        let _child = self.child.lock().await;
+        if self.stopped.load(std::sync::atomic::Ordering::Acquire) {
+            return false;
+        }
+        #[cfg(target_os = "linux")]
+        return match self.group_status() {
+            Ok(status) => status.is_none(),
+            Err(cause) => {
+                tracing::warn!(%cause, "cannot inspect owned child");
+                false
+            }
+        };
+        #[cfg(not(target_os = "linux"))]
         matches!(self.child.lock().await.try_wait(), Ok(None))
+    }
+}
+
+fn process_cleanup_error(cause: impl std::fmt::Display) -> ProcessError {
+    ProcessError::Spawn {
+        command: "owned process cleanup".into(),
+        message: cause.to_string(),
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl TokioChild {
+    async fn stop_owned_group(&self) -> Result<(), ProcessError> {
+        self.kill_owned_group()?;
+        let pid = self
+            .pid
+            .ok_or_else(|| process_cleanup_error("missing child identity"))?;
+        tokio::time::timeout(Duration::from_secs(5), async {
+            let mut tick = tokio::time::interval(Duration::from_millis(25));
+            loop {
+                tick.tick().await;
+                if !group::has_running_members(pid).map_err(process_cleanup_error)? {
+                    return Ok(());
+                }
+                self.kill_owned_group()?;
+            }
+        })
+        .await
+        .map_err(|_| ProcessError::Timeout {
+            command: "owned process group shutdown".into(),
+            timeout: Duration::from_secs(5),
+        })?
+    }
+
+    fn group_pid(&self) -> Result<rustix::process::Pid, ProcessError> {
+        self.pid
+            .and_then(|pid| i32::try_from(pid).ok())
+            .and_then(rustix::process::Pid::from_raw)
+            .ok_or_else(|| process_cleanup_error("missing child identity"))
+    }
+
+    fn group_status(&self) -> Result<Option<rustix::process::WaitIdStatus>, ProcessError> {
+        use rustix::process::{WaitId, WaitIdOptions, waitid};
+        // NOWAIT leaves an exited leader unreaped. Its PID/group ID cannot be
+        // reused while we retain this child, even after is_alive reports false.
+        waitid(
+            WaitId::Pid(self.group_pid()?),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        )
+        .map_err(process_cleanup_error)
+    }
+
+    fn kill_owned_group(&self) -> Result<(), ProcessError> {
+        self.group_status()?; // ECHILD refuses an identity we no longer own.
+        match rustix::process::kill_process_group(self.group_pid()?, rustix::process::Signal::KILL)
+        {
+            Ok(()) | Err(rustix::io::Errno::SRCH) => Ok(()),
+            Err(cause) => Err(process_cleanup_error(cause)),
+        }
+    }
+}
+
+impl Drop for TokioChild {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        if !self.stopped.load(std::sync::atomic::Ordering::Acquire)
+            && let Err(cause) = self.kill_owned_group()
+        {
+            tracing::warn!(%cause, "cannot stop dropped owned process group");
+        }
     }
 }
 
@@ -239,6 +336,7 @@ impl CommandRunner for TokioRunner {
         Ok(Box::new(TokioChild {
             child: Mutex::new(child),
             pid,
+            stopped: std::sync::atomic::AtomicBool::new(false),
         }))
     }
 }
@@ -293,6 +391,39 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(slow, ProcessError::Timeout { .. }));
+    }
+
+    #[tokio::test]
+    #[cfg(target_os = "linux")]
+    async fn killing_an_exited_leader_stops_its_surviving_descendant() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("descendant.pid");
+        let child = TokioRunner
+            .spawn(
+                &Command::new("sh", &["-c", "sleep 2 & echo $!; exit 0"]),
+                Some(&log),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while child.is_alive().await {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        let pid: u32 = std::fs::read_to_string(log)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        child.kill().await.unwrap();
+        let state = std::fs::read_to_string(format!("/proc/{pid}/stat"));
+        assert!(
+            state.is_err() || state.unwrap().split(") ").nth(1).unwrap().starts_with('Z'),
+            "successful group cleanup must already have stopped descendants"
+        );
+        child.kill().await.unwrap();
     }
 
     #[tokio::test]

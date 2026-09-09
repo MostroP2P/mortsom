@@ -18,6 +18,10 @@ use thiserror::Error;
 
 use crate::lnd_target;
 
+mod amounts;
+mod records;
+mod requests;
+
 /// Timeout for a single gRPC call.
 pub const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -35,6 +39,32 @@ pub const MAX_ROUTING_FEE_SATS: i64 = 50;
 /// operation, never a credential or an invoice.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum LndError {
+    /// A payment reference must be exactly a 32-byte hexadecimal hash.
+    #[error("{label}: invalid LND payment hash")]
+    InvalidHash {
+        /// Wallet label.
+        label: String,
+    },
+    /// Structured RPC failure; server text may contain private payment details.
+    #[error("{label}: LND {operation} failed with {code:?}")]
+    Rpc {
+        /// Wallet label.
+        label: String,
+        /// Operation that failed.
+        operation: &'static str,
+        /// Public gRPC status category.
+        code: fedimint_tonic_lnd::tonic::Code,
+    },
+    /// Amounts must preserve whole satoshis without clamping or truncation.
+    #[error("{label}: invalid LND {field} amount {value}")]
+    InvalidAmount {
+        /// Wallet label.
+        label: String,
+        /// Amount field.
+        field: &'static str,
+        /// Rejected signed amount.
+        value: i128,
+    },
     /// A configured credential file is not where the config says it is.
     #[error("{label}: LND {field} file not found: {path}")]
     CredentialNotFound {
@@ -221,7 +251,14 @@ impl LndWallet {
                 "add_invoice",
                 client.lightning().add_invoice(lnrpc::Invoice {
                     memo: memo.to_owned(),
-                    value: sats as i64,
+                    value: i64::try_from(sats)
+                        .ok()
+                        .filter(|sats| *sats > 0)
+                        .ok_or_else(|| LndError::InvalidAmount {
+                            label: self.label.clone(),
+                            field: "invoice satoshi",
+                            value: sats.into(),
+                        })?,
                     ..Default::default()
                 }),
             )
@@ -244,21 +281,24 @@ impl LndWallet {
     /// here, because it arrives as the first update.
     pub async fn start_payment(&self, invoice: &Secret) -> Result<String, LndError> {
         let mut client = self.client.clone();
-        let mut stream = client
-            .router()
-            .send_payment_v2(routerrpc::SendPaymentRequest {
-                payment_request: invoice.expose().trim().to_owned(),
-                timeout_seconds: PAYMENT_TIMEOUT.as_secs() as i32,
-                fee_limit_sat: MAX_ROUTING_FEE_SATS,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| self.failed("send_payment_v2", e.to_string()))?
+        let mut stream = self
+            .call(
+                "send_payment_v2",
+                client
+                    .router()
+                    .send_payment_v2(routerrpc::SendPaymentRequest {
+                        payment_request: invoice.expose().trim().to_owned(),
+                        timeout_seconds: PAYMENT_TIMEOUT.as_secs() as i32,
+                        fee_limit_sat: MAX_ROUTING_FEE_SATS,
+                        ..Default::default()
+                    }),
+            )
+            .await?
             .into_inner();
 
-        let first = stream
-            .message()
+        let first = tokio::time::timeout(RPC_TIMEOUT, stream.message())
             .await
+            .map_err(|_| self.timeout("initial payment update"))?
             .map_err(|e| self.failed("payment stream", e.to_string()))?
             .ok_or_else(|| LndError::NoTerminalStatus {
                 label: self.label.clone(),
@@ -314,16 +354,19 @@ impl LndWallet {
     /// definitively. For a hold invoice use [`LndWallet::start_payment`].
     pub async fn pay_invoice(&self, invoice: &Secret) -> Result<LndPayment, LndError> {
         let mut client = self.client.clone();
-        let mut stream = client
-            .router()
-            .send_payment_v2(routerrpc::SendPaymentRequest {
-                payment_request: invoice.expose().trim().to_owned(),
-                timeout_seconds: PAYMENT_TIMEOUT.as_secs() as i32,
-                fee_limit_sat: MAX_ROUTING_FEE_SATS,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| self.failed("send_payment_v2", e.to_string()))?
+        let mut stream = self
+            .call(
+                "send_payment_v2",
+                client
+                    .router()
+                    .send_payment_v2(routerrpc::SendPaymentRequest {
+                        payment_request: invoice.expose().trim().to_owned(),
+                        timeout_seconds: PAYMENT_TIMEOUT.as_secs() as i32,
+                        fee_limit_sat: MAX_ROUTING_FEE_SATS,
+                        ..Default::default()
+                    }),
+            )
+            .await?
             .into_inner();
 
         let mut hash = String::new();
@@ -337,7 +380,7 @@ impl LndWallet {
                 Ok(lnrpc::payment::PaymentStatus::Succeeded) => {
                     return Ok(LndPayment {
                         hash: update.payment_hash,
-                        fees_paid_sats: (update.fee_msat / 1000).max(0) as u64,
+                        fees_paid_sats: amounts::fees(&self.label, update.fee_msat)?,
                     });
                 }
                 Ok(lnrpc::payment::PaymentStatus::Failed) => {
@@ -385,56 +428,33 @@ impl LndWallet {
         &self,
         payment_hash: &str,
     ) -> Result<Option<(u64, u64, LndPaymentState)>, LndError> {
-        let Some(hash_bytes) = hex_to_bytes(payment_hash) else {
-            return Err(self.failed("track_payment_v2", "payment hash is not hex".to_owned()));
-        };
         let mut client = self.client.clone();
-        let mut stream = match client
-            .router()
-            .track_payment_v2(routerrpc::TrackPaymentRequest {
-                payment_hash: hash_bytes,
-                no_inflight_updates: true,
-            })
-            .await
-        {
-            Ok(response) => response.into_inner(),
-            Err(status) if status.code() == fedimint_tonic_lnd::tonic::Code::NotFound => {
-                return Ok(None);
-            }
-            Err(status) => return Err(self.failed("track_payment_v2", status.to_string())),
-        };
-        let update = match tokio::time::timeout(RPC_TIMEOUT, stream.message())
-            .await
-            .map_err(|_| self.timeout("track_payment_v2"))?
-        {
-            Ok(Some(update)) => update,
-            Ok(None) => return Ok(None),
-            Err(status) if status.code() == fedimint_tonic_lnd::tonic::Code::NotFound => {
-                return Ok(None);
-            }
-            Err(status) => return Err(self.failed("track_payment_v2", status.to_string())),
-        };
-        let state = match lnrpc::payment::PaymentStatus::try_from(update.status) {
-            Ok(lnrpc::payment::PaymentStatus::Succeeded) => LndPaymentState::Settled,
-            Ok(lnrpc::payment::PaymentStatus::Failed) => LndPaymentState::Failed,
-            // A hold invoice sits in flight for as long as the daemon holds
-            // it, which is most of a trade.
-            _ => LndPaymentState::Pending,
-        };
-        let sats = (update.value_msat / 1000).max(0) as u64;
-        // Rounded up like every fee that feeds the spend accounting: a
-        // truncated fraction would understate what left the wallet.
-        let fee_sats = u64::try_from(update.fee_msat).unwrap_or(0).div_ceil(1000);
-        Ok(Some((sats, fee_sats, state)))
+        let update = requests::track(
+            &self.label,
+            payment_hash,
+            RPC_TIMEOUT,
+            |request| async move {
+                client
+                    .router()
+                    .track_payment_v2(request)
+                    .await?
+                    .into_inner()
+                    .message()
+                    .await
+            },
+        )
+        .await?;
+        update
+            .as_ref()
+            .map(|payment| amounts::outgoing(&self.label, payment))
+            .transpose()
     }
 
     async fn lookup_incoming(
         &self,
         payment_hash: &str,
     ) -> Result<Option<(u64, LndPaymentState)>, LndError> {
-        let Some(r_hash) = hex_to_bytes(payment_hash) else {
-            return Err(self.failed("lookup_invoice", "payment hash is not hex".to_owned()));
-        };
+        let r_hash = requests::hash_bytes(&self.label, payment_hash)?;
         let mut client = self.client.clone();
         let response = match tokio::time::timeout(
             RPC_TIMEOUT,
@@ -447,24 +467,81 @@ impl LndWallet {
         .map_err(|_| self.timeout("lookup_invoice"))?
         {
             Ok(response) => response.into_inner(),
-            Err(status) if status.code() == fedimint_tonic_lnd::tonic::Code::NotFound => {
-                return Ok(None);
-            }
+            Err(status) if requests::is_missing_invoice(&status) => return Ok(None),
             Err(status) => return Err(self.failed("lookup_invoice", status.to_string())),
         };
-        let state = match lnrpc::invoice::InvoiceState::try_from(response.state) {
-            Ok(lnrpc::invoice::InvoiceState::Settled) => LndPaymentState::Settled,
-            Ok(lnrpc::invoice::InvoiceState::Canceled) => LndPaymentState::Failed,
-            // Open, and Accepted (a hold-invoice HTLC locked in), are both
-            // still in flight.
-            _ => LndPaymentState::Pending,
-        };
-        let sats = if response.amt_paid_sat > 0 {
-            response.amt_paid_sat
+        amounts::incoming(&self.label, &response).map(Some)
+    }
+
+    /// Cancels one caller-authorized incoming invoice through the public LND RPC.
+    /// The caller must scope this hash to its durable recovery journal first.
+    /// Success includes positive verification of the invoice's canceled state.
+    pub async fn cancel_invoice(&self, payment_hash: &str) -> Result<(), LndError> {
+        let mut client = self.client.clone();
+        requests::cancel(
+            &self.label,
+            payment_hash,
+            RPC_TIMEOUT,
+            |request| async move { client.invoices().cancel_invoice(request).await.map(|_| ()) },
+        )
+        .await?;
+        if self
+            .lookup_incoming(payment_hash)
+            .await?
+            .is_some_and(|(_, state)| state == LndPaymentState::Failed)
+        {
+            Ok(())
         } else {
-            response.value
-        };
-        Ok(Some((sats.max(0) as u64, state)))
+            Err(self.failed("cancel_invoice", "invoice is not confirmed canceled".into()))
+        }
+    }
+
+    /// Counts actual settled invoice/payment records for this exact hash.
+    /// Repeated polls and multipath HTLC attempts are never separate records.
+    /// Refuses incomplete pagination, reused indices and unsupported AMP invoices.
+    pub async fn settled_record_count(
+        &self,
+        payment_hash: &str,
+        incoming: bool,
+    ) -> Result<usize, LndError> {
+        if incoming {
+            records::count(&self.label, payment_hash, |offset| async move {
+                let mut client = self.client.clone();
+                let page = self
+                    .call(
+                        "list_invoices",
+                        client.lightning().list_invoices(lnrpc::ListInvoiceRequest {
+                            index_offset: offset,
+                            num_max_invoices: records::PAGE_SIZE,
+                            ..Default::default()
+                        }),
+                    )
+                    .await?
+                    .into_inner();
+                Ok(records::incoming(page))
+            })
+            .await
+        } else {
+            records::count(&self.label, payment_hash, |offset| async move {
+                let mut client = self.client.clone();
+                let page = self
+                    .call(
+                        "list_payments",
+                        client
+                            .lightning()
+                            .list_payments(lnrpc::ListPaymentsRequest {
+                                index_offset: offset,
+                                max_payments: records::PAGE_SIZE,
+                                include_incomplete: true,
+                                ..Default::default()
+                            }),
+                    )
+                    .await?
+                    .into_inner();
+                records::outgoing(&self.label, page)
+            })
+            .await
+        }
     }
 
     async fn call<T>(
@@ -502,7 +579,10 @@ impl LndWallet {
 
 /// Decodes a hex string; `None` when it is not valid hex.
 fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
-    if !hex.len().is_multiple_of(2) || hex.is_empty() {
+    if !hex.len().is_multiple_of(2)
+        || hex.is_empty()
+        || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
         return None;
     }
     (0..hex.len())

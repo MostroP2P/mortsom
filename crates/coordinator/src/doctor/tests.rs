@@ -96,6 +96,12 @@ impl HostProbe for FakeHost {
     fn exists(&self, path: &Path) -> bool {
         self.existing.contains(path)
     }
+    fn is_file(&self, path: &Path) -> bool {
+        self.existing.contains(path)
+    }
+    fn is_executable(&self, path: &Path) -> bool {
+        self.existing.contains(path)
+    }
     async fn run(&self, program: &Path, args: &[&str]) -> Result<CommandOutput, String> {
         let name = program.file_name().unwrap().to_string_lossy().into_owned();
         // Key by program plus the first two bare-word arguments, so
@@ -123,6 +129,8 @@ struct FakeNet {
     wallets_ok: bool,
     balance_sats: u64,
     inbound_sats: Option<u64>,
+    network: Option<String>,
+    methods: Vec<String>,
 }
 
 impl FakeNet {
@@ -160,6 +168,8 @@ impl FakeNet {
             wallets_ok: true,
             balance_sats: 25_000,
             inbound_sats: None,
+            network: Some("mainnet".into()),
+            methods: vec!["pay_invoice".into(), "get_balance".into()],
         }
     }
 }
@@ -182,8 +192,8 @@ impl NetProbes for FakeNet {
                 inbound_sats: self.inbound_sats,
                 label: label.into(),
                 alias: Some("testwallet".into()),
-                network: Some("mainnet".into()),
-                methods: vec!["pay_invoice".into(), "get_balance".into()],
+                network: self.network.clone(),
+                methods: self.methods.clone(),
                 balance_sats: self.balance_sats,
             })
         } else {
@@ -746,3 +756,37 @@ fn the_daemon_check_skips_when_no_relay_is_reachable() {
         "the two checks must agree"
     );
 }
+
+#[tokio::test]
+async fn desktop_offline_doctor_checks_only_its_platform_and_never_calls_stack() {
+    use mortsom_android_driver::process::tests_support::FakeRunner;
+    use mortsom_desktop_driver::Platform;
+    let host = FakeHost::default();
+    let net = FakeNet::healthy();
+    let runner = FakeRunner::default();
+    for platform in [Platform::Linux, Platform::Web] {
+        let report = run_desktop_doctor(
+            Path::new("/nonexistent/config.toml"),
+            Path::new("/nonexistent/ortsom"),
+            &DesktopDoctorOptions {
+                platform,
+                artifact: None,
+                no_network: true,
+            },
+            &host,
+            &net,
+            &runner,
+        )
+        .await;
+        let names: Vec<_> = report.checks.iter().map(|c| c.name.as_str()).collect();
+        assert!(!names.contains(&"android-sdk"));
+        assert!(!names.contains(&"appium"));
+        assert!(names.contains(&"docker"));
+        assert_eq!(names.contains(&"Xvfb"), platform == Platform::Linux);
+        assert_eq!(names.contains(&"chromedriver"), platform == Platform::Web);
+    }
+    assert!(runner.calls().is_empty());
+}
+
+#[path = "desktop_preflight_tests.rs"]
+mod desktop_preflight_tests;

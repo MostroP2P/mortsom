@@ -1,7 +1,7 @@
 //! Mapping from the v2 app's displayed trade status to the normalized
 //! business states. The v2 trade detail derives its own `TradeStatus`
 //! (loading, pending, waiting-invoice, waiting-payment, in-progress,
-//! active, fiat-sent, completed, cancelled, disputed, pending-rating,
+//! active, fiat-sent, payout-pending, completed, cancelled, disputed, pending-rating,
 //! rated); `order.status` exposes that machine name. Protocol statuses are
 //! accepted too so a build that forwards them still maps.
 
@@ -16,6 +16,7 @@ pub fn from_v2_label(label: &str) -> Option<OrderState> {
     Some(match normalized.as_str() {
         LOADING => return None,
         "waiting-invoice" | "waiting-payment" | "in-progress" => OrderState::Taken,
+        "payout-pending" => OrderState::PayoutPending,
         "completed" | "pending-rating" | "rated" => OrderState::Completed,
         "cancelled" => OrderState::Cancelled,
         "disputed" => OrderState::Disputed,
@@ -36,6 +37,7 @@ mod tests {
             ("in-progress", Some(OrderState::Taken)),
             ("active", Some(OrderState::Active)),
             ("fiat-sent", Some(OrderState::FiatSent)),
+            ("payout-pending", Some(OrderState::PayoutPending)),
             ("completed", Some(OrderState::Completed)),
             ("pending-rating", Some(OrderState::Completed)),
             ("rated", Some(OrderState::Completed)),
@@ -52,6 +54,21 @@ mod tests {
         ];
         for (label, expected) in cases {
             assert_eq!(from_v2_label(label), expected, "{label}");
+        }
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn escrow_settlement_and_failed_payout_never_mean_completed() {
+        for label in [
+            "payout-pending",
+            "Payout Pending",
+            "settled-hold-invoice",
+            "payment-failed",
+        ] {
+            let state = from_v2_label(label).expect("payout state must be recognized");
+            assert_eq!(state.as_str(), "payout-pending");
+            assert!(!state.is_terminal());
         }
     }
 }

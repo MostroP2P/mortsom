@@ -173,3 +173,79 @@ async fn cleanup_reports_an_order_that_stays_open_honestly() {
         "{entry:?}"
     );
 }
+
+/// A funded order is cancelled when the daemon says so on the relay, not
+/// when one screen shows the word. The live run of 2026-09-08 recorded a
+/// hold-invoice order as cancelled from Alice's UI alone while the daemon had
+/// only opened a cooperative cancel and still held her 1005 sats.
+#[tokio::test]
+async fn cleanup_needs_the_relay_to_confirm_a_funded_cancellation() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+    adapter.ui_claims_cancelled = true;
+    let adapter = Arc::new(adapter);
+    let observer = FakeObserver {
+        publish_canceled: false,
+        canceled_gate: None,
+    };
+
+    let summary = run_with_observer(&world, adapter, opts(&["happy_sell"]), true, &observer)
+        .await
+        .unwrap();
+
+    assert!(!summary.passed);
+    let cleanup = summary.cleanup.unwrap();
+    assert_eq!(cleanup.unresolved, vec!["o1".to_owned()]);
+    let entry = &cleanup.entries[0];
+    assert!(
+        matches!(&entry.result, Some(mortsom_scenario_kit::cleanup::CleanupResult::Failed { message }) if message.contains("relay never published canceled")),
+        "{entry:?}"
+    );
+}
+
+/// The maker's screen saying "cancelled" is not the daemon closing a funded
+/// order. When the relay does not confirm it, cleanup asks the counterpart to
+/// cancel as well, and only the daemon's `canceled` closes the entry.
+#[tokio::test]
+async fn cleanup_finishes_a_cooperative_cancel_the_maker_screen_called_done() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+    adapter.maker_screen_lies = true;
+    let adapter = Arc::new(adapter);
+    let observer = FakeObserver {
+        publish_canceled: true,
+        canceled_gate: Some(Arc::new(Mutex::new(Vec::new()))),
+    };
+    let gate = observer.canceled_gate.clone().unwrap();
+    // The fake daemon publishes `canceled` only once Bob's cancel lands.
+    let watched = adapter.clone();
+    tokio::spawn(async move {
+        loop {
+            let cancelled = watched.cancelled.lock().unwrap().clone();
+            *gate.lock().unwrap() = cancelled;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+
+    let summary = run_with_observer(
+        &world,
+        adapter.clone(),
+        opts(&["happy_sell"]),
+        true,
+        &observer,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !summary.passed,
+        "release failed; the scenario itself must not pass"
+    );
+    let cleanup = summary.cleanup.unwrap();
+    assert!(cleanup.is_clean(), "{cleanup:?}");
+    assert_eq!(*adapter.cancelled.lock().unwrap(), ["o1".to_owned()]);
+}

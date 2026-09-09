@@ -1,7 +1,7 @@
-//! Single-run locking (spec Phase 6.5): one Mortsom run per host at a time.
+//! Single-operator locking: one Mortsom mutation per canonical home at a time.
 //! Two runs would fight over emulator slots and, on the canary, could spend
 //! twice; the lock is an advisory file lock that the OS releases when the
-//! process ends, however it ends. Waiting is never done: a busy host is
+//! process ends, however it ends. Waiting is never done: a busy operator is
 //! reported.
 
 use std::fs::{File, OpenOptions, TryLockError};
@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
-/// Lock file name inside the artifacts directory.
+/// Lock file name inside the selected lock directory.
 pub const LOCK_FILE: &str = ".mortsom-run.lock";
 
 /// Why the lock was not taken.
@@ -37,7 +37,17 @@ pub struct RunLock {
 }
 
 impl RunLock {
-    /// Takes the exclusive run lock under `artifacts_dir` without waiting.
+    /// Serializes this operator's mutations across all artifact and checkout paths.
+    /// This guard also excludes this operator's runs using different wallet sets.
+    pub fn acquire_host(home: &Path) -> Result<Self, LockError> {
+        let root = home.canonicalize().map_err(|source| LockError::Io {
+            path: home.to_path_buf(),
+            source,
+        })?;
+        Self::acquire(&root.join(".local/state/mortsom"))
+    }
+
+    /// Takes an exclusive lock in an explicitly selected directory without waiting.
     pub fn acquire(artifacts_dir: &Path) -> Result<Self, LockError> {
         std::fs::create_dir_all(artifacts_dir).map_err(|source| LockError::Io {
             path: artifacts_dir.to_path_buf(),
@@ -79,6 +89,38 @@ impl Drop for RunLock {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn host_lock_ignores_artifact_and_checkout_locations() {
+        let home = tempfile::tempdir().unwrap();
+        let first = RunLock::acquire_host(home.path()).unwrap();
+        assert!(matches!(
+            RunLock::acquire_host(home.path()),
+            Err(LockError::Busy(_))
+        ));
+        assert!(
+            first
+                .path()
+                .starts_with(home.path().join(".local/state/mortsom"))
+        );
+        drop(first);
+        RunLock::acquire_host(home.path()).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn home_aliases_contend_for_the_same_host_lock() {
+        let directory = tempfile::tempdir().unwrap();
+        let home = directory.path().join("home");
+        std::fs::create_dir(&home).unwrap();
+        let alias = directory.path().join("alias");
+        std::os::unix::fs::symlink(&home, &alias).unwrap();
+        let _first = RunLock::acquire_host(&home).unwrap();
+        assert!(matches!(
+            RunLock::acquire_host(&alias),
+            Err(LockError::Busy(_))
+        ));
+    }
 
     #[test]
     fn second_holder_is_refused_until_the_first_drops() {

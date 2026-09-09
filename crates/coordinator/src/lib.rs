@@ -21,3 +21,14 @@ pub mod run;
 pub mod safety;
 
 pub use config::{Config, ConfigError, RunConfig};
+pub mod desktop;
+pub mod stack;
+
+/// Deterministic fingerprints of complete client bundles.
+pub mod fingerprint;
+
+/// Source and build provenance for captured desktop artifacts.
+pub mod provenance;
+
+/// Protected desktop identity and action recovery.
+pub mod recovery_store;

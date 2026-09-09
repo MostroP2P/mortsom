@@ -1,0 +1,225 @@
+//! Operator-private recovery metadata; actor credentials never enter artifacts.
+use crate::{fingerprint::BundleFingerprint, provenance::BuildProvenance, stack::StackFingerprint};
+use mortsom_common::RunId;
+use mortsom_desktop_driver::Platform;
+use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
+use serde::{Deserialize, Serialize};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
+
+/// Public facts necessary to resume the original UI identities.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecoveryManifest {
+    /// Original invocation.
+    pub run_id: RunId,
+    /// Immutable stack identity.
+    pub stack: StackFingerprint,
+    /// Client runtime.
+    pub platform: Platform,
+    /// Captured bytes.
+    pub bundle: BundleFingerprint,
+    /// Build provenance.
+    pub build: BuildProvenance,
+    /// Native executable filename, absent for Web.
+    pub executable: Option<String>,
+    /// Observed original public actor identities.
+    pub identities: BTreeMap<String, String>,
+    /// Bound Web origin; must be reused after a restart.
+    pub origin: Option<String>,
+    /// Durable pre-action history, containing hashes only.
+    pub events: Vec<RecoveryEvent>,
+    /// True only after verified order/payment and process cleanup.
+    pub closed: bool,
+    /// Orders, wallets and process shutdown were verified before profile deletion.
+    #[serde(default)]
+    pub resolution_verified: bool,
+}
+
+/// Durable journal with a caller-owned directory, never automatically removed.
+#[derive(Debug)]
+pub struct FileJournal {
+    root: PathBuf,
+    manifest: Mutex<RecoveryManifest>,
+}
+impl FileJournal {
+    /// Resolve independent of artifact directory and checkout location.
+    pub fn directory(home: &Path) -> Result<PathBuf, String> {
+        home.canonicalize()
+            .map(|home| home.join(".local/state/mortsom/recovery"))
+            .map_err(|e| e.to_string())
+    }
+    /// Refuse new work while any previous protected identity needs recovery.
+    pub fn refuse_pending(base: &Path) -> Result<(), String> {
+        if !base.exists() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(base).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let journal = Self::open(&entry.path())?;
+            if !journal.snapshot().closed {
+                return Err(format!(
+                    "run {} retains unresolved recovery state; run mortsom cleanup before starting another desktop scenario",
+                    journal.snapshot().run_id
+                ));
+            }
+        }
+        Ok(())
+    }
+    /// Create metadata before actor startup; no overwrite of an existing run.
+    pub fn create(base: &Path, manifest: RecoveryManifest) -> Result<Self, String> {
+        crate::artifacts::persist::create_directory(base).map_err(|e| e.to_string())?;
+        let root = base.join(manifest.run_id.as_str());
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&root)
+            .map_err(|e| e.to_string())?;
+        crate::artifacts::persist::create_directory(&root).map_err(|e| e.to_string())?;
+        let journal = Self {
+            root,
+            manifest: Mutex::new(manifest),
+        };
+        journal.save(&journal.snapshot())?;
+        Ok(journal)
+    }
+    /// Open existing metadata; a missing or malformed manifest fails closed.
+    pub fn open(root: &Path) -> Result<Self, String> {
+        validate_private(root)?;
+        let manifest: RecoveryManifest =
+            serde_json::from_slice(&read_manifest(root)?).map_err(|e| e.to_string())?;
+        if root.file_name().and_then(|s| s.to_str()) != Some(manifest.run_id.as_str()) {
+            return Err("recovery run identity does not match its directory".into());
+        }
+        Ok(Self {
+            root: root.to_path_buf(),
+            manifest: Mutex::new(manifest),
+        })
+    }
+    /// Protected storage parent; never an artifact path.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+    /// Read public facts without exposing profile contents.
+    pub fn snapshot(&self) -> RecoveryManifest {
+        self.manifest
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+    }
+    /// Persist startup facts before a scenario can submit an order.
+    pub fn set_actors(
+        &self,
+        identities: BTreeMap<String, String>,
+        origin: Option<String>,
+    ) -> Result<(), String> {
+        if identities.len() != 2
+            || !identities.contains_key("alice")
+            || !identities.contains_key("bob")
+            || identities.values().any(String::is_empty)
+            || identities
+                .values()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != 2
+        {
+            return Err("recovery requires two distinct public actor identities".into());
+        }
+        self.update(|manifest| {
+            manifest.identities = identities;
+            manifest.origin = origin;
+        })
+    }
+    /// Persist the verified cleanup boundary before deleting recovery identities.
+    pub fn confirm_resolution(&self) -> Result<(), String> {
+        self.update(|manifest| manifest.resolution_verified = true)
+    }
+    /// Change the completion record only after caller verification.
+    pub fn close(&self) -> Result<(), String> {
+        self.update(|manifest| manifest.closed = true)
+    }
+    fn update(&self, action: impl FnOnce(&mut RecoveryManifest)) -> Result<(), String> {
+        let mut current = self.manifest.lock().unwrap_or_else(|p| p.into_inner());
+        let mut next = current.clone();
+        action(&mut next);
+        self.save(&next)?;
+        *current = next;
+        Ok(())
+    }
+    fn save(&self, manifest: &RecoveryManifest) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
+        crate::artifacts::persist::atomic_json(&self.root.join("manifest.json"), &json)
+            .map_err(|e| e.to_string())
+    }
+}
+impl RecoveryJournal for FileJournal {
+    fn events(&self) -> Vec<RecoveryEvent> {
+        self.snapshot().events
+    }
+    fn record(&self, event: RecoveryEvent) -> Result<(), String> {
+        let mut current = self.manifest.lock().unwrap_or_else(|p| p.into_inner());
+        let mut history = current.clone();
+        if let RecoveryEvent::PaymentExpected {
+            order_id,
+            wallet,
+            hash,
+            incoming,
+            ..
+        } = &event
+            && history.events.iter().any(|known| matches!(known, RecoveryEvent::PaymentExpected { order_id: order, wallet: actor, hash: known_hash, incoming: direction, .. } if known_hash == hash || (order == order_id && actor == wallet && direction == incoming))) {
+                return Err("a payment was already prepared for this order and actor; refusing replay".into());
+        }
+        history.events.push(event);
+        self.save(&history)?;
+        *current = history;
+        Ok(())
+    }
+}
+fn validate_private(root: &Path) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    if root.canonicalize().map_err(|e| e.to_string())? != root {
+        return Err("recovery directory must use a canonical absolute path".into());
+    }
+    let meta = std::fs::symlink_metadata(root).map_err(|e| e.to_string())?;
+    if !meta.is_dir()
+        || meta.mode() & 0o077 != 0
+        || meta.uid() != rustix::process::getuid().as_raw()
+    {
+        return Err("recovery directory must be private, owned and not a symlink".into());
+    }
+    Ok(())
+}
+
+fn read_manifest(root: &Path) -> Result<Vec<u8>, String> {
+    use rustix::fs::{Mode, OFlags, open, openat};
+    use std::{io::Read, os::unix::fs::MetadataExt};
+    let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK;
+    let directory =
+        open(root, flags | OFlags::DIRECTORY, Mode::empty()).map_err(|e| e.to_string())?;
+    let mut file: std::fs::File = openat(&directory, "manifest.json", flags, Mode::empty())
+        .map_err(|e| e.to_string())?
+        .into();
+    let meta = file.metadata().map_err(|e| e.to_string())?;
+    if !meta.is_file()
+        || meta.mode() & 0o077 != 0
+        || meta.uid() != rustix::process::getuid().as_raw()
+        || meta.len() > 1024 * 1024
+    {
+        return Err("recovery manifest must be a bounded private owned regular file".into());
+    }
+    let mut bytes = Vec::new();
+    (&mut file)
+        .take(1024 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() > 1024 * 1024 {
+        return Err("recovery manifest exceeds size limit".into());
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+#[path = "recovery_store_tests.rs"]
+mod tests;

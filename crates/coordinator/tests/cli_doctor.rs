@@ -95,3 +95,47 @@ fn doctor_without_config_file_fails_cleanly() {
         .failure()
         .stdout(predicates::str::contains("[FAIL] config"));
 }
+
+#[test]
+fn web_prebuilt_doctor_does_not_require_android_or_build_tools() {
+    let output = Command::cargo_bin("mortsom")
+        .unwrap()
+        .args([
+            "--config",
+            "/nonexistent/config.toml",
+            "doctor",
+            "--platform",
+            "web",
+            "--app-artifact",
+            "/prebuilt/web",
+            "--no-network",
+            "--json",
+        ])
+        .env_clear()
+        .env("PATH", "/nonexistent")
+        .assert()
+        .failure();
+    let report: serde_json::Value = serde_json::from_slice(&output.get_output().stdout).unwrap();
+    let names: Vec<_> = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|check| check["name"].as_str().unwrap())
+        .collect();
+    for unwanted in [
+        "android-sdk",
+        "appium",
+        "emulator",
+        "Xvfb",
+        "flutter",
+        "cargo",
+    ] {
+        assert!(!names.contains(&unwanted), "{unwanted}: {names:?}");
+    }
+    assert!(names.contains(&"chromedriver"));
+    assert!(names.contains(&"chromium"));
+    assert!(
+        !names.contains(&"ortsom-stack"),
+        "offline doctor must not query stack"
+    );
+}

@@ -69,7 +69,7 @@ pub struct RunConfig {
 fn default_jobs() -> u32 {
     1
 }
-fn default_artifacts_dir() -> String {
+pub(super) fn default_artifacts_dir() -> String {
     "./artifacts".to_owned()
 }
 fn default_true() -> bool {

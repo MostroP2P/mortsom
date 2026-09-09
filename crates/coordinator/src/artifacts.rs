@@ -9,6 +9,11 @@ use std::sync::{Arc, RwLock};
 use mortsom_common::{Redactor, RunId, Secret};
 use serde::Serialize;
 
+pub(crate) mod persist;
+mod platform;
+use persist::{atomic_json, create_directory};
+pub(crate) use platform::recorded_platform;
+
 /// File names inside `artifacts/<run>/`.
 pub mod files {
     /// Run summary.
@@ -50,9 +55,9 @@ impl RunArtifacts {
     /// Creates `root/<run_id>` with the actor step directories.
     pub fn create(root: &Path, run_id: RunId, redactor: Redactor) -> io::Result<Self> {
         let dir = root.join(run_id.as_str());
-        std::fs::create_dir_all(&dir)?;
+        create_directory(&dir)?;
         for actor in ACTORS {
-            std::fs::create_dir_all(dir.join(actor).join("steps"))?;
+            create_directory(&dir.join(actor).join("steps"))?;
         }
         Ok(Self {
             run_id,
@@ -103,7 +108,35 @@ impl RunArtifacts {
     /// containing quotes or backslashes is still caught.
     pub fn write_json<T: Serialize>(&self, name: &str, value: &T) -> io::Result<()> {
         let json = serde_json::to_string_pretty(&self.redacted_value(value)?)?;
-        std::fs::write(self.file(name)?, json)
+        atomic_json(&self.file(name)?, &json)
+    }
+
+    /// Retains verified public stack hashes only in structured run metadata.
+    /// Known secrets still win; every other field uses the normal scrubber.
+    pub(crate) fn write_metadata_json<T: Serialize>(
+        &self,
+        name: &str,
+        value: &T,
+        stack: Option<&crate::stack::StackSnapshot>,
+        app_artifact: Option<&crate::fingerprint::BundleFingerprint>,
+        app_build: Option<&crate::provenance::BuildProvenance>,
+    ) -> io::Result<()> {
+        let Some(stack) = stack else {
+            return self.write_json(name, value);
+        };
+        if !matches!(name, files::SUMMARY | files::ENVIRONMENT) {
+            return Err(io::Error::other(
+                "public metadata is restricted to run reports",
+            ));
+        }
+        stack.daemon_image.validate().map_err(io::Error::other)?;
+        nostr_sdk::prelude::PublicKey::parse(&stack.daemon_pubkey).map_err(io::Error::other)?;
+        let mut tree = self.redacted_value(value)?;
+        let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
+        restore_stack(&mut tree, stack, &redactor)?;
+        restore_bundle(&mut tree, app_artifact, &redactor)?;
+        restore_provenance(&mut tree, app_build, &redactor)?;
+        atomic_json(&self.file(name)?, &serde_json::to_string_pretty(&tree)?)
     }
 
     /// Writes free text produced by external tools after redaction.
@@ -325,5 +358,171 @@ mod tests {
         let text = std::fs::read_to_string(artifacts.file(files::NOTIFICATIONS).unwrap()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(text.trim()).unwrap();
         assert_eq!(parsed["body"], "x <redacted> y");
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod metadata_tests {
+    use super::*;
+
+    #[test]
+    fn public_stack_hashes_survive_only_in_metadata_and_registered_secrets_still_win() {
+        let root = tempfile::tempdir().unwrap();
+        let key = "8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51";
+        let digest = format!("sha256:{}", "b".repeat(64));
+        let stack: crate::stack::StackSnapshot = serde_json::from_value(serde_json::json!({
+            "daemon_pubkey":key,"relay_url":"ws://127.0.0.1:7000","wallet_endpoints":{},
+            "daemon_image":{"image_id":format!("sha256:{}", "a".repeat(64)),
+                "reference":format!("mostrop2p/mostro@{digest}"),"repository_digest":digest},
+            "declared_limits":{"order_expiration_secs":300,"hold_invoice_expiry_secs":120,
+                "buyer_invoice_deadline_secs":120,"payout_invoice_min_expiry_secs":300}
+        }))
+        .unwrap();
+        let artifacts = RunArtifacts::create(root.path(), RunId::new(), Redactor::new()).unwrap();
+        let value = serde_json::json!({"stack":stack,"stderr":key,"token":"private-wallet-token"});
+        artifacts.add_secret(&Secret::new("private-wallet-token"));
+        artifacts
+            .write_metadata_json(files::ENVIRONMENT, &value, Some(&stack), None, None)
+            .unwrap();
+        let saved: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(artifacts.file(files::ENVIRONMENT).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["stack"]["daemon_pubkey"], key);
+        assert_eq!(saved["stack"]["daemon_image"]["repository_digest"], digest);
+        assert_eq!(
+            saved["stack"]["daemon_image"]["reference"],
+            stack.daemon_image.reference
+        );
+        let restored: crate::stack::DaemonImage =
+            serde_json::from_value(saved["stack"]["daemon_image"].clone()).unwrap();
+        assert!(restored.validate().is_ok());
+        assert_ne!(saved["stderr"], key);
+        assert_ne!(saved["token"], "private-wallet-token");
+        assert!(
+            artifacts
+                .write_metadata_json(files::RUN_LOG, &value, Some(&stack), None, None)
+                .is_err()
+        );
+        artifacts.add_secret(&Secret::new(key));
+        artifacts
+            .write_metadata_json(files::SUMMARY, &value, Some(&stack), None, None)
+            .unwrap();
+        let text = std::fs::read_to_string(artifacts.file(files::SUMMARY).unwrap()).unwrap();
+        assert!(!text.contains(key));
+    }
+}
+
+fn restore_stack(
+    tree: &mut serde_json::Value,
+    stack: &crate::stack::StackSnapshot,
+    redactor: &Redactor,
+) -> io::Result<()> {
+    for (pointer, public) in [
+        ("/stack/daemon_pubkey", Some(stack.daemon_pubkey.as_str())),
+        (
+            "/stack/daemon_image/image_id",
+            Some(stack.daemon_image.image_id.as_str()),
+        ),
+        (
+            "/stack/daemon_image/repository_digest",
+            stack.daemon_image.repository_digest.as_deref(),
+        ),
+    ] {
+        let field = tree
+            .pointer_mut(pointer)
+            .ok_or_else(|| io::Error::other("missing stack metadata field"))?;
+        *field = public
+            .map(|value| serde_json::Value::String(redactor.redact_known(value)))
+            .unwrap_or(serde_json::Value::Null);
+    }
+    if let Some(field) = tree.pointer_mut("/stack_fingerprint") {
+        let fingerprint = stack.fingerprint().map_err(io::Error::other)?;
+        *field = serde_json::json!({"algorithm": fingerprint.algorithm,
+            "digest": redactor.redact_known(&fingerprint.digest)});
+    }
+    if let Some((repository, digest)) = stack.daemon_image.reference.rsplit_once('@') {
+        let reference = format!(
+            "{}@{}",
+            redactor.redact(repository),
+            redactor.redact_known(digest)
+        );
+        let field = tree
+            .pointer_mut("/stack/daemon_image/reference")
+            .ok_or_else(|| io::Error::other("missing image reference field"))?;
+        *field = serde_json::Value::String(redactor.redact_known(&reference));
+    }
+    Ok(())
+}
+
+fn restore_bundle(
+    tree: &mut serde_json::Value,
+    app_artifact: Option<&crate::fingerprint::BundleFingerprint>,
+    redactor: &Redactor,
+) -> io::Result<()> {
+    if let Some(bundle) = app_artifact {
+        if bundle.algorithm != "sha256-mortsom-bundle-v1"
+            || bundle.files == 0
+            || bundle.digest.len() != 64
+            || !bundle.digest.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return Err(io::Error::other("invalid bundle fingerprint"));
+        }
+        let field = tree
+            .pointer_mut("/app_artifact/digest")
+            .ok_or_else(|| io::Error::other("missing bundle fingerprint field"))?;
+        *field = serde_json::Value::String(redactor.redact_known(&bundle.digest));
+    }
+    Ok(())
+}
+
+pub(crate) fn restore_provenance(
+    tree: &mut serde_json::Value,
+    build: Option<&crate::provenance::BuildProvenance>,
+    redactor: &Redactor,
+) -> io::Result<()> {
+    let Some(build) = build else {
+        return Ok(());
+    };
+    for (name, identity) in [
+        ("source_before", &build.source_before),
+        ("source_after", &build.source_after),
+    ] {
+        if let Some(identity) = identity {
+            if !matches!(identity.revision.len(), 40 | 64)
+                || !identity.revision.bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err(io::Error::other("invalid source revision"));
+            }
+            let field = tree
+                .pointer_mut(&format!("/app_build/{name}/revision"))
+                .ok_or_else(|| io::Error::other("missing source revision field"))?;
+            *field = serde_json::Value::String(redactor.redact_known(&identity.revision));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod atomic_tests {
+    use super::*;
+    #[test]
+    fn json_replacement_does_not_follow_a_previous_report_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = root.path().join("operator-file");
+        std::fs::write(&outside, "keep operator content").unwrap();
+        let artifacts = RunArtifacts::create(root.path(), RunId::new(), Redactor::new()).unwrap();
+        let target = artifacts.file(files::ENVIRONMENT).unwrap();
+        std::os::unix::fs::symlink(&outside, &target).unwrap();
+        artifacts
+            .write_json(files::ENVIRONMENT, &serde_json::json!({"platform":"linux"}))
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(outside).unwrap(),
+            "keep operator content"
+        );
+        assert!(!target.symlink_metadata().unwrap().file_type().is_symlink());
     }
 }

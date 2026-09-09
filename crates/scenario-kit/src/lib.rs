@@ -27,3 +27,6 @@ pub use outcome::{Outcome, ScenarioResult};
 pub use recovery::{NoRelayControl, RelayControl};
 pub use registry::{ScenarioDef, ScenarioFn, all, find, select};
 pub use timeline::{Timeline, TimelineEntry, TimelineKind};
+
+/// Durable pre-action recovery facts.
+pub mod journal;

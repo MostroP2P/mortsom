@@ -8,7 +8,12 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut errors = Vec::new();
         self.mobile.validate(&mut errors);
-        self.android.validate(&mut errors);
+        if let Some(android) = &self.android {
+            android.validate(&mut errors);
+        }
+        if self.ui.timeout_secs == Some(0) {
+            errors.push("ui.timeout_secs must be greater than zero".into());
+        }
         self.relay.validate(&mut errors);
         self.mostro.validate(&mut errors);
         self.wallets.validate(&mut errors);

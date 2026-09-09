@@ -151,6 +151,22 @@ impl AppAdapter for MobileV2Adapter {
         Ok(connection)
     }
 
+    async fn existing_identity(
+        &self,
+        device: &DeviceContext<'_>,
+    ) -> Result<Identity, AdapterError> {
+        nav::go_to_account(device).await?;
+        let public_key = label(device, Ids::KEYS_PUBLIC_KEY).await?.trim().to_owned();
+        if public_key.is_empty() {
+            return Err(AdapterError::contract(
+                "retained actor identity is missing; recovery cannot generate a replacement",
+            ));
+        }
+        Ok(Identity { public_key })
+    }
+    async fn owned_orders(&self, device: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
+        orders::trade_ids(device).await
+    }
     async fn create_order(
         &self,
         device: &DeviceContext<'_>,
@@ -174,6 +190,14 @@ impl AppAdapter for MobileV2Adapter {
         path: PaymentPath,
     ) -> Result<PaymentHandoff, AdapterError> {
         orders::pay_hold_invoice(device, order, path).await
+    }
+
+    async fn buyer_invoice_amount(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<u64, AdapterError> {
+        orders::buyer_invoice_amount(device, order).await
     }
 
     async fn provide_buyer_invoice(

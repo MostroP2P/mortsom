@@ -23,6 +23,12 @@ pub struct RunReport<'a> {
     pub checks: &'a DoctorReport,
     /// Whether the command passed.
     pub passed: bool,
+    /// Verified public metadata whose hashes must remain reproducible.
+    pub stack: Option<&'a crate::stack::StackSnapshot>,
+    /// Complete client bundle content identity.
+    pub app_artifact: Option<&'a crate::fingerprint::BundleFingerprint>,
+    /// Public source/build history, when a desktop artifact is present.
+    pub app_build: Option<&'a crate::provenance::BuildProvenance>,
 }
 
 /// Writes the report artifacts. `summary` is the command's own
@@ -40,10 +46,22 @@ pub fn write_report<S: Serialize, E: Serialize, C: Serialize>(
         .write_json(files::CLEANUP, cleanup)
         .map_err(|e| format!("cannot write cleanup.json: {e}"))?;
     artifacts
-        .write_json(files::ENVIRONMENT, environment)
+        .write_metadata_json(
+            files::ENVIRONMENT,
+            environment,
+            report.stack,
+            report.app_artifact,
+            report.app_build,
+        )
         .map_err(|e| format!("cannot write environment.json: {e}"))?;
     artifacts
-        .write_json(files::SUMMARY, summary)
+        .write_metadata_json(
+            files::SUMMARY,
+            summary,
+            report.stack,
+            report.app_artifact,
+            report.app_build,
+        )
         .map_err(|e| format!("cannot write summary.json: {e}"))?;
     if write_timeline {
         artifacts
@@ -100,6 +118,9 @@ mod tests {
             app_profile: Some("mobile-legacy"),
             checks: &checks,
             passed: true,
+            stack: None,
+            app_artifact: None,
+            app_build: None,
         };
 
         write_report(
