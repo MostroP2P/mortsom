@@ -17,6 +17,7 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260909T005557Z-bf36f2d729bf` | Web | happy_sell | Alice submitted the sell order; the daemon saved `2ff23833-e73f-4ef3-8387-4dc5e0ebf37b` | Same symptom as the run below with the IndexedDB trades store already built in (app `fe7fd55`): the Dart bootstrap never called `init_db` on the web, so `db()` stayed unset and nothing persisted. Fixed in app `def4d40`. The journal was resolved with `cleanup --attribute-order alice=…` once the daemon expired the order; no payment |
 | `20260908T190651Z-8031670f7eb5` | Web | happy_sell | Alice submitted the sell order; the daemon saved `3d2c95a2-1209-4e9a-b7b1-10150154213d` as pending | Alice's Web app never listed the trade: "Mis operaciones" stayed empty. App v2's IndexedDB backend (`rust/src/db/indexeddb.rs`) implements only chat messages and settings; `save_trade`, `get_trade` and trade listing are stubs pending the app's issue #233. No payment. The pending order expires on the daemon after its one-hour limit. The journal has an unresolved submission and its Web profile is **retained**; see HANDOFF |
 | `20260908T190424Z-85827b058763` | Linux | happy_buy | **Passed** on the first attempt. Order `c31c3647-2098-4b5a-a3e7-8a3b32831cdc`: Bob created the buy, Alice took it and paid hold `ee711130…`, Bob provided invoice `fbca5acb…`, fiat sent, released; both clients completed | None. Hold settled once on Alice (1005 sats), payout settled once on Bob (995 sats), zero fees. Resolved, nothing retained. Harness `c39881e`, app `0ed7efb` |
 | `20260908T190151Z-d027fc8a5528` | Linux | happy_sell | **Passed.** Order `02f4840d-74f0-470f-96ed-86d86a48ff38`: created, taken, buyer invoice `3327cca6…`, hold `65e91e73…` paid by Alice, fiat sent, released; relay published `success`; both clients showed completed | None. Hold settled once on Alice's node (1005 sats), payout settled once on Bob's node (995 sats), zero fees. Order resolved, no retained storage. Harness `c39881e`, app `0ed7efb`, mostrod 0.18.7 |
@@ -28,11 +29,12 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 ## Known app v2 product issues
 
-### Web build cannot persist trades
+### Web build did not persist trades (fixed locally 2026-09-09)
 
-On `wasm32` the storage backend stubs every trade operation, so a Web client never shows the orders it
-creates or takes. Both Web cells are blocked until the app implements the trades store (app issue #233).
-Mortsom cannot cancel such an order through the UI either, because the trade never appears.
+Two independent causes, both fixed on the app's `feat/mortsom-linux-accessibility` branch and pending
+upstream review: the `wasm32` storage backend stubbed every trade operation (`fe7fd55` adds the `trades` and
+`trade_keys` IndexedDB stores, part of app issue #233), and the Dart bootstrap skipped `init_db` on the web
+altogether (`def4d40`), which also meant the "implemented" web chat store had never been opened.
 
 ### Optimistic cancel label
 
