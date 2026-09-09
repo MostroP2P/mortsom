@@ -11,7 +11,7 @@ fn expected() -> ExpectedImage {
 }
 
 #[tokio::test]
-async fn resolves_latest_to_an_immutable_official_reference() {
+async fn resolves_the_selected_tag_to_an_immutable_official_reference() {
     let runner = FakeRunner::default();
     let image = expected();
     runner.script(
@@ -21,7 +21,18 @@ async fn resolves_latest_to_an_immutable_official_reference() {
         })
         .to_string(),
     );
-    assert_eq!(resolve_latest(&runner).await.unwrap(), image);
+    assert_eq!(
+        resolve(&runner, "mostrop2p/mostro:v0.18.7").await.unwrap(),
+        image
+    );
+    assert!(
+        runner
+            .calls()
+            .iter()
+            .any(|c| c.ends_with("mostrop2p/mostro:v0.18.7")),
+        "{:?}",
+        runner.calls()
+    );
 }
 
 #[tokio::test]
@@ -39,7 +50,7 @@ async fn refuses_invalid_or_non_official_image_metadata() {
     ] {
         let runner = FakeRunner::default();
         runner.script("docker image inspect", &value);
-        assert!(resolve_latest(&runner).await.is_err());
+        assert!(resolve(&runner, "mostrop2p/mostro:v0.18.7").await.is_err());
     }
 }
 

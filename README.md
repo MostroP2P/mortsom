@@ -9,8 +9,9 @@ frozen, selectable option. [spec.md](spec.md) is normative; this file is the ope
 
 ## Status
 
-Accepted live cells: **Linux 0/2, Web 0/2**. See [docs/acceptance-ledger.md](docs/acceptance-ledger.md) for
-attempts and [docs/HANDOFF.md](docs/HANDOFF.md) for the current plan.
+Accepted live cells: **Linux 2/2, Web 0/2**. Web is blocked until app v2 persists trades in the browser (app
+issue #233). See [docs/acceptance-ledger.md](docs/acceptance-ledger.md) for every attempt and
+[docs/HANDOFF.md](docs/HANDOFF.md) for the current plan.
 
 **Transitional dependency.** The spec requires `mortsom stack up` to build the regtest stack on its own. The
 current implementation still delegates to a sibling [Ortsom](https://github.com/MostroP2P/ortsom) checkout
@@ -93,8 +94,9 @@ merges its optional `<name>.local.toml` overlay.
 ./target/debug/mortsom stack down
 ```
 
-`stack up` pulls the daemon image, builds or updates the stack and verifies the running container matches
-the pulled digest. Do not run it before every scenario: it can regenerate the daemon identity, after which
+`stack up` pulls the pinned daemon release (`mostrop2p/mostro:v0.18.7`, the version the accepted cells ran
+against), builds or updates the stack and verifies the running container matches the pulled digest. Pass
+`--mostro-image <reference>` to install another build; the reference is recorded in the stack fingerprint. Do not run it before every scenario: it can regenerate the daemon identity, after which
 both clients must be rebuilt. `stack down` destroys the environment and its credentials; it is never
 evidence that an order was cancelled or a payment refunded.
 

@@ -140,12 +140,31 @@ pub fn stack_command(checkout: &Path, binary: &Path, action: &str) -> Command {
     )
 }
 
-/// Invokes one Ortsom stack action, without automatic cleanup on failure.
+/// The daemon release `stack up` installs unless the operator selects
+/// another (spec section 5). A fixed tag keeps accepted runs reproducible:
+/// a floating `latest` would swap the daemon under the harness whenever
+/// upstream publishes, and with it the protocol behaviour being tested.
+pub const DEFAULT_MOSTRO_IMAGE: &str = "mostrop2p/mostro:v0.18.7";
+
+/// Invokes one Ortsom stack action with the pinned daemon release, without
+/// automatic cleanup on failure.
 pub async fn invoke(
     runner: &dyn CommandRunner,
     checkout: &Path,
     binary: &Path,
     action: &str,
+) -> Result<String, StackError> {
+    invoke_with_image(runner, checkout, binary, action, DEFAULT_MOSTRO_IMAGE).await
+}
+
+/// Invokes one Ortsom stack action; `image` is the daemon reference `up`
+/// pulls, verifies and hands to the stack. Other actions ignore it.
+pub async fn invoke_with_image(
+    runner: &dyn CommandRunner,
+    checkout: &Path,
+    binary: &Path,
+    action: &str,
+    image: &str,
 ) -> Result<String, StackError> {
     let root = checkout
         .canonicalize()
@@ -157,14 +176,16 @@ pub async fn invoke(
     let mut cmd = stack_command(checkout, binary, action);
     let mut expected = None;
     if action == "up" {
-        // Always resolve the published latest image before creating services.
+        // Pull the selected release and resolve it to an immutable digest
+        // before creating services; a failed pull never falls back to a
+        // cached image.
         run_ok(
             runner,
-            &Command::new("docker", &["pull", "mostrop2p/mostro:latest"]),
+            &Command::new("docker", &["pull", image]),
             Duration::from_secs(600),
         )
         .await?;
-        let image = image::resolve_latest(runner).await?;
+        let image = image::resolve(runner, image).await?;
         cmd.args
             .extend(["--mostro-image".into(), image.reference.clone()]);
         expected = Some(image);

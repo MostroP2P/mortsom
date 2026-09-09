@@ -153,8 +153,13 @@ pub enum Command {
 /// Persistent stack lifecycle actions.
 #[derive(Debug, Subcommand)]
 pub enum StackAction {
-    /// Pull the latest mostrod image and prepare the regtest environment.
-    Up,
+    /// Pull the pinned mostrod release and prepare the regtest environment.
+    Up {
+        /// Daemon image to install instead of the pinned release, e.g. a
+        /// build from a mostro branch. Recorded in the stack fingerprint.
+        #[arg(long)]
+        mostro_image: Option<String>,
+    },
     /// Inspect the persistent services.
     Status,
     /// Destroy the regtest stack, including generated credentials and state.
@@ -162,13 +167,14 @@ pub enum StackAction {
 }
 
 async fn stack_cli(checkout: &std::path::Path, action: StackAction) -> ExitCode {
-    let action = match action {
-        StackAction::Up => "up",
-        StackAction::Status => "status",
-        StackAction::Down => "down",
+    let (action, image) = match action {
+        StackAction::Up { mostro_image } => ("up", mostro_image),
+        StackAction::Status => ("status", None),
+        StackAction::Down => ("down", None),
     };
+    let image = image.unwrap_or_else(|| crate::stack::DEFAULT_MOSTRO_IMAGE.to_owned());
     let binary = crate::stack::binary(checkout);
-    match crate::stack::invoke(&TokioRunner, checkout, &binary, action).await {
+    match crate::stack::invoke_with_image(&TokioRunner, checkout, &binary, action, &image).await {
         Ok(output) => {
             print!("{output}");
             ExitCode::SUCCESS
@@ -241,7 +247,7 @@ fn lock_mutation(
             | Command::Device { .. }
             | Command::Relay { .. }
             | Command::Stack {
-                action: StackAction::Up | StackAction::Down
+                action: StackAction::Up { .. } | StackAction::Down
             }
     );
     if !mutates {

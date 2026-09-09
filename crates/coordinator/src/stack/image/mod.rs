@@ -1,4 +1,4 @@
-//! Immutable identity checks for the latest daemon image selected at stack up.
+//! Immutable identity checks for the daemon image selected at stack up.
 use std::{path::Path, time::Duration};
 
 use mortsom_android_driver::process::{Command, CommandRunner, run_ok};
@@ -28,21 +28,16 @@ struct ContainerMetadata {
     running: bool,
 }
 
-/// Resolves the already pulled tag to an immutable registry reference.
-pub(super) async fn resolve_latest(
+/// Resolves the already pulled `image` tag to an immutable registry reference.
+pub(super) async fn resolve(
     runner: &dyn CommandRunner,
+    image: &str,
 ) -> Result<ExpectedImage, StackError> {
     let output = run_ok(
         runner,
         &Command::new(
             "docker",
-            &[
-                "image",
-                "inspect",
-                "--format",
-                IMAGE_FORMAT,
-                "mostrop2p/mostro:latest",
-            ],
+            &["image", "inspect", "--format", IMAGE_FORMAT, image],
         ),
         INSPECT_TIMEOUT,
     )
@@ -63,7 +58,7 @@ pub(super) async fn resolve_latest(
         .collect();
     let [reference] = references.as_slice() else {
         return Err(invalid(
-            "latest must have exactly one official immutable repository digest",
+            "the selected image must have exactly one official immutable repository digest",
         ));
     };
     Ok(ExpectedImage {
@@ -118,9 +113,7 @@ pub(super) async fn verify_running(
     let metadata: ContainerMetadata = serde_json::from_str(&output.stdout)
         .map_err(|_| invalid("invalid Docker container metadata"))?;
     if !metadata.running || metadata.image != expected.id {
-        return Err(invalid(
-            "running mostrod does not match the selected latest image",
-        ));
+        return Err(invalid("running mostrod does not match the selected image"));
     }
     Ok(())
 }

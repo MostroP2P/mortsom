@@ -101,8 +101,11 @@ async fn failed_stack_output_redacts_wallet_credentials() {
     assert!(!format!("{error:?}").contains(credential));
 }
 
+/// Spec section 5: `stack up` pulls the pinned release by default, never a
+/// floating tag, so an accepted run stays reproducible when upstream
+/// publishes a new daemon.
 #[tokio::test]
-async fn a_failed_latest_pull_leaves_the_existing_stack_untouched() {
+async fn a_failed_pull_of_the_pinned_release_leaves_the_existing_stack_untouched() {
     let root = tempfile::tempdir().unwrap();
     let runner = FakeRunner::default();
     runner.script_failure("docker pull", "registry unavailable");
@@ -112,7 +115,33 @@ async fn a_failed_latest_pull_leaves_the_existing_stack_untouched() {
             .is_err()
     );
     assert_eq!(runner.calls().len(), 4);
-    assert_eq!(runner.calls()[3], "docker pull mostrop2p/mostro:latest");
+    assert_eq!(
+        runner.calls()[3],
+        format!("docker pull {DEFAULT_MOSTRO_IMAGE}")
+    );
+    assert!(
+        !DEFAULT_MOSTRO_IMAGE.ends_with(":latest"),
+        "the default must be an immutable release tag"
+    );
+}
+
+#[tokio::test]
+async fn an_explicit_image_override_is_pulled_and_passed_to_the_stack() {
+    let root = tempfile::tempdir().unwrap();
+    let runner = FakeRunner::default();
+    runner.script_failure("docker pull", "registry unavailable");
+    assert!(
+        invoke_with_image(
+            &runner,
+            root.path(),
+            Path::new("ortsom"),
+            "up",
+            "mostrop2p/mostro:v9.9.9-rc1"
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(runner.calls()[3], "docker pull mostrop2p/mostro:v9.9.9-rc1");
 }
 
 #[tokio::test]
