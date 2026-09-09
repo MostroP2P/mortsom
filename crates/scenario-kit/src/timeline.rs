@@ -65,11 +65,22 @@ impl Timeline {
         summary: impl Into<String>,
         artifact: Option<String>,
     ) {
+        let summary = summary.into();
+        // The console follows the trade as it happens: what an actor did,
+        // what a screen showed, what cleanup decided. Relay and wallet
+        // observations stay in the artifacts, where they are many.
+        match kind {
+            TimelineKind::Step | TimelineKind::UiState | TimelineKind::Cleanup => {
+                tracing::info!(actor = actor.unwrap_or("-"), "{summary}");
+            }
+            TimelineKind::Assertion => tracing::info!("{summary}"),
+            TimelineKind::RelayEvent | TimelineKind::Wallet => tracing::debug!("{summary}"),
+        }
         lock(&self.entries).push(TimelineEntry {
             at_ms,
             kind,
             actor: actor.map(str::to_owned),
-            summary: summary.into(),
+            summary,
             artifact,
         });
     }
