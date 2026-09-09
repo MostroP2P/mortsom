@@ -38,7 +38,12 @@ pub async fn create(
     // for one further down is never built. Narrowing it is how a user
     // reaches a currency, and how the driver does.
     type_into(device, Ids::ORDER_CREATE_CURRENCY_SEARCH, &draft.fiat_code).await?;
-    tap(device, &Ids::currency_option(&draft.fiat_code)).await?;
+    super::choose(
+        device,
+        &Ids::currency_option(&draft.fiat_code),
+        Ids::ORDER_CREATE_CURRENCY_SEARCH,
+    )
+    .await?;
     type_into(
         device,
         Ids::ORDER_CREATE_FIAT_AMOUNT,

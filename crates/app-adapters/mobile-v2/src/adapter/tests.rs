@@ -440,6 +440,14 @@ fn app_with_orders() -> FakeUi {
             "order.create.currency.USD",
         ],
     );
+    // Choosing a currency closes the picker, like the real app.
+    ui.on_tap_hide(
+        "order.create.currency.USD",
+        &[
+            Ids::ORDER_CREATE_CURRENCY_SEARCH,
+            "order.create.currency.USD",
+        ],
+    );
     ui.on_tap(
         Ids::ORDER_CREATE_PRICE_TYPE,
         &[Ids::ORDER_CREATE_SATS_AMOUNT],
@@ -518,6 +526,31 @@ async fn create_order_returns_the_new_trade_id_and_state() {
     let calls = ui.calls();
     assert!(calls.contains(&"tap order.create.currency.USD".to_owned()));
     assert!(calls.contains(&"type order.create.sats_amount (4 chars)".to_owned()));
+}
+
+/// The currency picker's lazy list rebuilds its rows while it filters, and
+/// a press delivered to a row it has just replaced reaches nothing. Bob's
+/// live Web buy of 2026-09-09 stopped with the picker still open over the
+/// form. Choosing is idempotent, so a lost pick is pressed again; a submit
+/// never is (see the swallowed-submit test).
+#[tokio::test]
+async fn a_currency_pick_the_picker_ignored_is_pressed_again_until_it_closes() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.swallows_taps("order.create.currency.USD", 1);
+
+    let order = adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+
+    assert_eq!(order.state, OrderState::Pending);
+    let picks = ui
+        .calls()
+        .iter()
+        .filter(|c| *c == "tap order.create.currency.USD")
+        .count();
+    assert_eq!(picks, 2, "{:?}", ui.calls());
 }
 
 #[tokio::test]
