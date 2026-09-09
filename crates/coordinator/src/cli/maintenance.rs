@@ -129,11 +129,17 @@ pub(super) async fn cleanup_command(
     config_path: &std::path::Path,
     checkout: &std::path::Path,
     run_id: &str,
+    attributions: &[String],
 ) -> ExitCode {
     if let Ok(run) = run_id.parse::<mortsom_common::RunId>()
-        && let Some(result) = super::recover::cleanup_desktop(config_path, checkout, &run).await
+        && let Some(result) =
+            super::recover::cleanup_desktop(config_path, checkout, &run, attributions).await
     {
         return result;
+    }
+    if !attributions.is_empty() {
+        eprintln!("--attribute-order applies only to retained desktop recovery journals");
+        return ExitCode::from(2);
     }
     let config = match crate::config::MaintenanceConfig::load(config_path) {
         Ok(config) => config,

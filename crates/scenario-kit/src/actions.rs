@@ -21,7 +21,8 @@ use crate::waits::{stays_absent, wait_until};
 /// Poll interval for state observations.
 pub const STATE_POLL: Duration = Duration::from_secs(3);
 /// Wire kind of order events.
-const ORDER_EVENT_KIND: u16 = 38383;
+/// Kind of the daemon's public, replaceable order event.
+pub const ORDER_EVENT_KIND: u16 = 38383;
 
 /// Creates an order as `actor` and registers its cleanup immediately.
 pub async fn create_order(

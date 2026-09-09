@@ -296,6 +296,9 @@ struct FakeAdapter {
     /// escrow and waits for the counterpart. Only Alice's view is affected.
     maker_screen_lies: bool,
     maker_lied_about: Mutex<Vec<String>>,
+    /// The trades list never shows the order (app v2 on Web before its
+    /// trades store existed): cancel finds nothing to act on.
+    hides_trades: bool,
     /// The driver stops answering at the moment the scenario fails.
     silence_driver_on_failure: bool,
 }
@@ -320,6 +323,7 @@ impl FakeAdapter {
             ui_claims_cancelled: false,
             maker_screen_lies: false,
             maker_lied_about: Mutex::new(Vec::new()),
+            hides_trades: false,
             silence_driver_on_failure: false,
         }
     }
@@ -486,6 +490,9 @@ impl AppAdapter for FakeAdapter {
     ) -> Result<CancelOutcome, AdapterError> {
         let mut orders = self.orders.lock().unwrap();
         let taker = device.actor == mortsom_android_driver::avd::Actor::Bob;
+        if self.hides_trades {
+            return Ok(CancelOutcome::NotFound);
+        }
         if !taker && self.maker_lied_about.lock().unwrap().contains(&order.id) {
             return Ok(CancelOutcome::AlreadyClosed);
         }
@@ -598,10 +605,10 @@ const FAKE_ORDER_IDS: [&str; 12] = [
     "o1", "o2", "o3", "o4", "o5", "o6", "o7", "o8", "o9", "o10", "o11", "o12",
 ];
 
-/// Fake daemon on the relay. `publish_canceled: false` models a daemon that
-/// never closes an order the UI claims is cancelled.
+/// Fake daemon on the relay. `publish_closed: false` models a daemon that
+/// never closes an order (no `canceled`, no `success`) whatever the UI says.
 struct FakeObserver {
-    publish_canceled: bool,
+    publish_closed: bool,
     /// When set, `canceled` is published for an order only after the
     /// adapter recorded a daemon-accepted cancellation of it.
     canceled_gate: Option<Arc<Mutex<Vec<String>>>>,
@@ -609,7 +616,7 @@ struct FakeObserver {
 impl Default for FakeObserver {
     fn default() -> Self {
         Self {
-            publish_canceled: true,
+            publish_closed: true,
             canceled_gate: None,
         }
     }
@@ -620,7 +627,7 @@ impl ObserverFactory for FakeObserver {
         let observer = Arc::new(RelayObserver::detached(ObserverScope::daemon_only(pubkey)));
         let keys = Keys::parse(NSEC).unwrap();
         let feeder = Arc::clone(&observer);
-        let publish_canceled = self.publish_canceled;
+        let publish_closed = self.publish_closed;
         let gate = self.canceled_gate.clone();
         tokio::spawn(async move {
             for _ in 0..200 {
@@ -629,7 +636,7 @@ impl ObserverFactory for FakeObserver {
                     // funded and fiat-sent orders all read `in-progress`.
                     ["pending", "in-progress", "success", "canceled"]
                         .into_iter()
-                        .filter(move |s| publish_canceled || *s != "canceled")
+                        .filter(move |s| publish_closed || !matches!(*s, "canceled" | "success"))
                         .map(move |s| (*id, s))
                 }) {
                     if status == "canceled"
