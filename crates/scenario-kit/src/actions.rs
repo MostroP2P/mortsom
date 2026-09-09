@@ -178,6 +178,48 @@ pub async fn wait_app_state(
     }
 }
 
+/// Waits until `actor`'s app renders one of the raw `labels` for `order`,
+/// bounded by the state timeout. Finer than [`wait_app_state`]: several
+/// daemon statuses map to one [`OrderState`], and a journey sometimes has to
+/// wait for a particular one -- the buyer may only hand in a payout invoice
+/// once the daemon has asked for it, which the app shows as
+/// `waiting-invoice` while the coarser state is still `taken`.
+pub async fn wait_app_label(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+    labels: &[&str],
+) -> Result<String, ScenarioError> {
+    let session = ctx.actor(actor)?;
+    let device = session.device(ctx.ui_timeout);
+    let normalize = |raw: &str| raw.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+    let found = wait_until(ctx.state_timeout, STATE_POLL, || async {
+        match ctx.adapter.observe_order(&device, order).await {
+            Ok(state) if labels.contains(&normalize(&state.raw_label).as_str()) => {
+                Some(Ok(state.raw_label))
+            }
+            Ok(state) if state.state.is_terminal() => Some(Err(ScenarioError::product(format!(
+                "order {} reached terminal `{}` while waiting for {}",
+                order.id,
+                state.raw_label,
+                labels.join("|")
+            )))),
+            _ => None,
+        }
+    })
+    .await;
+    match found {
+        Some(result) => result,
+        None => Err(ScenarioError::product(format!(
+            "order {} did not show {} on {} within {:?}",
+            order.id,
+            labels.join("|"),
+            actor.as_str(),
+            ctx.state_timeout
+        ))),
+    }
+}
+
 /// Waits (bounded by `timeout`) until `actor`'s app shows `order` in one of
 /// `accepted` and returns which. Any other terminal state fails fast.
 pub async fn wait_app_state_in(
