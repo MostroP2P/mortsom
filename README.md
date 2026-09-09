@@ -143,7 +143,9 @@ identity.
 Both continue with Bob marking fiat sent and Alice releasing. A pass requires both clients' completed state,
 matching relay evidence, the hold settled once on Alice's node and the payout settled once on Bob's.
 
-Tool overrides:
+Web finds Chromium and ChromeDriver on `PATH`. When `PATH` offers the Chromium snap wrapper, which runs
+confined and cannot write browser profiles under `~/.local`, Mortsom uses the unconfined `chrome` and
+`chromedriver` inside the snap instead; `mortsom doctor --platform web` shows what was chosen. Tool overrides:
 
 ```sh
 ./target/debug/mortsom run happy_sell --xvfb /path/to/Xvfb

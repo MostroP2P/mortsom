@@ -210,6 +210,7 @@ async fn recover(
             .which(&command)
             .unwrap_or_else(|| PathBuf::from(command))
     };
+    let web_tools = crate::web_tools::resolve(&RealHost);
     let desktop = crate::run::DesktopOptions {
         recovery: Some(journal),
         resume: true,
@@ -218,8 +219,8 @@ async fn recover(
         provenance: manifest.build,
         platform: manifest.platform,
         xvfb: tool("MORTSOM_XVFB", "Xvfb"),
-        chromedriver: tool("MORTSOM_CHROMEDRIVER", "chromedriver"),
-        browser: tool("MORTSOM_BROWSER", "chromium"),
+        chromedriver: web_tools.chromedriver.path,
+        browser: web_tools.browser.path,
     };
     let ui = AppiumDriver::new(PathBuf::new());
     let adapter = select_adapter(

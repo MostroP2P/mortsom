@@ -73,6 +73,7 @@ pub async fn prepare(
             .join(artifact.file_name().ok_or("missing executable name")?),
         _ => bundle.root().to_path_buf(),
     };
+    let web_tools = crate::web_tools::resolve(host);
     Ok(DesktopOptions {
         recovery: None,
         resume: false,
@@ -81,8 +82,8 @@ pub async fn prepare(
         platform,
         artifact,
         xvfb,
-        chromedriver: resolved_tool(host, "MORTSOM_CHROMEDRIVER", "chromedriver"),
-        browser: resolved_tool(host, "MORTSOM_BROWSER", "chromium"),
+        chromedriver: web_tools.chromedriver.path,
+        browser: web_tools.browser.path,
     })
 }
 
@@ -200,11 +201,6 @@ pub fn validate_artifact(
         Platform::Linux => Err("Linux artifact must be an executable regular file".into()),
         Platform::Android => Err("Android uses the APK builder".into()),
     }
-}
-
-fn resolved_tool(host: &dyn crate::doctor::HostProbe, variable: &str, fallback: &str) -> PathBuf {
-    let value = host.env(variable).unwrap_or_else(|| fallback.into());
-    host.which(&value).unwrap_or_else(|| PathBuf::from(value))
 }
 
 fn build_error(error: mortsom_android_driver::process::ProcessError) -> String {
