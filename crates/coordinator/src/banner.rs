@@ -9,8 +9,8 @@
 //! flag back.
 //!
 //! Printed on **stderr**, always. `doctor --json` writes JSON on stdout
-//! and `list` writes one grep-able line per scenario; a banner there would
-//! break the pipe it was decorating. Its colour follows stderr for the
+//! and `list` writes its scenario table there; a banner there would break
+//! the pipe it was decorating. Its colour follows stderr for the
 //! same reason: `mortsom doctor 2>doctor.log` must not fill that log with
 //! escape sequences because stdout happened to be a terminal.
 
@@ -80,7 +80,7 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
             format!("run · {selection} · {platform} · {config}")
         }
         // The one command that reads no config at all.
-        Command::List => "list · every scenario in the registry".to_owned(),
+        Command::List { .. } => "list · every scenario in the registry".to_owned(),
         Command::Doctor { platform, .. } => format!("doctor · {platform} · {config}"),
         // The run id alone would not say which artifact tree was searched:
         // it is a directory under the config's `artifacts_dir`.
@@ -268,7 +268,7 @@ mod tests {
     #[test]
     fn the_one_command_that_reads_no_config_names_what_it_reads_instead() {
         // Arrange / Act
-        let list = caption(&Command::List, &config(), &stack_dir());
+        let list = caption(&Command::List { details: false }, &config(), &stack_dir());
 
         // Assert
         assert!(!list.contains("desktop.example.toml"), "{list}");
