@@ -192,6 +192,7 @@ confined and cannot write browser profiles under `~/.local`, Mortsom uses the un
 ./target/debug/mortsom run happy_sell --xvfb /path/to/Xvfb
 export MORTSOM_BROWSER=/path/to/chromium
 export MORTSOM_CHROMEDRIVER=/path/to/chromedriver
+export MORTSOM_WEBDRIVER_VERBOSE=1   # keep ChromeDriver's full log (DevTools events) as <actor>/driver.log
 ```
 
 Android: `--platform android` with an explicit legacy configuration. Instructions are archived in

@@ -5,8 +5,12 @@ Repository content is English; the operator conversation is Spanish.
 
 ## Where things stand (2026-09-10)
 
-**The happy-path and cancellation families are implemented and accepted live on Linux (10/10) and Web
-(10/10).** Spec section 8 lists
+**Three families are implemented and accepted live on Linux (14/14) and Web (14/14): happy path,
+cancellations and expirations.** The expiration family needed a stack rebuilt for the declared
+`order_expiration_secs` of 600 (daemon `6e18952f…`) and clients built from app branch
+`feat/mortsom-order-expiry-define` (`MORTSOM_ORDER_EXPIRY_SECS`, which the build asks the daemon for on
+every order). An open Web flake is recorded in the ledger: Alice's Chromium died twice as her client applied
+the expiry of her own pending order; run that scenario with `MORTSOM_WEBDRIVER_VERBOSE=1` to catch it. Spec section 8 lists
 the seven scenario families with their tags; the first two are in the catalogue: `range_order`,
 `market_price_order`, `full_trade_with_rating` (with `happy_sell`, `happy_buy`) and `cancel_before_taken`
 (was `cancel_pending`), `cancel_after_take_unpaid`, `taker_cancel_at_taken`, `cooperative_cancel`,
@@ -47,9 +51,8 @@ No journal is retained, no harness process is left running, and the regtest stac
    still build by default. Put them behind a Cargo feature so the default workspace is desktop and Web only.
 2. **Measure coverage.** The spec requires 80% of lines under `cargo llvm-cov`. Last measured at 83.88%
    several commits ago (`5c764ba`); it has not been re-run since.
-3. **Land the two branches.** App PR MostroP2P/app#410 (`feat/mortsom-range-and-rating-ids`, five
-   commits) is open; merge it, then the Mortsom branch `feat/happy-path-and-cancellation-scenarios`.
-   Until #410 is merged, build the clients from the app branch, not from `main`.
+3. **Land the expiration branches.** App `feat/mortsom-order-expiry-define` (the order-expiry define) and
+   Mortsom `feat/expiration-family`. Until the app PR is merged, build the clients from that branch.
 4. **Further families**, when the operator asks. Spec section 8.1 lists them; section 14 is the roadmap.
    The buy-side range remainder is driven by `range_buy_order` (app branch `feat/mortsom-range-buy-remainder`
    on top of #410, Mortsom branch `feat/range-buy-order`).
