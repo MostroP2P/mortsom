@@ -129,6 +129,18 @@ pub async fn take_order_at(
     Ok(())
 }
 
+/// States an open invoice or payment form can never turn into on its own:
+/// the trade has left the take behind (the taker walked away, the order was
+/// cancelled or expired). A form still on screen from an earlier step then
+/// keeps reporting its fixed waiting state, so these are read from the
+/// trade detail, which reflects the change.
+fn leaves_the_take(state: OrderState) -> bool {
+    matches!(
+        state,
+        OrderState::Pending | OrderState::Cancelled | OrderState::Expired
+    )
+}
+
 /// Waits until `actor`'s app shows `expected` for `order`, bounded by the
 /// state timeout. Returns the raw label the app rendered.
 pub async fn wait_app_state(
@@ -141,7 +153,12 @@ pub async fn wait_app_state(
     let device = session.device(ctx.ui_timeout);
     let last: Mutex<LastSeen> = Mutex::new(LastSeen::default());
     let found = wait_until(ctx.state_timeout, STATE_POLL, || async {
-        match ctx.adapter.observe_order(&device, order).await {
+        let observed = if leaves_the_take(expected) {
+            ctx.adapter.observe_order_detail(&device, order).await
+        } else {
+            ctx.adapter.observe_order(&device, order).await
+        };
+        match observed {
             Ok(state) if state.state == expected => Some(Ok(state.raw_label)),
             // A terminal state other than the expected one can never become
             // it: fail fast instead of waiting out the deadline.

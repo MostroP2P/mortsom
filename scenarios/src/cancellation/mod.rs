@@ -45,7 +45,7 @@ pub async fn cancel_before_taken(ctx: &Context) -> Result<(), ScenarioError> {
             order.id
         )));
     }
-    flow::expect_cancelled(ctx, &order).await
+    flow::expect_cancelled(ctx, &order, &[Actor::Alice]).await
 }
 
 /// The taker takes the order and abandons it without an invoice. The
@@ -123,7 +123,7 @@ pub async fn cooperative_cancel(ctx: &Context) -> Result<(), ScenarioError> {
             taken.order.id
         )));
     }
-    flow::expect_cancelled(ctx, &taken.order).await
+    flow::expect_cancelled(ctx, &taken.order, &Actor::ALL).await
 }
 
 /// One party alone tries to cancel a funded order. The daemon must not
@@ -165,7 +165,7 @@ pub async fn unilateral_cancel_rejected(ctx: &Context) -> Result<(), ScenarioErr
             taken.order.id
         )));
     }
-    flow::expect_cancelled(ctx, &taken.order).await
+    flow::expect_cancelled(ctx, &taken.order, &Actor::ALL).await
 }
 
 crate::register_scenario! {

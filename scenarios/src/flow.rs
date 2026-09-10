@@ -192,10 +192,19 @@ pub async fn release_and_settle(ctx: &Context, taken: &Taken) -> Result<(), Scen
     Ok(())
 }
 
-/// Both apps and the relay agree the order is cancelled and, when a hold
-/// payment was in flight, the escrow came back; marks it resolved.
-pub async fn expect_cancelled(ctx: &Context, order: &OrderReference) -> Result<(), ScenarioError> {
-    actions::wait_both(ctx, order, OrderState::Cancelled).await?;
+/// Every app in `participants` and the relay agree the order is cancelled
+/// and, when a hold payment was in flight, the escrow came back; marks it
+/// resolved. An actor who never took the order does not list it, so only
+/// the parties to it are asked: the relay is the witness for everyone
+/// else.
+pub async fn expect_cancelled(
+    ctx: &Context,
+    order: &OrderReference,
+    participants: &[Actor],
+) -> Result<(), ScenarioError> {
+    for actor in participants {
+        actions::wait_app_state(ctx, *actor, order, OrderState::Cancelled).await?;
+    }
     actions::wait_relay_state(ctx, order, OrderState::Cancelled).await?;
     actions::expect_hold_refunded(ctx, order).await?;
     actions::mark_resolved(ctx, order);
