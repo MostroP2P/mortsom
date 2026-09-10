@@ -1,12 +1,19 @@
 //! How `mortsom list` reads.
 //!
 //! The registry answers a flat list of definitions, but the operator's
-//! question is never flat: "which family is this, how long does an attempt
-//! take, does it move real sats, and does my profile support it?". The raw
-//! dump answered the last one by repeating the seven capabilities every
-//! scenario shares on every line, which pushed the differences off the
-//! screen. So the rendering here groups by family, states the shared
-//! baseline once, and shows per scenario only what it adds.
+//! question is never flat: "which scenarios are there, what do they cover,
+//! which ones spend real sats, and how do I select them?". The raw dump
+//! answered none of those directly: it repeated on every line the seven
+//! capabilities every scenario shares, and it printed each scenario's
+//! timeout, which is the deadline that aborts a stuck attempt and not how
+//! long the scenario takes -- a reader has no way to tell those apart from
+//! a bare `1800s`.
+//!
+//! So the default listing groups by family, badges only what changes a
+//! decision (sats, solver, app wallet) and states the tags as what they
+//! are: what `--tag` selects. Capabilities and deadlines are what someone
+//! writing an app adapter needs, not what someone choosing a scenario
+//! needs, so `--details` carries them.
 //!
 //! Everything is pure: `render` takes the rows and a colour flag, so the
 //! layout is testable and a redirected `mortsom list` stays plain text.
@@ -23,7 +30,7 @@ const CROSS_CUTTING: [&str; 2] = ["smoke", "parity"];
 /// so one long name cannot push the rest of the line away.
 const NAME_COLUMN: usize = 30;
 
-/// Seconds in a minute, for the human duration.
+/// Seconds in a minute, for the human deadline.
 const SECS_PER_MINUTE: u64 = 60;
 
 const BOLD: &str = "1";
@@ -33,6 +40,23 @@ const BRAND: &str = "38;2;155;206;75";
 const YELLOW: &str = "33";
 const CYAN: &str = "36";
 const MAGENTA: &str = "35";
+
+/// What the listing shows beyond the names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Detail {
+    /// What choosing a scenario needs: family, badges, tags.
+    Summary,
+    /// Also the capabilities an app profile must support and the deadline
+    /// that aborts a stuck attempt.
+    Full,
+}
+
+impl Detail {
+    /// Whether capabilities and deadlines are shown.
+    fn is_full(self) -> bool {
+        self == Detail::Full
+    }
+}
 
 /// One scenario as the listing needs it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -45,7 +69,7 @@ pub struct Row {
     pub labels: Vec<String>,
     /// Capabilities this scenario needs beyond the shared baseline.
     pub extras: Vec<String>,
-    /// Deadline for one attempt.
+    /// Deadline that aborts one attempt; not how long the scenario takes.
     pub timeout_secs: u64,
     /// True when the scenario moves sats.
     pub moves_value: bool,
@@ -98,7 +122,7 @@ impl Listing {
     /// The listing as an operator reads it, optionally styled for a
     /// terminal. Colour only ever wraps text that is already there, so a
     /// piped `mortsom list` and a terminal one say the same words.
-    pub fn render(&self, color: bool) -> String {
+    pub fn render(&self, color: bool, detail: Detail) -> String {
         let paint = |code: &str, text: &str| {
             if color {
                 format!("\u{1b}[{code}m{text}\u{1b}[0m")
@@ -115,10 +139,10 @@ impl Listing {
                 paint(DIM, &format!("({})", rows.len()))
             ));
             for row in rows {
-                out.push_str(&row.render(&paint));
+                out.push_str(&row.render(&paint, detail));
             }
         }
-        out.push_str(&self.footer(&paint));
+        out.push_str(&self.footer(&paint, detail));
         out
     }
 
@@ -137,26 +161,41 @@ impl Listing {
         )
     }
 
-    /// What every scenario shares, plus what the badges mean.
-    fn footer(&self, paint: &dyn Fn(&str, &str) -> String) -> String {
-        if self.baseline.is_empty() {
-            return String::new();
-        }
+    /// What the badges mean, how to select what you just read, and -- in
+    /// full detail -- the capabilities every scenario shares.
+    fn footer(&self, paint: &dyn Fn(&str, &str) -> String, detail: Detail) -> String {
         let mut out = format!(
-            "\n{} {}\n",
-            paint(DIM, "every scenario requires:"),
-            paint(DIM, &self.baseline.join(", "))
+            "\n{}\n",
+            paint(
+                DIM,
+                "sats = moves real value | free = no sats move | solver = a \
+                 dispute solver must be registered | app-wallet = pays \
+                 through the app's own wallet"
+            )
         );
         out.push_str(&format!(
             "{}\n",
             paint(
                 DIM,
-                "badges: sats = moves real value | free = no sats move | \
-                 solver = a dispute solver must be registered | app-wallet = \
-                 pays through the app's own wallet | + = what this scenario \
-                 needs on top of the baseline"
+                "run one by name: mortsom run <scenario> -- or a whole set \
+                 by any word above: mortsom run --tag smoke"
             )
         ));
+        if detail.is_full() && !self.baseline.is_empty() {
+            out.push_str(&format!(
+                "\n{} {}\n",
+                paint(DIM, "every scenario requires:"),
+                paint(DIM, &self.baseline.join(", "))
+            ));
+            out.push_str(&format!(
+                "{}\n",
+                paint(
+                    DIM,
+                    "+ = capabilities beyond that baseline; deadline = when a \
+                     stuck attempt is aborted, not how long the scenario takes"
+                )
+            ));
+        }
         out
     }
 
@@ -171,23 +210,18 @@ impl Listing {
 }
 
 impl Row {
-    /// One scenario: name, how long an attempt may take, its badges, and
-    /// what it needs beyond the baseline.
-    fn render(&self, paint: &dyn Fn(&str, &str) -> String) -> String {
-        // Painting adds bytes a width specifier would count, so every
-        // column is padded before it is coloured.
+    /// One scenario: its name, the badges that decide whether it may be
+    /// run, and the tags that select it. With [`Detail::Full`], also what
+    /// the app profile must support and the deadline for one attempt.
+    fn render(&self, paint: &dyn Fn(&str, &str) -> String, detail: Detail) -> String {
+        // Painting adds bytes a width specifier would count, so the name is
+        // padded before it is coloured.
         let padding = " ".repeat(NAME_COLUMN.saturating_sub(self.name.chars().count()));
-        let duration = format!("{:>5}", human_duration(self.timeout_secs));
-        let mut line = format!(
-            "  {}{} {}",
-            paint(BOLD, &self.name),
-            padding,
-            paint(DIM, &duration)
-        );
+        let mut line = format!("  {}{}", paint(BOLD, &self.name), padding);
         if self.moves_value {
-            line.push_str(&format!("  {}", paint(YELLOW, "sats")));
+            line.push_str(&format!(" {}", paint(YELLOW, "sats")));
         } else {
-            line.push_str(&format!("  {}", paint(DIM, "free")));
+            line.push_str(&format!(" {}", paint(DIM, "free")));
         }
         if self.needs_solver {
             line.push_str(&format!(" {}", paint(MAGENTA, "solver")));
@@ -198,15 +232,20 @@ impl Row {
         for label in &self.labels {
             line.push_str(&format!(" {}", paint(CYAN, label)));
         }
-        if !self.extras.is_empty() {
-            line.push_str(&format!(
-                "\n{}{}",
-                " ".repeat(NAME_COLUMN + 2),
-                paint(DIM, &format!("+ {}", self.extras.join(", ")))
-            ));
+        if detail.is_full() {
+            line.push_str(&self.detail_line(paint));
         }
         line.push('\n');
         line
+    }
+
+    /// The adapter author's line: extra capabilities and the deadline.
+    fn detail_line(&self, paint: &dyn Fn(&str, &str) -> String) -> String {
+        let mut detail = format!("deadline {}", human_duration(self.timeout_secs));
+        if !self.extras.is_empty() {
+            detail = format!("+ {} | {detail}", self.extras.join(", "));
+        }
+        format!("\n{}{}", " ".repeat(NAME_COLUMN + 2), paint(DIM, &detail))
     }
 }
 

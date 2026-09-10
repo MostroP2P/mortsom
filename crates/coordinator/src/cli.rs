@@ -59,8 +59,14 @@ pub enum Command {
         #[command(subcommand)]
         action: StackAction,
     },
-    /// List registered scenarios with tags, requirements and value flag.
-    List,
+    /// List registered scenarios by family: which move sats, which need a
+    /// dispute solver, and the tags `--tag` selects.
+    List {
+        /// Also show the capabilities an app profile must support and the
+        /// deadline that aborts a stuck attempt.
+        #[arg(long)]
+        details: bool,
+    },
     /// Recover retained desktop identities and orders, or clean legacy Android resources.
     /// Refuses unresolved ownership and changed stack identities.
     Cleanup {
@@ -382,7 +388,7 @@ pub async fn run(cli: Cli) -> ExitCode {
     };
     match cli.command {
         Command::Stack { action } => stack_cli(&cli.stack_dir, action).await,
-        Command::List => list_scenarios(),
+        Command::List { details } => list_scenarios(details),
         Command::Cleanup {
             run,
             attribute_order,
@@ -683,7 +689,7 @@ async fn run_app(config_path: &std::path::Path, command: AppCommand) -> ExitCode
     }
 }
 
-fn list_scenarios() -> ExitCode {
+fn list_scenarios(details: bool) -> ExitCode {
     mortsom_scenarios::link();
     if let Err(e) = mortsom_scenario_kit::registry::validate() {
         eprintln!("{e}");
@@ -691,7 +697,12 @@ fn list_scenarios() -> ExitCode {
     }
     let defs = mortsom_scenario_kit::registry::all();
     let listing = crate::scenario_list::Listing::from_defs(&defs);
-    print!("{}", listing.render(use_color()));
+    let detail = if details {
+        crate::scenario_list::Detail::Full
+    } else {
+        crate::scenario_list::Detail::Summary
+    };
+    print!("{}", listing.render(use_color(), detail));
     ExitCode::SUCCESS
 }
 

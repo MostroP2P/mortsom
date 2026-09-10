@@ -29,7 +29,7 @@ cargo build -p mortsom-coordinator --bin mortsom
 ./target/debug/mortsom run happy_sell    # builds app v2, starts Alice and Bob, runs one trade
 ./target/debug/mortsom run happy_buy --platform web
 ./target/debug/mortsom run --tag smoke   # the cheap subset: three scenarios, one run each
-./target/debug/mortsom list              # scenarios by family: duration, value, requirements
+./target/debug/mortsom list              # scenarios by family; --details adds capabilities and deadlines
 ```
 
 Every `run` creates fresh Alice and Bob identities, runs one scenario, resolves every order it created and

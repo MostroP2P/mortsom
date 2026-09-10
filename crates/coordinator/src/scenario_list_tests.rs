@@ -43,7 +43,7 @@ fn listing() -> Listing {
 /// The counts an operator wants before reading a single name.
 #[test]
 fn the_header_counts_the_scenarios_that_cost_sats_and_need_a_solver() {
-    let text = listing().render(false);
+    let text = listing().render(false, Detail::Summary);
 
     assert!(text.starts_with("3 scenarios"), "{text}");
     assert!(
@@ -56,7 +56,7 @@ fn the_header_counts_the_scenarios_that_cost_sats_and_need_a_solver() {
 /// for "the dispute ones", not for a name they do not know yet.
 #[test]
 fn scenarios_are_grouped_under_their_family_with_a_count() {
-    let text = listing().render(false);
+    let text = listing().render(false, Detail::Summary);
 
     assert!(text.contains("dispute (1)"), "{text}");
     assert!(text.contains("happy-path (1)"), "{text}");
@@ -66,21 +66,28 @@ fn scenarios_are_grouped_under_their_family_with_a_count() {
     assert!(dispute < name, "the family heads its scenarios: {text}");
 }
 
-/// A timeout in seconds is arithmetic the reader should not have to do.
+/// A deadline is not a duration: showing `30m` next to a scenario that
+/// runs in four minutes reads as "this will take half an hour". The
+/// summary leaves it out; `--details` says the word "deadline" with it.
 #[test]
-fn timeouts_read_as_minutes() {
-    let text = listing().render(false);
+fn deadlines_are_absent_from_the_summary_and_named_in_full_detail() {
+    let summary = listing().render(false, Detail::Summary);
+    assert!(!summary.contains("30m"), "{summary}");
+    assert!(!summary.contains("1800"), "{summary}");
 
-    assert!(text.contains("30m"), "{text}");
-    assert!(text.contains("35m"), "{text}");
-    assert!(!text.contains("1800s"), "{text}");
+    let full = listing().render(false, Detail::Full);
+    assert!(full.contains("deadline 30m"), "{full}");
+    assert!(
+        full.contains("not how long the scenario takes"),
+        "the footer says what a deadline is: {full}"
+    );
 }
 
 /// Whether a scenario spends real sats is the one fact that decides
 /// whether it may be run against mainnet.
 #[test]
 fn each_scenario_carries_its_badges() {
-    let text = listing().render(false);
+    let text = listing().render(false, Detail::Summary);
 
     let happy = line_with(&text, "happy_sell");
     assert!(happy.contains("sats"), "{happy}");
@@ -95,30 +102,46 @@ fn each_scenario_carries_its_badges() {
     assert!(solver.contains("solver"), "{solver}");
 }
 
-/// The seven capabilities every scenario shares used to be repeated on
-/// every line; stated once, the differences are what is left.
+/// Capabilities decide whether an app profile can run a scenario --
+/// an adapter author's question, not a question for whoever is choosing
+/// what to run. They belong behind `--details`.
 #[test]
-fn the_shared_baseline_is_stated_once_and_only_extras_are_listed() {
-    let text = listing().render(false);
+fn capabilities_are_only_shown_in_full_detail() {
+    let summary = listing().render(false, Detail::Summary);
+    assert!(!summary.contains("onboarding"), "{summary}");
+    assert!(!summary.contains("release"), "{summary}");
+    assert!(!summary.contains('+'), "{summary}");
 
+    let full = listing().render(false, Detail::Full);
     assert_eq!(
-        text.matches("onboarding").count(),
+        full.matches("onboarding").count(),
         1,
-        "the baseline is said once: {text}"
+        "the shared baseline is said once: {full}"
     );
-    assert!(text.contains("every scenario requires: onboarding, create-order"));
-    assert!(text.contains("free = no sats move"), "{text}");
-    assert!(text.contains("+ release"), "{text}");
+    assert!(full.contains("every scenario requires: onboarding, create-order"));
+    assert!(full.contains("+ release"), "{full}");
     assert!(
-        !line_with(&text, "restart_at_pending").contains('+'),
-        "a scenario with no extras gets no extras line: {text}"
+        !line_with(&full, "restart_at_pending").contains('+'),
+        "a scenario with no extras adds nothing: {full}"
     );
+}
+
+/// The tags are not decoration: they are what `--tag` takes, and a reader
+/// who does not know that reads them as noise.
+#[test]
+fn the_footer_says_the_badges_and_how_to_select_what_was_read() {
+    let text = listing().render(false, Detail::Summary);
+
+    assert!(text.contains("sats = moves real value"), "{text}");
+    assert!(text.contains("free = no sats move"), "{text}");
+    assert!(text.contains("mortsom run <scenario>"), "{text}");
+    assert!(text.contains("mortsom run --tag smoke"), "{text}");
 }
 
 /// A redirected `mortsom list` feeds pipes and logs; it stays plain.
 #[test]
 fn the_plain_rendering_has_no_escape_sequences() {
-    let text = listing().render(false);
+    let text = listing().render(false, Detail::Summary);
 
     assert!(!text.contains('\u{1b}'), "{text:?}");
 }
@@ -127,14 +150,17 @@ fn the_plain_rendering_has_no_escape_sequences() {
 /// `grep` against a terminal or a pipe finds the same thing.
 #[test]
 fn colour_changes_only_the_styling() {
-    let coloured = listing().render(true);
+    let coloured = listing().render(true, Detail::Summary);
 
     assert!(coloured.contains('\u{1b}'));
     assert!(
         coloured.contains(&format!("\u{1b}[{YELLOW}msats\u{1b}[0m")),
         "sats is painted: {coloured:?}"
     );
-    assert_eq!(strip_ansi(&coloured), listing().render(false));
+    assert_eq!(
+        strip_ansi(&coloured),
+        listing().render(false, Detail::Summary)
+    );
 }
 
 /// Building from the registry is what the command actually does; the
