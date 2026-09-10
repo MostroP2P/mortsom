@@ -4,8 +4,10 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 14/14, Web 14/14.** Every scenario of the happy-path, cancellation and expiration
-families (spec section 8) is accepted on both platforms. The expiration
+**Accepted: Linux 17/17, Web 17/17.** Every scenario of the happy-path, cancellation, expiration and
+dispute families (spec section 8) is accepted on both platforms. The dispute family ran on 2026-09-10 with
+the clients built from app branch `feat/mortsom-dispute-back-id` (`6222334`, the dispute screen's
+`appbar.back`), each run registering its own solver with the daemon. The expiration
 family ran on a stack rebuilt on 2026-09-10 for the declared `order_expiration_secs` of 600 (daemon
 `6e18952f…`), with the clients built from app branch `feat/mortsom-order-expiry-define` (`d03afed`). All 2026-09-10 runs are on the Mortsom-owned stack (daemon
 `f17567fc…`) with the app at `e8d7c06` (branch `feat/mortsom-range-and-rating-ids`).
@@ -26,6 +28,9 @@ family ran on a stack rebuilt on 2026-09-10 for the declared `order_expiration_s
 | `hold_invoice_expires` | expiration | **Accepted** 2026-09-10, run `20260910T064434Z-c663f82bd44a` (family batch) | **Accepted** 2026-09-10, run `20260910T072145Z-69fcdb0ab80f` (family batch) |
 | `buyer_invoice_deadline` | expiration | **Accepted** 2026-09-10, run `20260910T064027Z-fce2b2d421e5` (family batch; hold refunded) | **Accepted** 2026-09-10, run `20260910T071729Z-c61799b99dc1` (family batch; hold refunded) |
 | `unilateral_cancel_rejected` | cancellation | **Accepted** 2026-09-10, run `20260910T002921Z-704f54b3ff05` | **Accepted** 2026-09-10, run `20260910T012017Z-0e1186dbd6e7` (family batch) |
+| `dispute_settled_by_solver` | dispute | **Accepted** 2026-09-10, run `20260910T115327Z-f2a515741b09` (dispute initiated → in-progress → settled; hold and payout settled once each) | **Accepted** 2026-09-10, run `20260910T120310Z-ca276d92a07b` |
+| `dispute_canceled_by_solver` | dispute | **Accepted** 2026-09-10, run `20260910T115609Z-0039c33d54ae` (dispute initiated → in-progress → seller-refunded; hold refunded) | **Accepted** 2026-09-10, run `20260910T120645Z-b8e2f466b31e` (hold refunded) |
+| `dispute_released_by_seller` | dispute | **Accepted** 2026-09-10, run `20260910T115806Z-c9f7dfc464fd` (dispute initiated → settled on the release) | **Accepted** 2026-09-10, run `20260910T120935Z-ee1fb55d8b99` |
 
 ## Live attempts
 
@@ -33,6 +38,7 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260910T111844Z-287ee1abca1a` | Linux | dispute_settled_by_solver | Bob opened the dispute; the daemon published it `initiated` | Two gaps. Bob's app pushed its dispute screen, whose back button carried no `appbar.back`, so no later observation could leave it (app fix: the dispute screen's back button is tagged). The solver's registration had been dropped by the daemon without a word: `admin-add-solver` fails the daemon's structural check without a message id (harness fix: a fresh id is set, and settle/cancel travel on the dispute wrapper, as the reference client does). The stuck dispute was closed by the operator tool (`solve … cancel`, `canceled-by-admin`, escrow returned) and the run resolved by `cleanup` (`20260910T115019Z-350c2b31b041`) |
 | `20260910T075757Z-82bc2e9e7752` | Web | pending_order_expires | The daemon expired the order; Alice's Web client logged the book's `canceled` for it (`status order=… wire=Canceled local=Pending applies=true`) and its browser died on the next line, while Bob's lived on | **Open Web flake.** Same death as the attempt below, now with the client's console kept (`alice/app.log`): no error before the end. The verbose ChromeDriver log was not on. The harness now stops a wait after three consecutive infrastructure failures (`ae1b549`) instead of polling a dead session for 15 minutes. Resolved by `cleanup` (`20260910T081037Z`, order already closed, no payment) |
 | `20260910T072641Z-1cb58f8f9805` | Web | pending_order_expires (last of the `--tag expiration` batch) | The daemon expired the order at 07:38:06; Alice's browser closed its relay connection 76 ms later and was gone | Alice's Chromium died as her client processed the expiry; Bob's stayed. No crash record (verbose driver log off, console log not yet kept on Web). Resolved by `cleanup` (`20260910T075336Z`, order already closed, no payment) |
 | `20260910T064831Z-14808998df9f` | Linux | pending_order_expires | The daemon expired the untaken order 657 s after creation (`Order id … is expired`, status `expired`) | Harness: the wait asked the relay for `expired`, but the daemon publishes every order closed without a trade as `canceled` on the book (`create_status_tags`). Fixed in `73b753c`: the book's `canceled` is accepted for an expired untaken order. Cleanup healthy, no payment |

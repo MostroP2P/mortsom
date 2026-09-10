@@ -641,7 +641,7 @@ fn list_scenarios() -> ExitCode {
     }
     for def in mortsom_scenario_kit::registry::all() {
         println!(
-            "{:<28} tags=[{}] requires=[{}] moves_value={} timeout={}s",
+            "{:<28} tags=[{}] requires=[{}] moves_value={} timeout={}s{}",
             def.name,
             def.tags.join(","),
             def.requires
@@ -650,7 +650,12 @@ fn list_scenarios() -> ExitCode {
                 .collect::<Vec<_>>()
                 .join(","),
             def.moves_value,
-            def.timeout_secs
+            def.timeout_secs,
+            if def.needs_solver {
+                " needs=solver"
+            } else {
+                ""
+            }
         );
     }
     ExitCode::SUCCESS

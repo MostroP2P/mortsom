@@ -198,6 +198,15 @@ pub trait AppAdapter: Send + Sync {
             "rating a counterpart is not supported",
         ))
     }
+    /// Opens a dispute on an active or fiat-sent order as this actor and
+    /// returns once the app has accepted the request.
+    async fn open_dispute(
+        &self,
+        _device: &DeviceContext<'_>,
+        _order: &OrderReference,
+    ) -> Result<(), AdapterError> {
+        Err(AdapterError::contract("opening a dispute is not supported"))
+    }
     /// Cancels the order from the pay-invoice screen instead of paying.
     async fn cancel_payment(
         &self,

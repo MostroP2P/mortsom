@@ -196,6 +196,8 @@ pub async fn run_scenarios(
         },
     );
     summary.results.extend(gated);
+    let (runnable, gated) = gate_solver(&summary.app_profile, runnable, options.stack.is_some());
+    summary.results.extend(gated);
     if runnable.is_empty() {
         return finish(&artifacts, &mut summary).map(|()| summary);
     }
@@ -223,6 +225,14 @@ pub async fn run_scenarios(
         mainnet,
         matches!(clearance, Clearance::PendingRegtest),
     );
+    // A cleanup run may find an order left disputed by a broken run; only a
+    // solver can close it, so a cleanup on an owned stack registers one.
+    let resuming = options
+        .desktop
+        .as_ref()
+        .is_some_and(|options| options.resume);
+    world.needs_solver =
+        runnable.iter().any(|def| def.needs_solver) || (resuming && options.stack.is_some());
     if let Err(stage) = world.bring_up(&mut summary).await {
         for def in &runnable {
             summary.results.push(ScenarioResult {
@@ -340,6 +350,39 @@ fn gate_capabilities<'a>(
     (runnable, skipped)
 }
 
+/// A dispute solver is a user the daemon's operator registers with the
+/// daemon's own key, which only a Mortsom-owned stack holds: elsewhere a
+/// scenario that needs one is skipped with the reason, never failed.
+fn gate_solver<'a>(
+    profile: &str,
+    selected: Vec<&'a ScenarioDef>,
+    stack_owned: bool,
+) -> (Vec<&'a ScenarioDef>, Vec<ScenarioResult>) {
+    let mut runnable = Vec::new();
+    let mut skipped = Vec::new();
+    for def in selected {
+        if def.needs_solver && !stack_owned {
+            skipped.push(ScenarioResult {
+                name: def.name.into(),
+                app_profile: profile.to_owned(),
+                app_version: None,
+                outcome: Outcome::Skipped {
+                    reason: format!(
+                        "{} needs a dispute solver, which only a Mortsom-owned stack can register \
+                         (`mortsom stack up`)",
+                        def.name
+                    ),
+                },
+                attempts: 0,
+                duration: Duration::ZERO,
+            });
+        } else {
+            runnable.push(def);
+        }
+    }
+    (runnable, skipped)
+}
+
 /// The live environment of one run.
 struct World<'a> {
     config: &'a Config,
@@ -360,6 +403,10 @@ struct World<'a> {
     node_wallets: BTreeMap<String, Arc<dyn NodeWallet>>,
     farm: Option<Farm>,
     desktop: Option<DesktopOptions>,
+    /// Whether a scenario of this run needs a dispute solver.
+    needs_solver: bool,
+    /// The solver registered for this run, when one was needed.
+    solver: Option<Arc<mortsom_solver::Solver>>,
 }
 
 impl<'a> World<'a> {
@@ -389,7 +436,48 @@ impl<'a> World<'a> {
             node_wallets: BTreeMap::new(),
             farm: None,
             desktop: options.desktop.clone(),
+            needs_solver: false,
+            solver: None,
         }
+    }
+
+    /// Registers a fresh solver with the daemon, as its operator would,
+    /// and scopes the observer to it. The daemon key is read from the
+    /// stack's owner-only settings and dropped once the registration is
+    /// signed; it is never logged or kept.
+    async fn register_solver(
+        &self,
+        relay_url: &str,
+        daemon: nostr_sdk::prelude::PublicKey,
+    ) -> Result<Arc<mortsom_solver::Solver>, String> {
+        let settings = mortsom_environment::daemon_settings::DaemonSettings::load(Path::new(
+            &self.config.mostro.settings_file,
+        ))
+        .map_err(|e| e.to_string())?;
+        let nsec = settings
+            .nostr
+            .nsec_privkey
+            .filter(|s| !s.expose().is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "{} carries no daemon key; a solver can only be registered on a Mortsom-owned stack",
+                    self.config.mostro.settings_file
+                )
+            })?;
+        let solver = mortsom_solver::Solver::connect(
+            relay_url,
+            daemon,
+            Duration::from_secs(self.config.run.state_timeout_secs),
+        )
+        .await
+        .map_err(|e| e.to_string())?;
+        solver.register(&nsec).await.map_err(|e| e.to_string())?;
+        if let Some(observer) = &self.observer
+            && let Err(e) = observer.add_actor(solver.public_key()).await
+        {
+            warn!(error = %e, "cannot scope observer to the solver");
+        }
+        Ok(Arc::new(solver))
     }
 
     /// Relay, observer, wallets, devices, bootstrap. Returns the failing
@@ -444,6 +532,18 @@ impl<'a> World<'a> {
             .checks
             .push("relay-observer", CheckStatus::Pass, "subscribed");
         self.observer = Some(observer);
+        if self.needs_solver {
+            let solver = self
+                .register_solver(&relay.host_url(), pubkey)
+                .await
+                .map_err(|e| record_fail(summary, "dispute-solver", e))?;
+            summary.checks.push(
+                "dispute-solver",
+                CheckStatus::Pass,
+                format!("registered {}", short(&solver.public_key().to_hex())),
+            );
+            self.solver = Some(solver);
+        }
 
         let mut readers = Vec::new();
         let mut nodes: BTreeMap<String, Arc<dyn NodeWallet>> = BTreeMap::new();

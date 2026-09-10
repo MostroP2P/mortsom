@@ -37,6 +37,8 @@ pub use adapter::Adapter;
 pub const ORDER: &str = "the-order";
 /// The remainder the daemon spawns from a range order.
 pub const REMAINDER: &str = "the-remainder";
+/// The dispute a party opens on the order.
+pub const DISPUTE: &str = "the-dispute";
 // Public BOLT 11 reference invoice, never submitted to a real wallet.
 const INVOICE: &str = "lnbc2500u1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpu9qrsgquk0rl77nj30yxdy8j9vdx85fkpmdla2087ne0xh8nhedh8w27kyke0lp53ut353s06fv3qfegext0eh0ymjpf39tuven09sam30g4vgpfna3rh";
 
@@ -49,6 +51,10 @@ pub struct Misbehaviour {
     pub lone_cancel_closes: bool,
     /// A market order is published with a sats amount.
     pub prices_market_orders_upfront: bool,
+    /// A dispute is published as opened by the other side.
+    pub swaps_dispute_initiator: bool,
+    /// The solver's take is answered with some other order's id.
+    pub solver_reports_another_order: bool,
 }
 
 struct State {
@@ -73,6 +79,8 @@ struct State {
     /// Orders the fixture daemon closed on its own, dropped from the app's
     /// list the way app v2 drops a never-active trade.
     dropped: Vec<String>,
+    /// Who opened the dispute on the order, while one is open.
+    dispute_initiator: Option<&'static str>,
     misbehaviour: Misbehaviour,
 }
 
@@ -112,6 +120,7 @@ impl Fixture {
             expires_pending: false,
             cancels_funded_take: false,
             dropped: Vec::new(),
+            dispute_initiator: None,
             misbehaviour,
         }));
         let adapter = Arc::new(Adapter {
@@ -163,6 +172,7 @@ impl Fixture {
                 lane: Lane::Local,
             },
             relay_control: Arc::new(NoRelayControl),
+            solver: Some(adapter.clone()),
             budget: Arc::new(Mutex::new(Budget::new(
                 SpendCaps::new(250_000, 250_000).unwrap(),
             ))),
@@ -210,6 +220,12 @@ impl Fixture {
         self
     }
 
+    /// A run that registered no solver.
+    pub fn without_solver(mut self) -> Self {
+        self.context.solver = None;
+        self
+    }
+
     pub fn actions(&self) -> Vec<String> {
         self.state.lock().unwrap().actions.clone()
     }
@@ -223,6 +239,19 @@ impl Fixture {
             .snapshot()
             .iter()
             .filter(|e| e.kind == 38383 && e.tag("d") == Some(order))
+            .filter_map(|e| e.tag("s").map(str::to_owned))
+            .collect()
+    }
+    /// Every status the relay saw for dispute `dispute`, in order.
+    pub fn dispute_states(&self, dispute: &str) -> Vec<String> {
+        self.context
+            .relay
+            .snapshot()
+            .iter()
+            .filter(|e| {
+                e.kind == mortsom_scenario_kit::actions::DISPUTE_EVENT_KIND
+                    && e.tag("d") == Some(dispute)
+            })
             .filter_map(|e| e.tag("s").map(str::to_owned))
             .collect()
     }

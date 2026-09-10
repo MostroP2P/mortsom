@@ -127,6 +127,26 @@ pub trait NodeWallet: Send + Sync {
     async fn start_payment(&self, invoice: &Secret) -> Result<(), String>;
 }
 
+/// A dispute solver registered with the daemon under test.
+///
+/// Disputes end only when a solver rules on them, and a solver is a user
+/// the daemon's operator registers, not something a client can be. The
+/// coordinator registers one per run and hands it to scenarios through
+/// this boundary; scenarios never hold keys or talk to the daemon
+/// themselves. Every method returns once the daemon has answered.
+#[async_trait]
+pub trait DisputeSolver: Send + Sync {
+    /// Takes the dispute `dispute_id` and returns the id of the order it
+    /// is about, as the daemon reported it.
+    async fn take_dispute(&self, dispute_id: &str) -> Result<String, String>;
+    /// Settles the disputed `order_id` in the buyer's favour: the escrow
+    /// is settled and paid out.
+    async fn settle(&self, order_id: &str) -> Result<(), String>;
+    /// Cancels the disputed `order_id` in the seller's favour: the escrow
+    /// is returned.
+    async fn cancel(&self, order_id: &str) -> Result<(), String>;
+}
+
 /// A hold-invoice payment that is in flight but not yet settled.
 ///
 /// On the node path the daemon holds the HTLC from funding until release,
@@ -167,6 +187,11 @@ pub struct Context {
     /// Mortsom issues the buyer invoice and pays the hold invoice through
     /// the app's manual controls instead.
     pub node_wallets: BTreeMap<String, Arc<dyn NodeWallet>>,
+    /// The run's dispute solver, when the runner registered one.
+    ///
+    /// `None` on a run without one: a scenario that needs it is skipped
+    /// before it starts (`ScenarioDef::needs_solver`).
+    pub solver: Option<Arc<dyn DisputeSolver>>,
     /// Relay fault injection (restart, replay).
     pub relay_control: Arc<dyn RelayControl>,
     /// Cap accounting.
@@ -220,6 +245,13 @@ impl Context {
     /// `None` means the app has its own wallet and pays for itself.
     pub fn node_wallet(&self, actor: Actor) -> Option<&Arc<dyn NodeWallet>> {
         self.node_wallets.get(actor.as_str())
+    }
+
+    /// The run's dispute solver; an environment error without one.
+    pub fn solver(&self) -> Result<&Arc<dyn DisputeSolver>, ScenarioError> {
+        self.solver.as_ref().ok_or_else(|| {
+            ScenarioError::environment("this run has no dispute solver registered with the daemon")
+        })
     }
 
     /// The session of `actor`.

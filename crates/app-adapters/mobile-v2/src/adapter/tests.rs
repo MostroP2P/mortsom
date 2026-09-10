@@ -592,6 +592,66 @@ async fn trade_actions_drive_the_v2_controls_and_map_v2_states() {
     assert!(!calls.contains("secretinvoice") && !calls.contains("buyerinvoice"));
 }
 
+/// A dispute is opened from the trade detail and confirmed in its dialog;
+/// the app's dispute screen that follows is left for the next observation
+/// to navigate away from.
+#[tokio::test]
+async fn a_dispute_is_opened_from_the_trade_detail_and_confirmed() {
+    let ui = app_with_orders();
+    // An active trade offers the dispute control beside its status.
+    ui.on_tap(
+        "trades.item.o1",
+        &[
+            Ids::ORDER_STATUS,
+            Ids::ORDER_ID,
+            Ids::APPBAR_BACK,
+            Ids::TRADE_DISPUTE,
+        ],
+    );
+    ui.on_tap(Ids::TRADE_DISPUTE, &[Ids::TRADE_DISPUTE_CONFIRM]);
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    ui.label(Ids::ORDER_STATUS, "active");
+
+    a.open_dispute(&device(&ui), &OrderReference::new("o1"))
+        .await
+        .unwrap();
+
+    let calls = ui.calls();
+    let dispute = calls
+        .iter()
+        .position(|c| c == "tap trade.dispute")
+        .expect("the dispute control is tapped");
+    let confirm = calls
+        .iter()
+        .position(|c| c == "tap trade.dispute.confirm")
+        .expect("the dialog is confirmed");
+    assert!(dispute < confirm);
+}
+
+/// An order the app offers no dispute control for is reported as a
+/// contract gap, never confirmed blindly.
+#[tokio::test]
+async fn a_missing_dispute_control_is_a_contract_gap() {
+    let ui = app_with_orders();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    ui.label(Ids::ORDER_STATUS, "pending");
+
+    let error = a
+        .open_dispute(&device(&ui), &OrderReference::new("o1"))
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.category,
+        mortsom_common::FailureCategory::AutomationContract
+    );
+    assert!(!ui.calls().contains(&"tap trade.dispute.confirm".to_owned()));
+}
+
 #[tokio::test]
 async fn cancellation_waits_for_the_trade_list_to_finish_navigation() {
     let ui = app_with_orders();

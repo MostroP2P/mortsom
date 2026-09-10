@@ -589,6 +589,12 @@ pub use hold::{expect_hold_refunded, pay_hold_invoice, settle_hold_payment};
 #[path = "actions/rating.rs"]
 mod rating;
 pub use rating::{RATING_EVENT_KIND, rate_counterpart, wait_rating_published};
+#[path = "actions/dispute.rs"]
+mod dispute;
+pub use dispute::{
+    DISPUTE_EVENT_KIND, Dispute, dispute_status, open_dispute, solver_cancels, solver_settles,
+    solver_takes_dispute, wait_dispute_opened, wait_dispute_status,
+};
 #[path = "actions/relay.rs"]
 mod relay;
 pub use relay::{expect_relay_state_absent, relay_cursor, relay_order_tag, wait_relay_state_since};
