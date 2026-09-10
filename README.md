@@ -111,6 +111,17 @@ attach. `stack status` exits non-zero until the stack is usable, so it can be wa
 the services, removes their volumes and deletes `stack/local/`; it is never evidence that an order was
 cancelled or a payment refunded. Both `up` and `down` refuse containers another directory created.
 
+`stack logs [service]` shows a service's log by its name -- `mostro` (the default), `relay`, `bitcoind`,
+`lnd-alice`, `lnd-bob` or `lnd-carol` -- through the same Compose project every other stack command uses,
+so the container name never has to be known. `--follow` keeps streaming, `--since 10m` and `--tail 200`
+bound it. The daemon logs at `info`, so a message it drops before dispatch (one that fails its structural
+check, say) leaves no line; the run's `relay-events.jsonl` shows whether it reached the relay.
+
+```sh
+./target/debug/mortsom stack logs --follow          # mostrod, live
+./target/debug/mortsom stack logs relay --since 5m
+```
+
 `--stack-dir` selects another directory holding the same files; the default is `stack`, so run the binary
 from the repository root.
 
@@ -242,7 +253,7 @@ run is refused while a journal is unresolved. Details and failure categories are
 
 | Command | Purpose |
 |---|---|
-| `stack up`, `stack status`, `stack down` | Regtest environment lifecycle |
+| `stack up`, `stack status`, `stack logs [service]`, `stack down` | Regtest environment lifecycle and service logs |
 | `doctor --platform linux\|web` | Read-only prerequisite and readiness checks |
 | `run <scenario>... [--tag <family>] [--platform linux\|web\|android]` | Scenarios with isolated clients, caps and cleanup; on Linux and Web one run per scenario |
 | `cleanup <run-id>` | Recover a run's identities and orders |

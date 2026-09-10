@@ -98,6 +98,7 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
             let action = match action {
                 StackAction::Up { .. } => "up",
                 StackAction::Status => "status",
+                StackAction::Logs { .. } => "logs",
                 StackAction::Down => "down",
             };
             format!("stack {action} · {}", stack_dir.display())

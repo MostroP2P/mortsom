@@ -169,8 +169,41 @@ pub enum StackAction {
     },
     /// Inspect the persistent services.
     Status,
+    /// Show a service's log (mostrod by default), by service name.
+    Logs {
+        /// `mostro`, `relay`, `bitcoind`, `lnd-alice`, `lnd-bob` or `lnd-carol`.
+        #[arg(default_value = "mostro")]
+        service: String,
+        /// Keep streaming until interrupted.
+        #[arg(short, long)]
+        follow: bool,
+        /// Only entries newer than this: a duration (`10m`, `2h`) or a timestamp.
+        #[arg(long)]
+        since: Option<String>,
+        /// Only the last N lines.
+        #[arg(long)]
+        tail: Option<u32>,
+    },
     /// Destroy the regtest stack, including generated credentials and state.
     Down,
+}
+
+/// Runs a plan with the terminal as its output, for as long as it runs: a
+/// followed log ends only when the operator interrupts it.
+async fn stream_to_terminal(plan: &mortsom_android_driver::process::Command) -> ExitCode {
+    let status = tokio::process::Command::new(&plan.program)
+        .args(&plan.args)
+        .envs(&plan.env)
+        .status()
+        .await;
+    match status {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(status.code().unwrap_or(2).clamp(1, 255) as u8),
+        Err(error) => {
+            eprintln!("cannot run {}: {error}", plan.display());
+            ExitCode::from(2)
+        }
+    }
 }
 
 async fn stack_cli(stack_dir: &std::path::Path, action: StackAction) -> ExitCode {
@@ -209,6 +242,23 @@ async fn stack_cli(stack_dir: &std::path::Path, action: StackAction) -> ExitCode
             }
             Err(error) => Err(error),
         },
+        StackAction::Logs {
+            service,
+            follow,
+            since,
+            tail,
+        } => {
+            let options = stack::LogsOptions {
+                service,
+                follow,
+                since,
+                tail,
+            };
+            match stack::logs(&TokioRunner, &layout, &options).await {
+                Ok(plan) => return stream_to_terminal(&plan).await,
+                Err(error) => Err(error),
+            }
+        }
         StackAction::Down => stack::down(&TokioRunner, &layout)
             .await
             .map(|()| "stack removed\n".to_owned()),

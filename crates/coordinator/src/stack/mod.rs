@@ -7,6 +7,7 @@ mod descriptor;
 mod fingerprint;
 mod image;
 mod layout;
+mod logs;
 mod metadata;
 mod nodes;
 mod ownership;
@@ -37,6 +38,10 @@ pub enum StackError {
     /// Missing stack state, a refused mutation or an unusable service.
     #[error("stack is not configured: {0}; run `mortsom stack up` first")]
     Configuration(String),
+    /// A request the stack cannot serve as asked; nothing is wrong with
+    /// the stack itself.
+    #[error("{0}")]
+    Request(String),
     /// A Docker command failed.
     #[error(transparent)]
     Process(ProcessError),
@@ -158,6 +163,8 @@ pub async fn status(runner: &dyn CommandRunner, layout: &Layout) -> Result<Statu
     ownership::verify(runner, layout).await?;
     status::inspect(runner, layout).await
 }
+
+pub use logs::{LogsOptions, logs, services as log_services};
 
 /// Stops the services, removes their volumes and deletes every generated
 /// credential and identity. Refuses containers another directory created.
