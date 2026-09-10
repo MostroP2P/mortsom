@@ -1,0 +1,107 @@
+name: Release
+
+# Two halves of the same flow, driven by `cargo release` (see
+# `docs/releasing.md`):
+#
+#   release/vX.Y.Z  ->  open or refresh the release pull request
+#   main            ->  tag the release commit and publish the GitHub release
+on:
+  push:
+    branches:
+      - main
+      - 'release/v*'
+
+# One release flow at a time: two merges in flight must not race the tag.
+concurrency:
+  group: mortsom-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  pull-request:
+    name: Release pull request
+    if: startsWith(github.ref, 'refs/heads/release/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version and its changelog entry
+        id: meta
+        run: |
+          version="$(ci/release/version.sh)"
+          # A branch pushed before `cargo release --execute` (or carrying a
+          # mismatched bump) would otherwise open a pull request titled with
+          # the stale manifest version.
+          expected="release/v${version}"
+          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
+            echo "branch ${GITHUB_REF_NAME} does not match the workspace version; expected ${expected}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          ci/release/changelog-section.sh "${version}" > "${RUNNER_TEMP}/notes.md"
+
+      - name: Open or refresh the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          branch="${GITHUB_REF_NAME}"
+          title="Release v${VERSION}"
+          if [ -n "$(gh pr list --head "${branch}" --state open --json number --jq '.[0].number')" ]; then
+            gh pr edit "${branch}" --title "${title}" --body-file "${RUNNER_TEMP}/notes.md"
+          else
+            gh pr create --base main --head "${branch}" \
+              --title "${title}" --body-file "${RUNNER_TEMP}/notes.md"
+          fi
+
+  publish:
+    name: Tag and publish
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # A push to `main` is a release only when the workspace version has a
+      # changelog entry and no tag yet; every other push is left alone.
+      - name: Decide whether this is a release commit
+        id: meta
+        run: |
+          version="$(ci/release/version.sh)"
+          tag="v${version}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "tag ${tag} already exists; nothing to publish"
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! ci/release/changelog-section.sh "${version}" > "${RUNNER_TEMP}/notes.md"; then
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Tag the release commit
+        if: steps.meta.outputs.release == 'true'
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${TAG}" -m "Mortsom ${TAG}"
+          git push origin "refs/tags/${TAG}"
+
+      - name: Publish the GitHub release
+        if: steps.meta.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          gh release create "${TAG}" \
+            --title "Mortsom ${TAG}" \
+            --notes-file "${RUNNER_TEMP}/notes.md" \
+            --verify-tag

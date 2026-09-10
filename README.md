@@ -269,3 +269,7 @@ cargo llvm-cov --workspace --all-targets --fail-under-lines 80
 
 Everything in this repository is written in English. Read [AGENTS.md](AGENTS.md) and [spec.md](spec.md)
 before contributing.
+
+Releases are cut with `cargo release` from a `release/vX.Y.Z` branch; the
+changelog, the pull request and the GitHub release follow from it. See
+[docs/releasing.md](docs/releasing.md).

@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # `release/v*` is here because the Release workflow opens its pull
+    # request with GITHUB_TOKEN, which never triggers `pull_request`
+    # workflows; the branch push is what puts checks on the release.
+    branches: [main, 'release/v*']
   pull_request:
 
 env:
