@@ -1958,6 +1958,7 @@ dependencies = [
  "mortsom-observers",
  "mortsom-scenario-kit",
  "mortsom-scenarios",
+ "mortsom-solver",
  "mostro-core",
  "nostr-sdk",
  "nwc",
@@ -2066,6 +2067,22 @@ dependencies = [
  "nostr-sdk",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "mortsom-solver"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "futures",
+ "mortsom-common",
+ "mortsom-scenario-kit",
+ "mostro-core",
+ "nostr-sdk",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

@@ -31,6 +31,9 @@ pub struct ScenarioDef {
     /// must skip the scenario rather than report a pass for a path it did
     /// not exercise.
     pub needs_app_wallet: bool,
+    /// True when the scenario needs a dispute solver registered with the
+    /// daemon: a run that cannot provide one skips it rather than fail it.
+    pub needs_solver: bool,
     /// Body.
     pub run: ScenarioFn,
 }
@@ -283,6 +286,7 @@ mod tests {
             timeout_secs: 1,
             moves_value: false,
             needs_app_wallet: false,
+            needs_solver: false,
             run: noop,
         }
     }

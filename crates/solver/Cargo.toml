@@ -1,0 +1,23 @@
+[package]
+name = "mortsom-solver"
+description = "Mortsom dispute solver: a per-run solver identity registered with the daemon under test, ruling on disputes over the protocol."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mortsom-common = { workspace = true }
+mortsom-scenario-kit = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+mostro-core = { workspace = true }
+nostr-sdk = { workspace = true }
+uuid = { workspace = true }
+
+[lints]
+workspace = true

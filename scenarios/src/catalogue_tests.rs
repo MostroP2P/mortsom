@@ -58,6 +58,29 @@ fn the_expiration_family_is_every_clock_the_daemon_runs_on_its_own() {
     assert!(registry::find("expiration_unpaid").is_none());
 }
 
+#[test]
+fn the_dispute_family_is_every_way_a_dispute_ends() {
+    assert_eq!(
+        tagged("dispute"),
+        BTreeSet::from([
+            "dispute_settled_by_solver",
+            "dispute_canceled_by_solver",
+            "dispute_released_by_seller",
+        ])
+    );
+    crate::link();
+    let needs_solver: BTreeSet<&str> = registry::all()
+        .into_iter()
+        .filter(|def| def.needs_solver)
+        .map(|def| def.name)
+        .collect();
+    assert_eq!(
+        needs_solver,
+        BTreeSet::from(["dispute_settled_by_solver", "dispute_canceled_by_solver"]),
+        "only a solver's ruling needs a solver"
+    );
+}
+
 /// Three scenarios, enough to tell a broken setup from a working one.
 #[test]
 fn smoke_cuts_across_the_families() {

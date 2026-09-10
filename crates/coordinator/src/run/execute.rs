@@ -259,6 +259,12 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
             },
         };
     }
+    // A disputed order is out of the parties' hands: no cancel from either
+    // app closes it. The run's solver, when there is one, rules on it the
+    // way an operator would after a broken run -- returning the escrow.
+    if ctx.solver.is_some() && shown_disputed(ctx, maker, order).await {
+        return resolve_by_solver(ctx, order).await;
+    }
     let outcome = match cancel_as(ctx, maker, order).await {
         Ok(CancelOutcome::NotFound) => return confirm_unlisted_closed(ctx, order).await,
         Ok(outcome) => outcome,
@@ -304,6 +310,82 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
         None => CleanupResult::Failed {
             message: "state unreadable after both sides cancelled".into(),
         },
+    }
+}
+
+/// Whether `actor`'s app shows `order` disputed right now.
+async fn shown_disputed(ctx: &Context, actor: Actor, order: &OrderReference) -> bool {
+    let Ok(session) = ctx.actor(actor) else {
+        return false;
+    };
+    ctx.adapter
+        .observe_order(&session.device(ctx.ui_timeout), order)
+        .await
+        .is_ok_and(|state| state.state == OrderState::Disputed)
+}
+
+/// The solver takes each open dispute the daemon published during the run
+/// until one turns out to be about `order`, then cancels the order so the
+/// escrow goes back to the seller. The dispute event never names its
+/// order; the daemon's answer to the take does.
+async fn resolve_by_solver(ctx: &Context, order: &OrderReference) -> CleanupResult {
+    let Some(solver) = ctx.solver.as_ref() else {
+        return CleanupResult::Failed {
+            message: "disputed, and this run has no solver".into(),
+        };
+    };
+    let open = [
+        mortsom_scenario_kit::actions::dispute_status::INITIATED,
+        mortsom_scenario_kit::actions::dispute_status::IN_PROGRESS,
+    ];
+    let mut disputes: Vec<String> = Vec::new();
+    for event in ctx.relay.snapshot().into_iter().rev() {
+        if event.kind == mortsom_scenario_kit::actions::DISPUTE_EVENT_KIND
+            && event.tag("s").is_some_and(|s| open.contains(&s))
+            && let Some(id) = event.tag("d")
+            && !disputes.iter().any(|known| known == id)
+        {
+            disputes.push(id.to_owned());
+        }
+    }
+    for dispute in &disputes {
+        match solver.take_dispute(dispute).await {
+            Ok(about) if about == order.id => {
+                if let Err(e) = solver.cancel(&order.id).await {
+                    return CleanupResult::Failed {
+                        message: format!("the solver could not cancel the disputed order: {e}"),
+                    };
+                }
+                ctx.timeline.push(
+                    TimelineKind::Cleanup,
+                    Some("solver"),
+                    format!("order {}: the solver cancelled the dispute", order.id),
+                    None,
+                );
+                return match mortsom_scenario_kit::actions::wait_relay_state(
+                    ctx,
+                    order,
+                    OrderState::Cancelled,
+                )
+                .await
+                {
+                    Ok(()) => CleanupResult::Done {
+                        outcome: CancelOutcome::Cancelled,
+                    },
+                    Err(e) => CleanupResult::Failed {
+                        message: e.to_string(),
+                    },
+                };
+            }
+            Ok(_) => {}
+            Err(e) => warn!(dispute, error = %e, "the solver could not take a dispute"),
+        }
+    }
+    CleanupResult::Failed {
+        message: format!(
+            "disputed, and none of the {} open disputes the daemon published is about it",
+            disputes.len()
+        ),
     }
 }
 

@@ -229,7 +229,7 @@ a whole family; `smoke` cuts across families to mark the cheap subset (`happy_se
 | Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
 | Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
 
-This version implements the first three families in full. The other four are roadmap (section 14): their
+This version implements the first four families in full. The other three are roadmap (section 14): their
 tags are reserved, and no scenario carries them yet.
 
 A scenario whose profile lacks a required capability is **skipped with a reason, never failed**, and a
@@ -279,6 +279,35 @@ longer listed.
 
 A fiat-payment window is not driven: the daemon has no such clock (`fiat_window_secs` stays undeclared in
 `stack/limits.toml`), so an active order never expires on its own.
+
+### 8.5 Disputes
+
+A dispute is opened from the trade detail by either party of a funded order (active or fiat-sent) and ends
+in one of three ways: a solver settles the order for the buyer, a solver cancels it for the seller, or the
+seller releases and the daemon closes the dispute itself. A solver is a user the daemon's operator
+registers, signed with the daemon's own key. Mortsom owns the stack, so it holds that key: a run that needs
+a solver mints a fresh solver identity, registers it with `admin-add-solver` as the operator would, and
+rules through the protocol exactly as a solver client does. The keys stay in the coordinator; a scenario
+sees only *take*, *settle* and *cancel*. Without a Mortsom-owned stack such a scenario is skipped with the
+reason, never failed. The solver's public key is scoped into the relay observer, so its protocol traffic is
+run evidence like the actors'.
+
+The daemon publishes a dispute as its own replaceable event (kind 38386). It names the dispute id, the
+dispute status (`initiated`, `in-progress`, `seller-refunded`, `settled`) and who opened it, and never the
+order, so the proof of each step is that event published after a baseline taken before the step, and the
+order the dispute is about is what the daemon reports when the solver takes it. A disputed order stays
+`in-progress` on the book until it closes: the book carries `success` or `canceled` at the end, and never
+`dispute`.
+
+| Scenario | Narrative | Required evidence |
+|---|---|---|
+| `dispute_settled_by_solver` | Alice creates, Bob takes, Alice funds, Bob reports fiat sent; Alice does not release. Bob opens a dispute; the run's solver takes it and settles the order for Bob. | The relay shows the dispute `initiated` by the buyer, then `in-progress`, then `settled`; the solver's take names this order. Both apps show the order disputed, then completed; the book shows `success`. The hold settled once on Alice's node and the payout settled once on Bob's. |
+| `dispute_canceled_by_solver` | Alice creates, Bob takes, Alice funds; Bob never pays. Alice opens a dispute; the solver takes it and cancels the order for Alice. | The relay shows the dispute `initiated` by the seller, then `in-progress`, then `seller-refunded`. Both apps show the order disputed, then cancelled; the book shows `canceled`. Alice's hold payment fails: the escrow came back. |
+| `dispute_released_by_seller` | As `dispute_settled_by_solver` up to the dispute; then Alice releases anyway. No solver acts. | The relay shows the dispute `initiated` by the buyer and, after the release, `settled`. The trade completes as in `happy_sell`: both apps completed, the book `success`, the hold and the payout each settled once. |
+
+The cleanup sweep treats a disputed order as out of the parties' hands: when the run has a solver, it takes
+each open dispute the daemon published until one is about the order, and cancels the order so the escrow
+returns; without a solver the order is reported unresolved.
 
 Rules for every scenario:
 
@@ -387,8 +416,8 @@ overlooked bugs. Commits follow Conventional Commits and never include secrets, 
 
 Documented as roadmap, not required by this version:
 
-- The remaining scenario families of section 8.1: disputes, payment failures, anti-abuse bonds and
-  adversarial messages.
+- The remaining scenario families of section 8.1: payment failures, anti-abuse bonds and adversarial
+  messages.
 - CPU and memory comparison of Linux and Web, and against the Android baseline, under matched conditions.
 - Multi-scenario runs with in-process profile reset.
 - NWC wallet mode for desktop clients.

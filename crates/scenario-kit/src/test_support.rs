@@ -253,6 +253,7 @@ pub fn context_with(adapter: Arc<dyn AppAdapter>, relay_control: Arc<dyn RelayCo
             Keys::generate().public_key(),
         ))),
         relay_control,
+        solver: None,
         wallets: Arc::new(WalletObserver::new(vec![(
             "alice".into(),
             Arc::new(NoWallet) as Arc<dyn WalletReader>,

@@ -1,7 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use mostro_core::prelude::{
-    NOSTR_INFO_EVENT_KIND, NOSTR_ORDER_EVENT_KIND, NOSTR_RATING_EVENT_KIND,
+    NOSTR_DISPUTE_EVENT_KIND, NOSTR_INFO_EVENT_KIND, NOSTR_ORDER_EVENT_KIND,
+    NOSTR_RATING_EVENT_KIND,
 };
 use nostr_sdk::prelude::{EventBuilder, FinalizeEvent, Keys, Kind, Tag};
 
@@ -113,6 +114,14 @@ fn scope_matches_only_run_evidence() {
         &[&["d", &stranger.public_key().to_hex()]],
     );
     let stranger_rating = event(&stranger, Kind::Custom(NOSTR_RATING_EVENT_KIND), &[]);
+    // A dispute event names the dispute id, which the run learns only from
+    // this very event.
+    let dispute = event(
+        &daemon,
+        Kind::Custom(NOSTR_DISPUTE_EVENT_KIND),
+        &[&["d", "dispute-id"], &["s", "initiated"]],
+    );
+    let stranger_dispute = event(&stranger, Kind::Custom(NOSTR_DISPUTE_EVENT_KIND), &[]);
 
     assert!(scope.matches(&info));
     assert!(
@@ -120,6 +129,11 @@ fn scope_matches_only_run_evidence() {
         "the daemon's rating events are run evidence"
     );
     assert!(!scope.matches(&stranger_rating));
+    assert!(
+        scope.matches(&dispute),
+        "the daemon's dispute events are run evidence"
+    );
+    assert!(!scope.matches(&stranger_dispute));
     assert!(scope.matches(&my_order));
     assert!(!scope.matches(&other_order));
     assert!(scope.matches(&dm_to_alice));

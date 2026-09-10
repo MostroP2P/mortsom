@@ -58,6 +58,29 @@ impl Adapter {
     }
     /// The book tags of the created order: sats only once priced, fiat as
     /// one amount or both bounds.
+    /// The daemon's dispute event: the dispute id, its status and who
+    /// opened it.
+    async fn publish_dispute(&self, status: &str) {
+        let initiator = self
+            .state
+            .lock()
+            .unwrap()
+            .dispute_initiator
+            .expect("a dispute is open");
+        let event = EventBuilder::new(
+            Kind::Custom(mortsom_scenario_kit::actions::DISPUTE_EVENT_KIND),
+            "",
+        )
+        .tags([
+            Tag::parse(["d", DISPUTE]).unwrap(),
+            Tag::parse(["s", status]).unwrap(),
+            Tag::parse(["initiator", initiator]).unwrap(),
+            Tag::parse(["nonce", &uuid_like()]).unwrap(),
+        ])
+        .finalize(&self.keys)
+        .unwrap();
+        assert!(self.relay.ingest("ws://fixture.invalid", &event).is_some());
+    }
     fn book_tags(&self) -> Vec<Vec<String>> {
         let state = self.state.lock().unwrap();
         let Some(draft) = state.draft.as_ref() else {
@@ -307,6 +330,11 @@ impl AppAdapter for Adapter {
     ) -> Result<(), AdapterError> {
         self.action("release", device.actor);
         self.transition(OrderState::Completed, "success").await;
+        // A release under dispute settles the dispute too.
+        if self.state.lock().unwrap().dispute_initiator.is_some() {
+            self.publish_dispute("settled").await;
+            self.state.lock().unwrap().dispute_initiator = None;
+        }
         let remainder = {
             let state = self.state.lock().unwrap();
             match (state.draft.as_ref().map(|d| d.fiat), state.taken_at) {
@@ -379,6 +407,37 @@ impl AppAdapter for Adapter {
             _ => Ok(CancelOutcome::AlreadyClosed),
         }
     }
+    async fn open_dispute(
+        &self,
+        device: &DeviceContext<'_>,
+        _: &OrderReference,
+    ) -> Result<(), AdapterError> {
+        self.action("dispute", device.actor);
+        {
+            let mut state = self.state.lock().unwrap();
+            if !matches!(state.order, OrderState::Active | OrderState::FiatSent) {
+                return Err(AdapterError::product(format!(
+                    "no dispute control on a {} order",
+                    state.order
+                )));
+            }
+            state.order = OrderState::Disputed;
+            let mut initiator = match device.actor {
+                Actor::Alice => "seller",
+                Actor::Bob => "buyer",
+            };
+            if state.misbehaviour.swaps_dispute_initiator {
+                initiator = if initiator == "seller" {
+                    "buyer"
+                } else {
+                    "seller"
+                };
+            }
+            state.dispute_initiator = Some(initiator);
+        }
+        self.publish_dispute("initiated").await;
+        Ok(())
+    }
     async fn rate_counterpart(
         &self,
         device: &DeviceContext<'_>,
@@ -449,5 +508,55 @@ impl AppAdapter for Adapter {
         _: &OrderReference,
     ) -> Result<(), AdapterError> {
         unreachable!()
+    }
+}
+
+/// The fixture solver: it rules the way the daemon reports a solver's
+/// rulings, publishing the dispute status and moving the order.
+#[async_trait]
+impl mortsom_scenario_kit::context::DisputeSolver for Adapter {
+    async fn take_dispute(&self, dispute_id: &str) -> Result<String, String> {
+        assert_eq!(dispute_id, DISPUTE);
+        self.state
+            .lock()
+            .unwrap()
+            .actions
+            .push("solver:take".into());
+        self.publish_dispute("in-progress").await;
+        let another = self
+            .state
+            .lock()
+            .unwrap()
+            .misbehaviour
+            .solver_reports_another_order;
+        Ok(if another {
+            "another-order".to_owned()
+        } else {
+            ORDER.to_owned()
+        })
+    }
+    async fn settle(&self, order_id: &str) -> Result<(), String> {
+        assert_eq!(order_id, ORDER);
+        self.state
+            .lock()
+            .unwrap()
+            .actions
+            .push("solver:settle".into());
+        self.publish_dispute("settled").await;
+        self.state.lock().unwrap().dispute_initiator = None;
+        self.transition(OrderState::Completed, "success").await;
+        Ok(())
+    }
+    async fn cancel(&self, order_id: &str) -> Result<(), String> {
+        assert_eq!(order_id, ORDER);
+        {
+            let mut state = self.state.lock().unwrap();
+            state.actions.push("solver:cancel".into());
+            state.refunded = true;
+        }
+        self.publish_dispute("seller-refunded").await;
+        self.state.lock().unwrap().dispute_initiator = None;
+        self.transition(OrderState::Cancelled, "canceled").await;
+        Ok(())
     }
 }

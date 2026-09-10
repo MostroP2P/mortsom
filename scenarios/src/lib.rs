@@ -3,6 +3,7 @@
 //! typed domain narratives; they self-register with the kit's registry.
 
 pub mod cancellation;
+pub mod dispute;
 pub mod expiration;
 pub mod flow;
 pub mod happy;
@@ -29,6 +30,7 @@ macro_rules! register_scenario {
             timeout_secs: $timeout,
             moves_value: $moves_value,
             needs_app_wallet: false,
+            needs_solver: false,
         }
     };
     (
@@ -40,6 +42,27 @@ macro_rules! register_scenario {
         moves_value: $moves_value:expr,
         needs_app_wallet: $needs_app_wallet:expr $(,)?
     ) => {
+        $crate::register_scenario! {
+            name: $name,
+            body: $body,
+            tags: $tags,
+            requires: $requires,
+            timeout_secs: $timeout,
+            moves_value: $moves_value,
+            needs_app_wallet: $needs_app_wallet,
+            needs_solver: false,
+        }
+    };
+    (
+        name: $name:literal,
+        body: $body:path,
+        tags: $tags:expr,
+        requires: $requires:expr,
+        timeout_secs: $timeout:expr,
+        moves_value: $moves_value:expr,
+        needs_app_wallet: $needs_app_wallet:expr,
+        needs_solver: $needs_solver:expr $(,)?
+    ) => {
         inventory::submit! {
             ::mortsom_scenario_kit::registry::ScenarioDef {
                 name: $name,
@@ -48,6 +71,7 @@ macro_rules! register_scenario {
                 timeout_secs: $timeout,
                 moves_value: $moves_value,
                 needs_app_wallet: $needs_app_wallet,
+                needs_solver: $needs_solver,
                 run: |ctx| Box::pin($body(ctx)),
             }
         }
@@ -59,6 +83,7 @@ pub fn link() {
     smoke::link();
     happy::link();
     cancellation::link();
+    dispute::link();
     expiration::link();
     recovery::link();
     regression::link();

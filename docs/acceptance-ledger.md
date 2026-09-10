@@ -26,6 +26,9 @@ family ran on a stack rebuilt on 2026-09-10 for the declared `order_expiration_s
 | `hold_invoice_expires` | expiration | **Accepted** 2026-09-10, run `20260910T064434Z-c663f82bd44a` (family batch) | **Accepted** 2026-09-10, run `20260910T072145Z-69fcdb0ab80f` (family batch) |
 | `buyer_invoice_deadline` | expiration | **Accepted** 2026-09-10, run `20260910T064027Z-fce2b2d421e5` (family batch; hold refunded) | **Accepted** 2026-09-10, run `20260910T071729Z-c61799b99dc1` (family batch; hold refunded) |
 | `unilateral_cancel_rejected` | cancellation | **Accepted** 2026-09-10, run `20260910T002921Z-704f54b3ff05` | **Accepted** 2026-09-10, run `20260910T012017Z-0e1186dbd6e7` (family batch) |
+| `dispute_settled_by_solver` | dispute | not yet run | not yet run |
+| `dispute_canceled_by_solver` | dispute | not yet run | not yet run |
+| `dispute_released_by_seller` | dispute | not yet run | not yet run |
 
 ## Live attempts
 

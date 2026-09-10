@@ -151,7 +151,7 @@ families to mark the cheap subset (`happy_sell`, `happy_buy`, `cancel_before_tak
 | Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
 | Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
 
-The first three families are implemented; the others are roadmap ([spec.md](spec.md), sections 8 and 14).
+The first four families are implemented; the others are roadmap ([spec.md](spec.md), sections 8 and 14).
 A scenario the app profile cannot support is skipped with a reason, never failed and never counted.
 
 ## Running scenarios
@@ -179,6 +179,14 @@ Expirations, each waiting for one of the daemon's clocks (`stack/limits.toml`): 
 (nobody takes the order; the test build asks the daemon for the declared `order_expiration_secs`),
 `hold_invoice_expires` (the seller never pays) and `buyer_invoice_deadline` (the buyer of a funded order
 never invoices; the escrow comes back). The daemon has no fiat-payment window, so none is driven.
+
+Disputes, each on a funded order with Alice as seller and Bob as buyer: `dispute_settled_by_solver` (Bob
+paid, Alice will not release; Bob disputes and the solver settles for him), `dispute_canceled_by_solver`
+(Bob never paid; Alice disputes and the solver cancels for her, returning the escrow) and
+`dispute_released_by_seller` (Bob disputes, Alice releases anyway; the daemon closes the dispute). The
+solver is registered per run with the daemon's own key from the stack's owner-only settings, so the two
+solver scenarios run only against a Mortsom-owned stack and are skipped elsewhere. The proof is the daemon's
+published dispute event after each step, never a screen.
 
 Range and rating scenarios need an app build carrying the range and star identifiers
 (`order.create.range`, `order.create.fiat_min`, `order.create.fiat_max`, `trade.rate.star.<n>`); an older

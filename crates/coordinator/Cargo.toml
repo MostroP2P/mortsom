@@ -21,6 +21,7 @@ mortsom-desktop-driver.workspace = true
 mortsom-environment = { workspace = true }
 mortsom-observers = { workspace = true }
 mortsom-scenario-kit = { workspace = true }
+mortsom-solver = { workspace = true }
 mortsom-adapter-mobile-legacy = { workspace = true }
 mortsom-adapter-mobile-v2 = { workspace = true }
 mortsom-scenarios = { workspace = true }

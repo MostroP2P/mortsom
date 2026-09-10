@@ -267,6 +267,14 @@ impl AppAdapter for MobileV2Adapter {
         orders::rate_counterpart(device, order, score).await
     }
 
+    async fn open_dispute(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<(), AdapterError> {
+        orders::open_dispute(device, order).await
+    }
+
     async fn cancel_payment(
         &self,
         device: &DeviceContext<'_>,

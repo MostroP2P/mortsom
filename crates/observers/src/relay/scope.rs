@@ -6,13 +6,16 @@ use mostro_core::prelude::{
 };
 use nostr_sdk::prelude::{Event, Filter, Kind, PublicKey};
 
-/// Kinds published by the daemon that describe it, or a user's reputation,
-/// rather than an order. A rating event names the rated trade key in its
-/// `d` tag, which the run never learns, so every one the daemon publishes
-/// during the run is kept: on the run relay they all belong to it.
-const DAEMON_KINDS: [Kind; 4] = [
+/// Kinds published by the daemon that describe it, a user's reputation or
+/// a dispute, rather than an order. A rating event names the rated trade
+/// key in its `d` tag and a dispute event names the dispute id, neither of
+/// which the run learns before the event arrives, so every one the daemon
+/// publishes during the run is kept: on the run relay they all belong to
+/// it.
+const DAEMON_KINDS: [Kind; 5] = [
     Kind::Custom(NOSTR_INFO_EVENT_KIND),
     Kind::Custom(NOSTR_RATING_EVENT_KIND),
+    Kind::Custom(NOSTR_DISPUTE_EVENT_KIND),
     Kind::RelayList,
     Kind::Metadata,
 ];
@@ -24,7 +27,7 @@ pub struct ObserverScope {
     pub mostro_pubkey: PublicKey,
     /// Alice and Bob identity/trade keys known to the run.
     pub actor_pubkeys: Vec<PublicKey>,
-    /// Order ids created by this run (`d` tag of kind 38383/38386 events).
+    /// Order ids created by this run (`d` tag of kind 38383 events).
     pub order_ids: Vec<String>,
 }
 
@@ -86,10 +89,7 @@ impl ObserverScope {
             filters.push(
                 Filter::new()
                     .author(self.mostro_pubkey)
-                    .kinds([
-                        Kind::Custom(NOSTR_ORDER_EVENT_KIND),
-                        Kind::Custom(NOSTR_DISPUTE_EVENT_KIND),
-                    ])
+                    .kind(Kind::Custom(NOSTR_ORDER_EVENT_KIND))
                     .identifiers(self.order_ids.clone()),
             );
         }
@@ -117,9 +117,7 @@ impl ObserverScope {
             if DAEMON_KINDS.contains(&event.kind) {
                 return true;
             }
-            if event.kind == Kind::Custom(NOSTR_ORDER_EVENT_KIND)
-                || event.kind == Kind::Custom(NOSTR_DISPUTE_EVENT_KIND)
-            {
+            if event.kind == Kind::Custom(NOSTR_ORDER_EVENT_KIND) {
                 return event
                     .tags
                     .identifier()

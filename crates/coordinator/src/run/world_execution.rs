@@ -41,6 +41,10 @@ impl World<'_> {
             wallets: Arc::clone(wallets),
             node_wallets: self.node_wallets.clone(),
             relay_control: self.relay_control(),
+            solver: self
+                .solver
+                .clone()
+                .map(|solver| solver as Arc<dyn mortsom_scenario_kit::context::DisputeSolver>),
             budget: Arc::clone(&self.budget),
             cleanup: Arc::clone(&self.cleanup),
             timeline: Arc::clone(&self.timeline),
@@ -139,6 +143,9 @@ impl World<'_> {
                 }
             }
             observer.stop().await;
+        }
+        if let Some(solver) = self.solver.take() {
+            solver.stop().await;
         }
         if let Some(wallets) = self.wallets.take() {
             let payments = serde_json::json!({

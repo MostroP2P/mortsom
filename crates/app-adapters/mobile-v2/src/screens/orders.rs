@@ -1,7 +1,8 @@
 //! Order journeys in the v2 app: create an order (fixed, market or range
 //! priced), discover and take it (amount asked on the take screen for a
 //! range), pay the hold invoice through NWC, generate the buyer invoice,
-//! report fiat sent, release, rate, cancel and observe the displayed state.
+//! report fiat sent, release, dispute, rate, cancel and observe the
+//! displayed state.
 
 use mortsom_app_contract::{
     AdapterError, AppOrderState, CancelOutcome, DeviceContext, FiatAmount, OrderDraft, OrderKind,
@@ -495,6 +496,18 @@ pub async fn confirm_fiat_sent(
 ) -> Result<(), AdapterError> {
     open_trade(device, order).await?;
     tap(device, Ids::TRADE_FIAT_SENT).await
+}
+
+/// Opens a dispute from the trade detail, confirming the dialog. The app
+/// then moves to the dispute's own screen; the trade is reopened from the
+/// list on the next observation.
+pub async fn open_dispute(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<(), AdapterError> {
+    open_trade(device, order).await?;
+    tap(device, Ids::TRADE_DISPUTE).await?;
+    tap(device, Ids::TRADE_DISPUTE_CONFIRM).await
 }
 
 /// Releases the sats, confirming the dialog.

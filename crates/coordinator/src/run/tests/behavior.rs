@@ -166,6 +166,31 @@ fn a_mixed_run_still_gates_on_the_wallet_the_other_actor_pays_with() {
     }
 }
 
+/// A solver is registered with the daemon's own key, which only a
+/// Mortsom-owned stack holds: without one, a scenario that needs a solver
+/// is skipped with the reason, and one that does not is untouched.
+#[test]
+fn a_scenario_that_needs_a_solver_is_skipped_without_an_owned_stack() {
+    mortsom_scenarios::link();
+    let settled = mortsom_scenario_kit::registry::find("dispute_settled_by_solver").unwrap();
+    let released = mortsom_scenario_kit::registry::find("dispute_released_by_seller").unwrap();
+
+    let (runnable, skipped) = gate_solver("v2", vec![settled, released], false);
+
+    assert_eq!(
+        runnable.iter().map(|d| d.name).collect::<Vec<_>>(),
+        ["dispute_released_by_seller"]
+    );
+    match &skipped[0].outcome {
+        Outcome::Skipped { reason } => assert!(reason.contains("dispute solver"), "{reason}"),
+        other => panic!("expected a skip, got {other:?}"),
+    }
+
+    let (runnable, skipped) = gate_solver("v2", vec![settled, released], true);
+    assert_eq!(runnable.len(), 2);
+    assert!(skipped.is_empty());
+}
+
 /// A scenario whose subject is the connected wallet -- cancelling from the
 /// pay screen instead of paying through it -- cannot be exercised by a run
 /// that pays from a node Mortsom holds: the seller never opens that
@@ -364,6 +389,7 @@ inventory::submit! {
         timeout_secs: 5,
         moves_value: false,
         needs_app_wallet: false,
+        needs_solver: false,
         run: flaky_infra,
     }
 }
@@ -391,6 +417,7 @@ inventory::submit! {
         timeout_secs: 5,
         moves_value: false,
         needs_app_wallet: false,
+        needs_solver: false,
         run: noop,
     }
 }
