@@ -397,6 +397,50 @@ impl mortsom_scenario_kit::context::NodeWallet for NodeWalletOverLnd {
             .await
             .map_err(|e| e.to_string())
     }
+    async fn make_invoice_expiring(
+        &self,
+        sats: u64,
+        memo: &str,
+        expiry_secs: u64,
+    ) -> Result<mortsom_common::Secret, String> {
+        self.0
+            .make_invoice_expiring(sats, memo, expiry_secs)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    async fn make_hold_invoice(
+        &self,
+        sats: u64,
+        memo: &str,
+    ) -> Result<mortsom_common::Secret, String> {
+        self.0
+            .make_hold_invoice(sats, memo)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    async fn hold_invoice_state(
+        &self,
+        hash: &str,
+    ) -> Result<mortsom_scenario_kit::HoldInvoiceState, String> {
+        use mortsom_environment::lnd::LndInvoiceState as Lnd;
+        use mortsom_scenario_kit::HoldInvoiceState as Hold;
+        self.0
+            .invoice_state(hash)
+            .await
+            .map(|state| match state {
+                Lnd::Open => Hold::Open,
+                Lnd::Accepted => Hold::Accepted,
+                Lnd::Settled => Hold::Settled,
+                Lnd::Canceled => Hold::Cancelled,
+            })
+            .map_err(|e| e.to_string())
+    }
+    async fn settle_hold_invoice(&self, hash: &str) -> Result<(), String> {
+        self.0
+            .settle_hold_invoice(hash)
+            .await
+            .map_err(|e| e.to_string())
+    }
 
     async fn start_payment(&self, invoice: &mortsom_common::Secret) -> Result<(), String> {
         self.0

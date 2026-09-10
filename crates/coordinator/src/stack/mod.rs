@@ -148,13 +148,15 @@ impl StackContext {
         self.values.get(name).cloned()
     }
 
-    /// Applies the actual relay binding to shared configuration, and the
+    /// Applies the actual relay binding to shared configuration, the
     /// untaken-order lifetime the stack declares, which the client build
-    /// asks the daemon for on every order it creates.
+    /// asks the daemon for on every order it creates, and the daemon's
+    /// payout limits, which the payment-failure family drives.
     pub fn configure_relay(&self, config: &mut crate::Config) {
         config.relay.host_port = self.relay_port;
         config.mostro.relays = vec![self.relay_url.clone()];
         config.mobile.order_expiry_secs = Some(self.declared_limits.order_expiration_secs);
+        config.run.payout_limits = self.declared_limits.payout_limits();
     }
 }
 

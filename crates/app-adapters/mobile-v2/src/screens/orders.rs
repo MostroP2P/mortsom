@@ -5,8 +5,9 @@
 //! displayed state.
 
 use mortsom_app_contract::{
-    AdapterError, AppOrderState, CancelOutcome, DeviceContext, FiatAmount, OrderDraft, OrderKind,
-    OrderPrice, OrderReference, OrderState, PaymentHandoff, PaymentPath, VisibleOrder,
+    AdapterError, AppOrderState, CancelOutcome, DeviceContext, FiatAmount, InvoiceSubmission,
+    OrderDraft, OrderKind, OrderPrice, OrderReference, OrderState, PaymentHandoff, PaymentPath,
+    VisibleOrder,
 };
 use mortsom_common::Secret;
 
@@ -445,26 +446,7 @@ pub async fn provide_buyer_invoice(
     supplied: Option<&Secret>,
 ) -> Result<Option<Secret>, AdapterError> {
     if let Some(invoice) = supplied {
-        open_buyer_invoice(device, order).await?;
-        // The daemon's request for the invoice can arrive while the user is
-        // already on the form (the maker of a buy lands there before the
-        // seller's hold is accepted); the app rebuilds the form and drops
-        // what was typed. Typing is not a business action, so the invoice is
-        // entered again, a bounded number of times. Submit stays single-press.
-        const ENTRIES: usize = 3;
-        let mut ready = false;
-        for _ in 0..ENTRIES {
-            type_into(device, Ids::INVOICE_TEXT, invoice.expose()).await?;
-            if invoice_ready(device, invoice).await? {
-                ready = true;
-                break;
-            }
-        }
-        if !ready {
-            return Err(AdapterError::contract(
-                "buyer invoice field did not keep the supplied invoice with submit enabled",
-            ));
-        }
+        enter_buyer_invoice(device, order, invoice).await?;
         tap(device, Ids::INVOICE_SUBMIT).await?;
         expect(device, Ids::ORDER_STATUS).await?;
         if label(device, Ids::ORDER_ID).await?.trim() != order.id {
@@ -487,6 +469,70 @@ pub async fn provide_buyer_invoice(
         String::new()
     };
     Ok((!invoice.is_empty()).then(|| Secret::new(invoice)))
+}
+
+/// Opens the manual form for `order` and types `invoice` into it, leaving
+/// submit enabled and untouched.
+///
+/// The daemon's request for the invoice can arrive while the user is
+/// already on the form (the maker of a buy lands there before the
+/// seller's hold is accepted); the app rebuilds the form and drops what
+/// was typed. Typing is not a business action, so the invoice is entered
+/// again, a bounded number of times. Submit stays single-press.
+async fn enter_buyer_invoice(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+    invoice: &Secret,
+) -> Result<(), AdapterError> {
+    open_buyer_invoice(device, order).await?;
+    const ENTRIES: usize = 3;
+    for _ in 0..ENTRIES {
+        type_into(device, Ids::INVOICE_TEXT, invoice.expose()).await?;
+        if invoice_ready(device, invoice).await? {
+            return Ok(());
+        }
+    }
+    Err(AdapterError::contract(
+        "buyer invoice field did not keep the supplied invoice with submit enabled",
+    ))
+}
+
+/// Submits a supplied invoice once and reports the daemon's verdict: the
+/// trade detail means it was taken; the form kept open with `invoice.error`
+/// showing means it was refused, and the reason is that readout.
+pub async fn submit_buyer_invoice(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+    invoice: &Secret,
+) -> Result<InvoiceSubmission, AdapterError> {
+    enter_buyer_invoice(device, order, invoice).await?;
+    tap(device, Ids::INVOICE_SUBMIT).await?;
+    match super::first_present(device, &[Ids::ORDER_STATUS, Ids::INVOICE_ERROR]).await? {
+        Some(id) if id == Ids::ORDER_STATUS => {
+            verify_order_id(device, Ids::ORDER_ID, order).await?;
+            Ok(InvoiceSubmission::Accepted)
+        }
+        Some(_) => {
+            let reason = label(device, Ids::INVOICE_ERROR).await?.trim().to_owned();
+            if reason.is_empty() {
+                return Err(AdapterError::contract(
+                    "`invoice.error` appeared without a reason",
+                ));
+            }
+            // A refusal keeps the same form: the user fixes the invoice
+            // where they typed it.
+            if !present(device, Ids::INVOICE_TEXT).await? {
+                return Err(AdapterError::product(
+                    "the app left the invoice form after the daemon refused the invoice",
+                ));
+            }
+            verify_order_id(device, Ids::INVOICE_ORDER_ID, order).await?;
+            Ok(InvoiceSubmission::Rejected { reason })
+        }
+        None => Err(AdapterError::contract(
+            "neither the trade detail nor `invoice.error` appeared after submitting the buyer invoice",
+        )),
+    }
 }
 
 /// Reports fiat sent.

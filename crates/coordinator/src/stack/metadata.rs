@@ -91,6 +91,16 @@ pub struct DeclaredLimits {
 }
 
 impl DeclaredLimits {
+    /// The limits scenarios about payouts drive, in the kit's terms.
+    pub fn payout_limits(&self) -> mortsom_scenario_kit::PayoutLimits {
+        mortsom_scenario_kit::PayoutLimits {
+            payout_invoice_min_expiry_secs: Some(self.payout_invoice_min_expiry_secs),
+            max_inflight_payouts_per_destination: self.max_inflight_payouts_per_destination,
+        }
+    }
+}
+
+impl DeclaredLimits {
     pub(crate) fn validate(&self) -> Result<(), StackError> {
         let durations = [
             self.order_expiration_secs,

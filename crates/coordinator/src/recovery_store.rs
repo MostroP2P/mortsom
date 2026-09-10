@@ -203,8 +203,13 @@ impl RecoveryJournal for FileJournal {
             incoming,
             ..
         } = &event
-            && history.events.iter().any(|known| matches!(known, RecoveryEvent::PaymentExpected { order_id: order, wallet: actor, hash: known_hash, incoming: direction, .. } if known_hash == hash || (order == order_id && actor == wallet && direction == incoming))) {
+            && history.events.iter().any(|known| matches!(known, RecoveryEvent::PaymentExpected { order_id: order, wallet: actor, hash: known_hash, incoming: direction, .. } if known_hash == hash || (order == order_id && actor == wallet && direction == incoming && !superseded(&history.events, actor, known_hash)))) {
                 return Err("a payment was already prepared for this order and actor; refusing replay".into());
+        }
+        if let RecoveryEvent::PaymentSuperseded { hash, .. } = &event
+            && !history.events.iter().any(|known| matches!(known, RecoveryEvent::PaymentExpected { hash: known_hash, .. } if known_hash == hash))
+        {
+            return Err("only a prepared payment can be superseded".into());
         }
         history.events.push(event);
         self.save(&history)?;
@@ -212,6 +217,15 @@ impl RecoveryJournal for FileJournal {
         Ok(())
     }
 }
+/// Whether the expected payment `hash` was withdrawn on purpose, so a
+/// replacement for the same order and wallet is a new intent, not a replay.
+pub(crate) fn superseded(events: &[RecoveryEvent], wallet: &str, hash: &str) -> bool {
+    events.iter().any(|event| {
+        matches!(event, RecoveryEvent::PaymentSuperseded { wallet: actor, hash: gone, .. }
+            if actor == wallet && gone == hash)
+    })
+}
+
 fn validate_private(root: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     if root.canonicalize().map_err(|e| e.to_string())? != root {

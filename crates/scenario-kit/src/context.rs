@@ -107,6 +107,32 @@ pub trait NodeWallet: Send + Sync {
     fn routing_fee_cap_sats(&self) -> u64 {
         0
     }
+    /// Issues an invoice for `sats` that expires `expiry_secs` after
+    /// issue, for scenarios about invoices the daemon refuses.
+    async fn make_invoice_expiring(
+        &self,
+        _sats: u64,
+        _memo: &str,
+        _expiry_secs: u64,
+    ) -> Result<Secret, String> {
+        Err("invoices with a chosen expiry are not supported by this node wallet".into())
+    }
+    /// Issues a hold invoice for `sats`: a payment to it is accepted and
+    /// then held, unresolved, until [`NodeWallet::settle_hold_invoice`].
+    /// This is what a payee who pins the daemon's payouts does, so it is
+    /// how the daemon's per-destination cap is driven.
+    async fn make_hold_invoice(&self, _sats: u64, _memo: &str) -> Result<Secret, String> {
+        Err("hold invoices are not supported by this node wallet".into())
+    }
+    /// Where an invoice this node issued stands: untouched, holding a
+    /// locked-in HTLC, settled or cancelled.
+    async fn hold_invoice_state(&self, _hash: &str) -> Result<HoldInvoiceState, String> {
+        Err("hold invoice state is not supported by this node wallet".into())
+    }
+    /// Settles a hold invoice this node issued, releasing the HTLC it holds.
+    async fn settle_hold_invoice(&self, _hash: &str) -> Result<(), String> {
+        Err("hold invoice settlement is not supported by this node wallet".into())
+    }
     /// Cancels only a caller-authorized, journal-tracked incoming invoice.
     async fn cancel_invoice(&self, _hash: &str) -> Result<(), String> {
         Err("invoice cancellation is not supported by this node wallet".into())
@@ -125,6 +151,47 @@ pub trait NodeWallet: Send + Sync {
     /// settlement here would stall the trade that is supposed to release
     /// it. Settlement is confirmed by the wallet observer, as always.
     async fn start_payment(&self, invoice: &Secret) -> Result<(), String>;
+}
+
+/// Where an invoice a node issued stands, as the node reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldInvoiceState {
+    /// Issued; no payment has reached it.
+    Open,
+    /// An HTLC is locked in and held: the payer's payment is in flight and
+    /// stays so until the invoice is settled or cancelled.
+    Accepted,
+    /// Settled.
+    Settled,
+    /// Cancelled, or expired.
+    Cancelled,
+}
+
+impl HoldInvoiceState {
+    /// The stable name used in timelines.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            HoldInvoiceState::Open => "open",
+            HoldInvoiceState::Accepted => "accepted",
+            HoldInvoiceState::Settled => "settled",
+            HoldInvoiceState::Cancelled => "cancelled",
+        }
+    }
+}
+
+/// The daemon's payout limits the stack declares to the run (spec section
+/// 5), as far as scenarios need them. `None` means the stack did not
+/// declare one; a scenario that needs it says so and fails as environment
+/// misconfiguration rather than guessing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PayoutLimits {
+    /// The remaining lifetime a buyer invoice must have when submitted
+    /// (`[lightning].invoice_expiration_window`); a shorter one is refused.
+    pub payout_invoice_min_expiry_secs: Option<u64>,
+    /// How many unresolved payouts the daemon lets one payee hold before
+    /// it stops dispatching to that destination
+    /// (`[lightning].max_inflight_payouts_per_destination`).
+    pub max_inflight_payouts_per_destination: Option<u32>,
 }
 
 /// A dispute solver registered with the daemon under test.
@@ -226,6 +293,8 @@ pub struct Context {
     pub expiration_timeout: Duration,
     /// Interruption timing for recovery scenarios.
     pub recovery: RecoveryTiming,
+    /// The daemon's declared payout limits.
+    pub limits: PayoutLimits,
 }
 
 /// How long recovery scenarios interrupt and then watch.

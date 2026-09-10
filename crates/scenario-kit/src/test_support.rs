@@ -256,6 +256,7 @@ pub fn context_with(adapter: Arc<dyn AppAdapter>, relay_control: Arc<dyn RelayCo
         evidence: Arc::new(NullSink),
         pending_holds: Mutex::new(std::collections::BTreeMap::new()),
         mainnet: None,
+        limits: crate::context::PayoutLimits::default(),
         amount_sats: 5,
         fiat_code: "USD".into(),
         fiat_amount: 1,

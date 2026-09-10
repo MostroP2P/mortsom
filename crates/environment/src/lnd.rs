@@ -10,9 +10,11 @@
 //!
 //! Nothing in this module logs an invoice, a macaroon or a certificate.
 
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fedimint_tonic_lnd::{Client, lnrpc, routerrpc};
+use fedimint_tonic_lnd::{Client, invoicesrpc, lnrpc, routerrpc};
 use mortsom_common::Secret;
 use thiserror::Error;
 
@@ -115,6 +117,22 @@ pub enum LndError {
     },
 }
 
+/// Where an invoice this node issued stands, as `lookup_invoice` reports
+/// it. Finer than [`LndPaymentState`]: an `Accepted` hold invoice is a
+/// payment the node is holding, which is what the daemon's payout cap is
+/// about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LndInvoiceState {
+    /// Issued; no HTLC has reached it.
+    Open,
+    /// An HTLC is locked in and held.
+    Accepted,
+    /// Settled.
+    Settled,
+    /// Cancelled or expired.
+    Canceled,
+}
+
 /// Terminal or in-flight state of a payment, as LND reports it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LndPaymentState {
@@ -143,6 +161,10 @@ pub struct LndWallet {
     /// clones it rather than holding a lock: a hold-invoice payment in
     /// flight for minutes never blocks a lookup on the same actor.
     client: Client,
+    /// Preimages of the hold invoices this handle issued, by payment hash.
+    /// A hold invoice settles only with its preimage, which the node never
+    /// stores, so the issuer keeps it -- in memory, for this run only.
+    hold_preimages: Arc<Mutex<BTreeMap<String, Secret>>>,
 }
 
 impl std::fmt::Debug for LndWallet {
@@ -193,6 +215,7 @@ impl LndWallet {
         Ok(Self {
             label: label.to_owned(),
             client,
+            hold_preimages: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
 
@@ -265,6 +288,125 @@ impl LndWallet {
             .await?
             .into_inner();
         Ok(Secret::new(response.payment_request))
+    }
+
+    /// Creates an invoice for `sats` that stops being payable `expiry_secs`
+    /// after issue. For scenarios about the daemon's invoice floor.
+    pub async fn make_invoice_expiring(
+        &self,
+        sats: u64,
+        memo: &str,
+        expiry_secs: u64,
+    ) -> Result<Secret, LndError> {
+        let mut client = self.client.clone();
+        let response = self
+            .call(
+                "add_invoice",
+                client.lightning().add_invoice(lnrpc::Invoice {
+                    memo: memo.to_owned(),
+                    value: self.invoice_value(sats)?,
+                    expiry: i64::try_from(expiry_secs)
+                        .ok()
+                        .filter(|secs| *secs > 0)
+                        .ok_or_else(|| LndError::InvalidAmount {
+                            label: self.label.clone(),
+                            field: "invoice expiry seconds",
+                            value: expiry_secs.into(),
+                        })?,
+                    ..Default::default()
+                }),
+            )
+            .await?
+            .into_inner();
+        Ok(Secret::new(response.payment_request))
+    }
+
+    /// Creates a hold invoice for `sats`: a payment to it is accepted and
+    /// held until [`LndWallet::settle_hold_invoice`] or
+    /// [`LndWallet::cancel_invoice`]. The preimage stays with this handle.
+    pub async fn make_hold_invoice(&self, sats: u64, memo: &str) -> Result<Secret, LndError> {
+        use sha2::{Digest, Sha256};
+        let preimage: [u8; 32] = rand::random();
+        let hash = Sha256::digest(preimage);
+        let mut client = self.client.clone();
+        let response = self
+            .call(
+                "add_hold_invoice",
+                client
+                    .invoices()
+                    .add_hold_invoice(invoicesrpc::AddHoldInvoiceRequest {
+                        memo: memo.to_owned(),
+                        hash: hash.to_vec(),
+                        value: self.invoice_value(sats)?,
+                        ..Default::default()
+                    }),
+            )
+            .await?
+            .into_inner();
+        self.hold_preimages
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(hex_of(&hash), Secret::new(hex_of(&preimage)));
+        Ok(Secret::new(response.payment_request))
+    }
+
+    /// Where the invoice `payment_hash` this node issued stands.
+    pub async fn invoice_state(&self, payment_hash: &str) -> Result<LndInvoiceState, LndError> {
+        let r_hash = requests::hash_bytes(&self.label, payment_hash)?;
+        let mut client = self.client.clone();
+        let invoice = self
+            .call(
+                "lookup_invoice",
+                client.lightning().lookup_invoice(lnrpc::PaymentHash {
+                    r_hash,
+                    ..Default::default()
+                }),
+            )
+            .await?
+            .into_inner();
+        amounts::invoice_state(&self.label, &invoice)
+    }
+
+    /// Settles the hold invoice `payment_hash` this handle issued.
+    pub async fn settle_hold_invoice(&self, payment_hash: &str) -> Result<(), LndError> {
+        let preimage = self
+            .hold_preimages
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .get(payment_hash)
+            .cloned()
+            .ok_or_else(|| self.failed("settle_invoice", "no preimage for this hash".into()))?;
+        let preimage = hex_to_bytes(preimage.expose())
+            .ok_or_else(|| self.failed("settle_invoice", "stored preimage is not hex".into()))?;
+        let mut client = self.client.clone();
+        self.call(
+            "settle_invoice",
+            client
+                .invoices()
+                .settle_invoice(invoicesrpc::SettleInvoiceMsg { preimage }),
+        )
+        .await?;
+        if self.invoice_state(payment_hash).await? == LndInvoiceState::Settled {
+            // Settled once; the preimage has done its only job.
+            self.hold_preimages
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(payment_hash);
+            Ok(())
+        } else {
+            Err(self.failed("settle_invoice", "invoice is not confirmed settled".into()))
+        }
+    }
+
+    fn invoice_value(&self, sats: u64) -> Result<i64, LndError> {
+        i64::try_from(sats)
+            .ok()
+            .filter(|sats| *sats > 0)
+            .ok_or_else(|| LndError::InvalidAmount {
+                label: self.label.clone(),
+                field: "invoice satoshi",
+                value: sats.into(),
+            })
     }
 
     /// Starts paying `invoice` and returns once the node has the payment in
@@ -578,6 +720,10 @@ impl LndWallet {
 }
 
 /// Decodes a hex string; `None` when it is not valid hex.
+fn hex_of(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
     if !hex.len().is_multiple_of(2)
         || hex.is_empty()
@@ -598,6 +744,7 @@ mod tests {
 
     #[test]
     fn decodes_hex_and_rejects_what_is_not() {
+        assert_eq!(hex_of(&[0x00, 0xff]), "00ff");
         assert_eq!(hex_to_bytes("00ff"), Some(vec![0x00, 0xff]));
         assert_eq!(hex_to_bytes("0f0"), None, "odd length");
         assert_eq!(hex_to_bytes("zz"), None, "not hex");

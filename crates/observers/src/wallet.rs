@@ -99,6 +99,13 @@ pub fn payment_hash_of(invoice: &Secret) -> Result<String, WalletObserverError> 
     Ok(format!("{}", parsed.payment_hash()))
 }
 
+/// Seconds after its timestamp that a bolt11 invoice stops being payable.
+pub fn expiry_secs_of(invoice: &Secret) -> Result<u64, WalletObserverError> {
+    let parsed = Bolt11Invoice::from_str(invoice.expose().trim())
+        .map_err(|_| WalletObserverError::InvalidInvoice)?;
+    Ok(parsed.expiry_time().as_secs())
+}
+
 /// Amount in sats encoded in a bolt11 invoice, if any.
 pub fn amount_sats_of(invoice: &Secret) -> Result<Option<u64>, WalletObserverError> {
     let parsed = Bolt11Invoice::from_str(invoice.expose().trim())

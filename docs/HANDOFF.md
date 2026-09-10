@@ -35,6 +35,19 @@ being waited for (`8e12332`); and range orders never leaving a remainder, becaus
 every attempt with its cause. The stack was rebuilt for this work (`mortsom stack up`, daemon
 `f17567fc…`), and both clients were rebuilt from the app branch.
 
+**The payment-failure family is implemented** (Mortsom `feat/payment-failure-family`, app
+`feat/mortsom-payout-failure`): `payout_fails_then_replaced`, `payout_invoice_below_expiry_floor` and
+`payout_slots_capped_per_destination` (spec section 8.6). Bob's invoices are shaped on the node Mortsom
+holds for him -- withdrawn before the release, issued with a chosen lifetime, or issued as hold invoices
+(`LndWallet::make_hold_invoice`, `settle_hold_invoice`, `invoice_state`) -- and the declared limits reach
+scenarios as `Context::limits` from the stack descriptor. A withdrawn or refused invoice is journaled as
+`PaymentSuperseded` before the node cancels it, so a replacement can be prepared for the same order and
+recovery verifies the old one never settled. The app change was needed because the daemon's
+replacement request (`add-invoice` on a `settled-hold-invoice` order) was persisted as that status and
+never shown; the app now treats it as a request for an invoice, maps `invoice-updated` back to
+`payout-pending`, and keeps a refused invoice's reason on screen as `invoice.error` (see the app's
+`docs/automation-contract.md`, "Buyer payout failure"). Build the clients from that app branch.
+
 **The checkpoint is met: all four cells are accepted.** Linux `happy_sell` and `happy_buy`, Web `happy_sell`
 and `happy_buy`, each a funded regtest trade driven end to end through the real app v2 UI, with the hold
 settled once on Alice's node and the payout once on Bob's. Run ids are in
@@ -60,7 +73,10 @@ No journal is retained, no harness process is left running, and the regtest stac
    several commits ago (`5c764ba`); it has not been re-run since.
 2. **Land the dispute branches.** App `feat/mortsom-dispute-back-id` (the dispute screen's `appbar.back`)
    and Mortsom `feat/dispute-family`. Until the app PR is merged, build the clients from that branch.
-3. **Further families**, when the operator asks. Spec section 8.1 lists them; section 14 is the roadmap.
+3. **Land the payment-failure branches** (app `feat/mortsom-payout-failure`, Mortsom
+   `feat/payment-failure-family`) and record the live cells in the ledger.
+4. **Further families**, when the operator asks: anti-abuse bonds and adversarial messages (spec
+   section 8.1; section 14 is the roadmap).
    The buy-side range remainder is driven by `range_buy_order` (app branch `feat/mortsom-range-buy-remainder`
    on top of #410, Mortsom branch `feat/range-buy-order`).
 

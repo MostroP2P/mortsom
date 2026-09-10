@@ -22,7 +22,8 @@ pub(crate) mod test_support;
 pub use budget::{Budget, BudgetError, SpendCaps};
 pub use cleanup::{CleanupEntry, CleanupRegistry, CleanupReport};
 pub use context::{
-    ActorSession, Context, DisputeSolver, MainnetClearance, RecoveryTiming, ScenarioError,
+    ActorSession, Context, DisputeSolver, HoldInvoiceState, MainnetClearance, PayoutLimits,
+    RecoveryTiming, ScenarioError,
 };
 pub use evidence::EvidenceSink;
 pub use outcome::{Outcome, ScenarioResult};

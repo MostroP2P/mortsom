@@ -121,6 +121,67 @@ fn repeated_payment_intents_cannot_authorize_a_second_wallet_submission() {
     );
 }
 
+/// A payout invoice withdrawn on purpose (refused by the daemon, or
+/// cancelled so the daemon's payment fails) is not a replay when the
+/// buyer prepares a replacement for the same order; the withdrawal is
+/// what makes the second intent legitimate, and it must name a prepared
+/// payment.
+#[test]
+fn a_superseded_payment_lets_a_replacement_be_prepared_for_the_same_order() {
+    let base = tempfile::tempdir().unwrap();
+    let journal = FileJournal::create(base.path(), manifest()).unwrap();
+    let expected = |hash: char| RecoveryEvent::PaymentExpected {
+        order_id: "o1".into(),
+        wallet: "bob".into(),
+        hash: hash.to_string().repeat(64),
+        incoming: true,
+        amount_sats: 1000,
+    };
+    assert!(
+        journal
+            .record(RecoveryEvent::PaymentSuperseded {
+                order_id: "o1".into(),
+                wallet: "bob".into(),
+                hash: "a".repeat(64),
+            })
+            .is_err(),
+        "nothing prepared yet"
+    );
+    journal.record(expected('a')).unwrap();
+    assert!(journal.record(expected('b')).is_err(), "still a replay");
+    journal
+        .record(RecoveryEvent::PaymentSuperseded {
+            order_id: "o1".into(),
+            wallet: "bob".into(),
+            hash: "a".repeat(64),
+        })
+        .unwrap();
+    journal.record(expected('b')).unwrap();
+    assert!(
+        journal.record(expected('a')).is_err(),
+        "the old hash stays known"
+    );
+    assert!(
+        journal.record(expected('c')).is_err(),
+        "the replacement is live"
+    );
+    assert!(superseded(
+        &journal.snapshot().events,
+        "bob",
+        &"a".repeat(64)
+    ));
+    assert!(!superseded(
+        &journal.snapshot().events,
+        "alice",
+        &"a".repeat(64)
+    ));
+    assert!(!superseded(
+        &journal.snapshot().events,
+        "bob",
+        &"b".repeat(64)
+    ));
+}
+
 #[test]
 fn verified_resolution_survives_a_crash_between_profile_and_bundle_deletion() {
     let base = tempfile::tempdir().unwrap();

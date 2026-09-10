@@ -1,5 +1,5 @@
 //! Exact principal conversion and conservative fee accounting.
-use super::{LndError, LndPaymentState};
+use super::{LndError, LndInvoiceState, LndPaymentState};
 use fedimint_tonic_lnd::lnrpc;
 
 pub(super) fn whole_sats(label: &str, field: &'static str, msats: i64) -> Result<u64, LndError> {
@@ -65,6 +65,22 @@ pub(super) fn incoming(
     ))
 }
 
+/// The invoice's own state, keeping `accepted` apart from `open`.
+pub(super) fn invoice_state(
+    label: &str,
+    invoice: &lnrpc::Invoice,
+) -> Result<LndInvoiceState, LndError> {
+    Ok(
+        match lnrpc::invoice::InvoiceState::try_from(invoice.state) {
+            Ok(lnrpc::invoice::InvoiceState::Open) => LndInvoiceState::Open,
+            Ok(lnrpc::invoice::InvoiceState::Accepted) => LndInvoiceState::Accepted,
+            Ok(lnrpc::invoice::InvoiceState::Settled) => LndInvoiceState::Settled,
+            Ok(lnrpc::invoice::InvoiceState::Canceled) => LndInvoiceState::Canceled,
+            _ => return Err(invalid_state(label, "incoming invoice")),
+        },
+    )
+}
+
 fn invalid_state(label: &str, operation: &'static str) -> LndError {
     LndError::Failed {
         label: label.into(),
@@ -106,6 +122,32 @@ mod tests {
             incoming("buyer", &invoice).unwrap(),
             (999, LndPaymentState::Pending)
         );
+    }
+    /// A held HTLC and an untouched invoice are both "pending" to the
+    /// payment observer, but the payout cap is about the difference.
+    #[test]
+    fn invoice_state_keeps_accepted_apart_from_open() {
+        let mut invoice = lnrpc::Invoice::default();
+        for (state, expected) in [
+            (lnrpc::invoice::InvoiceState::Open, LndInvoiceState::Open),
+            (
+                lnrpc::invoice::InvoiceState::Accepted,
+                LndInvoiceState::Accepted,
+            ),
+            (
+                lnrpc::invoice::InvoiceState::Settled,
+                LndInvoiceState::Settled,
+            ),
+            (
+                lnrpc::invoice::InvoiceState::Canceled,
+                LndInvoiceState::Canceled,
+            ),
+        ] {
+            invoice.state = state as i32;
+            assert_eq!(invoice_state("buyer", &invoice).unwrap(), expected);
+        }
+        invoice.state = 999;
+        assert!(invoice_state("buyer", &invoice).is_err());
     }
     #[test]
     fn unknown_outgoing_states_are_errors_instead_of_pending_payments() {

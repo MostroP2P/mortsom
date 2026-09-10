@@ -21,6 +21,8 @@ async-trait = { workspace = true }
 mortsom-ui-driver = { workspace = true, features = ["testing"] }
 mortsom-observers = { workspace = true }
 nostr-sdk = { workspace = true }
+lightning-invoice = { workspace = true }
+bitcoin = { workspace = true }
 
 [lints]
 workspace = true

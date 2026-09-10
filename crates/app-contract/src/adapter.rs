@@ -11,8 +11,8 @@ use mortsom_ui_driver::ui::UiSession;
 use crate::capabilities::CapabilitySet;
 use crate::error::AdapterError;
 use crate::types::{
-    AppOrderState, AppProfile, CancelOutcome, Identity, OrderDraft, OrderReference, PaymentHandoff,
-    PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
+    AppOrderState, AppProfile, CancelOutcome, Identity, InvoiceSubmission, OrderDraft,
+    OrderReference, PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };
 
 /// A client as seen by an adapter: one actor, one UI session, one deadline
@@ -134,6 +134,22 @@ pub trait AppAdapter: Send + Sync {
         order: &OrderReference,
         invoice: Option<&Secret>,
     ) -> Result<Option<Secret>, AdapterError>;
+    /// Types `invoice` into the manual form, submits it once and reports
+    /// the daemon's verdict: the trade detail (accepted) or the form kept
+    /// open with the reason on screen (rejected). Unlike
+    /// [`AppAdapter::provide_buyer_invoice`], a refusal is an answer here,
+    /// not a failure: scenarios about invoices the daemon cannot pay ask
+    /// exactly that question.
+    async fn submit_buyer_invoice(
+        &self,
+        _device: &DeviceContext<'_>,
+        _order: &OrderReference,
+        _invoice: &Secret,
+    ) -> Result<InvoiceSubmission, AdapterError> {
+        Err(AdapterError::contract(
+            "buyer invoice submission with a verdict is not supported",
+        ))
+    }
     /// Reports fiat sent.
     async fn confirm_fiat_sent(
         &self,

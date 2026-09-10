@@ -600,6 +600,14 @@ mod relay;
 pub use relay::{expect_relay_state_absent, relay_cursor, relay_order_tag, wait_relay_state_since};
 
 mod buyer_invoice;
+pub use buyer_invoice::BuyerInvoice;
+#[path = "actions/payout.rs"]
+mod payout;
+pub use payout::{
+    RejectedInvoice, expect_hold_invoice_stays, expect_payout_never_settled, release_held_payouts,
+    settle_buyer_hold_invoice, submit_rejected_buyer_invoice, supersede_buyer_invoice,
+    wait_hold_invoice,
+};
 
 /// Generates the buyer invoice as `actor` (no value moves).
 pub async fn provide_buyer_invoice(
@@ -607,13 +615,24 @@ pub async fn provide_buyer_invoice(
     actor: Actor,
     order: &OrderReference,
 ) -> Result<Option<String>, ScenarioError> {
+    provide_buyer_invoice_of(ctx, actor, order, BuyerInvoice::Standard).await
+}
+
+/// Generates a buyer invoice of `kind` as `actor` and hands it in (no
+/// value moves). The daemon is expected to take it.
+pub async fn provide_buyer_invoice_of(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+    kind: BuyerInvoice,
+) -> Result<Option<String>, ScenarioError> {
     let session = ctx.actor(actor)?;
     if ctx.journal.enabled() && ctx.node_wallet(actor).is_none() {
         return Err(ScenarioError::environment(
             "durable desktop recovery requires a caller-controlled invoice wallet",
         ));
     }
-    let prepared = buyer_invoice::prepare(ctx, actor, order).await?;
+    let prepared = buyer_invoice::prepare(ctx, actor, order, kind).await?;
     let invoice = ctx
         .adapter
         .provide_buyer_invoice(
@@ -822,6 +841,9 @@ pub fn is_observable(path: PaymentPath) -> bool {
 #[cfg(test)]
 #[path = "actions/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "actions/tests_payout.rs"]
+mod tests_payout;
 #[cfg(test)]
 #[path = "actions/tests_relay.rs"]
 mod tests_relay;

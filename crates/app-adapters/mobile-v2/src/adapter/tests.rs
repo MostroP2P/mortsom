@@ -810,6 +810,43 @@ async fn a_supplied_buyer_invoice_is_typed_into_the_manual_form() {
     assert!(!calls.contains("mortsominvoice"), "{calls}");
 }
 
+/// A submission with a verdict: the trade detail means accepted; the form
+/// kept open with `invoice.error` means refused, and the reason is that
+/// readout, never the invoice.
+#[tokio::test]
+async fn a_submitted_buyer_invoice_reports_the_daemons_verdict() {
+    let ui = app_without_a_wallet();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    let supplied = Secret::new("lnbc1000n1mortsominvoice");
+    let verdict = a
+        .submit_buyer_invoice(&device(&ui), &OrderReference::new("o1"), &supplied)
+        .await
+        .unwrap();
+    assert_eq!(verdict, InvoiceSubmission::Accepted);
+
+    let ui = app_without_a_wallet();
+    ui.on_tap(Ids::INVOICE_SUBMIT, &[Ids::INVOICE_ERROR]);
+    ui.on_tap_hide(Ids::INVOICE_SUBMIT, &[Ids::ORDER_STATUS, Ids::ORDER_ID]);
+    ui.label(Ids::INVOICE_ERROR, "The node rejected this invoice.");
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    let verdict = a
+        .submit_buyer_invoice(&device(&ui), &OrderReference::new("o1"), &supplied)
+        .await
+        .unwrap();
+    assert_eq!(
+        verdict,
+        InvoiceSubmission::Rejected {
+            reason: "The node rejected this invoice.".into()
+        }
+    );
+    let calls = ui.calls().join("\n");
+    assert_eq!(calls.matches("tap invoice.submit").count(), 1);
+    assert!(!calls.contains("mortsominvoice"), "{calls}");
+}
+
 #[tokio::test]
 async fn an_enabled_submit_after_a_confirmation_timeout_is_never_republished() {
     let ui = app_with_orders();

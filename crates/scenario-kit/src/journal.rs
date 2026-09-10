@@ -27,6 +27,15 @@ pub enum RecoveryEvent {
         incoming: bool,
         amount_sats: u64,
     },
+    /// Written before an expected payment is withdrawn on purpose: the
+    /// invoice is cancelled on its node (or was refused by the daemon) and
+    /// a replacement may be prepared for the same order and wallet. A
+    /// superseded incoming payment must never settle.
+    PaymentSuperseded {
+        order_id: String,
+        wallet: String,
+        hash: String,
+    },
     /// Both UI and external payment evidence proved final resolution.
     OrderResolved { order_id: String },
 }
