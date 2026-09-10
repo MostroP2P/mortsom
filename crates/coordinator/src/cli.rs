@@ -18,24 +18,19 @@ use mortsom_common::logging::init_logging;
 use mortsom_environment::docker::{ContainerRuntime, DockerCli};
 use mortsom_environment::relay::NostrProbe;
 
-use mortsom_android_driver::process::TokioRunner;
-use mortsom_android_driver::ui::AppiumDriver;
+use mortsom_ui_driver::process::TokioRunner;
 
-use mortsom_adapter_mobile_legacy::MobileLegacyAdapter;
 use mortsom_adapter_mobile_v2::MobileV2Adapter;
-use mortsom_environment::relay::RelayHandle;
 
-use crate::app_setup::{AppSetupOptions, SetupDeps, run_app_setup};
 use crate::config::Config;
-use crate::device_smoke::{DeviceSmokeOptions, run_device_smoke};
-use crate::doctor::{DoctorOptions, HostProbe, RealHost, RealNet, run_doctor};
+use crate::doctor::{HostProbe, RealHost, RealNet};
 use crate::relay_smoke::{RelayObserverSource, SmokeOptions, run_relay_smoke};
 use crate::run::{LiveObserver, RunDeps, RunOptions, run_scenarios};
 
 /// Default configuration file.
 pub const DEFAULT_CONFIG: &str = "config/desktop.example.toml";
 
-/// End-to-end test harness for the Mostro mobile application.
+/// End-to-end test harness for the Mostro application on Linux and Web.
 #[derive(Debug, Parser)]
 #[command(name = "mortsom", version, about)]
 pub struct Cli {
@@ -67,7 +62,7 @@ pub enum Command {
         #[arg(long)]
         details: bool,
     },
-    /// Recover retained desktop identities and orders, or clean legacy Android resources.
+    /// Recover retained desktop identities and orders of an interrupted run.
     /// Refuses unresolved ownership and changed stack identities.
     Cleanup {
         /// Run id (the artifacts directory name).
@@ -109,7 +104,7 @@ pub enum Command {
         #[arg(long)]
         lane: Option<String>,
     },
-    /// Run scenarios end to end (relay, devices, apps, observers, cleanup).
+    /// Run scenarios end to end (stack relay, clients, observers, cleanup).
     Run {
         /// Client target for Alice and Bob.
         #[arg(long, default_value = "linux")]
@@ -122,22 +117,10 @@ pub enum Command {
         xvfb: PathBuf,
         /// Scenario names.
         scenarios: Vec<String>,
-        /// Run every scenario carrying this tag (a family, or `smoke`). On
-        /// Linux and Web each scenario is its own run with fresh actors.
+        /// Run every scenario carrying this tag (a family, or `smoke`). Each
+        /// scenario is its own run with fresh actors.
         #[arg(long)]
         tag: Option<String>,
-    },
-    /// Application-level operations through the UI.
-    App {
-        /// App subcommand.
-        #[command(subcommand)]
-        command: AppCommand,
-    },
-    /// Emulator farm operations.
-    Device {
-        /// Device subcommand.
-        #[command(subcommand)]
-        command: DeviceCommand,
     },
     /// Run-owned relay operations.
     Relay {
@@ -196,7 +179,7 @@ pub enum StackAction {
 
 /// Runs a plan with the terminal as its output, for as long as it runs: a
 /// followed log ends only when the operator interrupts it.
-async fn stream_to_terminal(plan: &mortsom_android_driver::process::Command) -> ExitCode {
+async fn stream_to_terminal(plan: &mortsom_ui_driver::process::Command) -> ExitCode {
     let status = tokio::process::Command::new(&plan.program)
         .args(&plan.args)
         .envs(&plan.env)
@@ -281,23 +264,6 @@ async fn stack_cli(stack_dir: &std::path::Path, action: StackAction) -> ExitCode
     }
 }
 
-/// App subcommands.
-#[derive(Debug, Subcommand)]
-pub enum AppCommand {
-    /// Start the relay and two devices, onboard both apps through the UI,
-    /// configure the daemon, relay and NWC wallets, prove identities differ
-    /// and survive a restart, then tear everything down. Moves no value.
-    Setup,
-}
-
-/// Device subcommands.
-#[derive(Debug, Subcommand)]
-pub enum DeviceCommand {
-    /// Bring two clean devices up, install the configured APK on both,
-    /// launch it, record the initial screens and tear everything down.
-    Smoke,
-}
-
 /// Relay subcommands.
 #[derive(Debug, Subcommand)]
 pub enum RelayCommand {
@@ -347,8 +313,6 @@ fn lock_mutation(
         command,
         Command::Run { .. }
             | Command::Cleanup { .. }
-            | Command::App { .. }
-            | Command::Device { .. }
             | Command::Relay { .. }
             | Command::Stack {
                 action: StackAction::Up { .. } | StackAction::Down
@@ -422,8 +386,6 @@ pub async fn run(cli: Cli) -> ExitCode {
             )
             .await
         }
-        Command::App { command } => run_app(&cli.config, command).await,
-        Command::Device { command } => run_device(&cli.config, command).await,
         Command::Relay { command } => run_relay(&cli.config, command).await,
         Command::Doctor {
             no_network,
@@ -431,7 +393,6 @@ pub async fn run(cli: Cli) -> ExitCode {
             platform,
             app_artifact,
         } => {
-            let options = DoctorOptions { no_network };
             // The daemon probe waits for events republished on the daemon's
             // own cycle, so it uses the configured health timeout.
             let net = match Config::diagnose(&cli.config, |name| RealHost.env(name)).config {
@@ -440,23 +401,19 @@ pub async fn run(cli: Cli) -> ExitCode {
                 )),
                 None => RealNet::default(),
             };
-            let report = if platform == mortsom_desktop_driver::Platform::Android {
-                run_doctor(&cli.config, &options, &RealHost, &net).await
-            } else {
-                crate::doctor::run_desktop_doctor(
-                    &cli.config,
-                    &cli.stack_dir,
-                    &crate::doctor::DesktopDoctorOptions {
-                        platform,
-                        artifact: app_artifact,
-                        no_network,
-                    },
-                    &RealHost,
-                    &net,
-                    &TokioRunner,
-                )
-                .await
-            };
+            let report = crate::doctor::run_desktop_doctor(
+                &cli.config,
+                &cli.stack_dir,
+                &crate::doctor::DesktopDoctorOptions {
+                    platform,
+                    artifact: app_artifact,
+                    no_network,
+                },
+                &RealHost,
+                &net,
+                &TokioRunner,
+            )
+            .await;
             if json {
                 match serde_json::to_string_pretty(&report) {
                     Ok(text) => println!("{text}"),
@@ -478,17 +435,8 @@ pub async fn run(cli: Cli) -> ExitCode {
 }
 
 /// The adapter for `mobile.profile` (validated by the config loader).
-pub fn select_adapter(
-    config: &Config,
-    flutter: PathBuf,
-    relay_seed: String,
-) -> Arc<dyn mortsom_app_contract::AppAdapter> {
-    let package = config.mobile.package.clone();
-    if config.mobile.profile == mortsom_adapter_mobile_v2::PROFILE {
-        Arc::new(MobileV2Adapter::new(package, flutter, relay_seed))
-    } else {
-        Arc::new(MobileLegacyAdapter::new(package, flutter, relay_seed))
-    }
+pub fn select_adapter(_config: &Config) -> Arc<dyn mortsom_app_contract::AppAdapter> {
+    Arc::new(MobileV2Adapter::new())
 }
 
 async fn run_relay(config_path: &std::path::Path, command: RelayCommand) -> ExitCode {
@@ -577,118 +525,6 @@ fn relay_down_targets(names: Vec<String>, exact: Option<&str>) -> Vec<String> {
     }
 }
 
-async fn run_device(config_path: &std::path::Path, command: DeviceCommand) -> ExitCode {
-    let config = match Config::load(config_path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    match command {
-        DeviceCommand::Smoke => {
-            let Some(appium) = RealHost.which("appium") else {
-                eprintln!("appium not found on PATH; run `mortsom doctor`");
-                return ExitCode::from(2);
-            };
-            let ui = AppiumDriver::new(appium);
-            let env = |name: &str| std::env::var(name).ok();
-            // Only the build is used here, but the adapter needs the relay
-            // seed it bakes into the APK; the device smoke opens no order,
-            // so the port it names is the configured one.
-            let seed = RelayHandle {
-                container_name: String::new(),
-                host_port: config.relay.host_port,
-                data_dir: std::path::PathBuf::new(),
-                image: String::new(),
-            }
-            .emulator_url();
-            let flutter = RealHost.which("flutter").unwrap_or_default();
-            let adapter = select_adapter(&config, flutter, seed);
-            match run_device_smoke(
-                &config,
-                &DeviceSmokeOptions::default(),
-                &TokioRunner,
-                &ui,
-                adapter.as_ref(),
-                &env,
-            )
-            .await
-            {
-                Ok(summary) => {
-                    print!("{}", summary.checks.render_with_color(use_color()));
-                    println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);
-                    if summary.passed {
-                        ExitCode::SUCCESS
-                    } else {
-                        ExitCode::from(1)
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{e}");
-                    ExitCode::from(2)
-                }
-            }
-        }
-    }
-}
-
-async fn run_app(config_path: &std::path::Path, command: AppCommand) -> ExitCode {
-    let config = match Config::load(config_path) {
-        Ok(config) => config,
-        Err(e) => {
-            eprintln!("{e}");
-            return ExitCode::from(2);
-        }
-    };
-    match command {
-        AppCommand::Setup => {
-            let (Some(appium), Some(flutter)) =
-                (RealHost.which("appium"), RealHost.which("flutter"))
-            else {
-                eprintln!("appium and flutter must be on PATH; run `mortsom doctor`");
-                return ExitCode::from(2);
-            };
-            let ui = AppiumDriver::new(appium);
-            let docker = DockerCli::default();
-            // The build seeds the relay URL for the configured base port; a
-            // run whose relay lands on another port adds it through the UI.
-            let seed = RelayHandle {
-                container_name: String::new(),
-                host_port: config.relay.host_port,
-                data_dir: std::path::PathBuf::new(),
-                image: String::new(),
-            }
-            .emulator_url();
-            let adapter = select_adapter(&config, flutter, seed);
-            let env = |name: &str| std::env::var(name).ok();
-            let deps = SetupDeps {
-                runner: &TokioRunner,
-                ui: &ui,
-                docker: &docker,
-                probe: &NostrProbe,
-                adapter: adapter.as_ref(),
-                env: &env,
-            };
-            match run_app_setup(&config, &AppSetupOptions::default(), &deps).await {
-                Ok(summary) => {
-                    print!("{}", summary.checks.render_with_color(use_color()));
-                    println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);
-                    if summary.passed {
-                        ExitCode::SUCCESS
-                    } else {
-                        ExitCode::from(1)
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{e}");
-                    ExitCode::from(2)
-                }
-            }
-        }
-    }
-}
-
 fn list_scenarios(details: bool) -> ExitCode {
     mortsom_scenarios::link();
     if let Err(e) = mortsom_scenario_kit::registry::validate() {
@@ -712,7 +548,7 @@ mod tests {
     use super::relay_down_targets;
 
     #[test]
-    fn run_defaults_to_linux_and_accepts_only_the_three_named_platforms() {
+    fn run_defaults_to_linux_and_accepts_only_the_two_named_platforms() {
         use clap::Parser;
         use mortsom_desktop_driver::Platform;
         let cli = super::Cli::try_parse_from(["mortsom", "run", "happy_sell"]).unwrap();
@@ -727,11 +563,7 @@ mod tests {
             cli.config,
             std::path::Path::new("config/desktop.example.toml")
         );
-        for (name, expected) in [
-            ("linux", Platform::Linux),
-            ("web", Platform::Web),
-            ("android", Platform::Android),
-        ] {
+        for (name, expected) in [("linux", Platform::Linux), ("web", Platform::Web)] {
             let cli = super::Cli::try_parse_from([
                 "mortsom",
                 "--config",
@@ -748,6 +580,9 @@ mod tests {
             assert_eq!(cli.config, std::path::Path::new("explicit.local.toml"));
         }
         assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "unknown"]).is_err());
+        assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "android"]).is_err());
+        assert!(super::Cli::try_parse_from(["mortsom", "device", "smoke"]).is_err());
+        assert!(super::Cli::try_parse_from(["mortsom", "app", "setup"]).is_err());
     }
 
     fn names() -> Vec<String> {

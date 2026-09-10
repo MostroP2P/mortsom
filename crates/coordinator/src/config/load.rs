@@ -185,24 +185,29 @@ mod tests {
     }
 
     #[test]
-    fn desktop_configuration_does_not_require_an_android_section() {
-        let mut value: Value = toml::from_str(&example()).unwrap();
-        value.as_table_mut().unwrap().remove("android");
-        let config = Config::from_toml_str(&toml::to_string(&value).unwrap(), lookup).unwrap();
-        assert!(config.android.is_none());
-        assert!(config.require_android().is_err());
-        assert_eq!(config.ui_timeout_secs(), 30);
+    fn an_android_section_is_no_longer_accepted() {
+        let text = format!(
+            "{}
+[android]
+avd_image = \"x\"
+",
+            example()
+        );
+        assert!(matches!(
+            Config::from_toml_str(&text, lookup),
+            Err(ConfigError::Parse(_))
+        ));
     }
 
     #[test]
-    fn shared_deadline_overrides_legacy_android_and_rejects_zero() {
+    fn shared_deadline_has_a_default_overrides_and_rejects_zero() {
         let mut value: Value = toml::from_str(&example()).unwrap();
-        value["android"]
-            .as_table_mut()
-            .unwrap()
-            .insert("ui_timeout_secs".into(), Value::Integer(17));
+        value.as_table_mut().unwrap().remove("ui");
         let config = Config::from_toml_str(&toml::to_string(&value).unwrap(), lookup).unwrap();
-        assert_eq!(config.ui_timeout_secs(), 17);
+        assert_eq!(
+            config.ui_timeout_secs(),
+            super::super::DEFAULT_UI_TIMEOUT_SECS
+        );
         value.as_table_mut().unwrap().insert(
             "ui".into(),
             toml::Value::Table(toml::Table::from_iter([(
@@ -225,10 +230,7 @@ mod tests {
 
         assert_eq!(config.run.lane, Lane::Local);
         assert_eq!(config.mobile.mostro_pubkey, HEX);
-        assert_eq!(
-            config.mobile.dart_defines,
-            vec![format!("MOSTRO_PUB_KEY={HEX}")]
-        );
+        assert_eq!(config.mobile.profile, "mobile-v2");
         assert!(matches!(
             &config.wallets.alice,
             mortsom_environment::WalletConfig::Nwc { uri } if uri.expose() == ALICE
@@ -410,7 +412,6 @@ mod lane_examples {
                 Some("dbe0b1be7aafd3cfba92d7463edbd4e33b2969f61bd554d37ac56f032e13355a".into())
             }
             "MORTSOM_MOSTRO_SETTINGS_FILE" => Some("/tmp/settings.toml".into()),
-            "MORTSOM_APK_PATH" => Some("/tmp/app.apk".into()),
             "MORTSOM_ARTIFACTS_DIR" => Some("/tmp/artifacts".into()),
             "MORTSOM_ALICE_NWC" => Some("nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=71a8c14c1407c113601079c4302dab36460f0ccd0ad506f1f2dc73b5100e4f3c".into()),
             "MORTSOM_BOB_NWC" => Some("nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=0000000000000000000000000000000000000000000000000000000000000001".into()),
@@ -431,10 +432,10 @@ mod lane_examples {
     }
 
     #[test]
-    fn ci_example_uses_a_prebuilt_apk() {
+    fn ci_example_is_the_ci_lane_with_artifacts_from_the_environment() {
         let config = load("ci.example.toml");
         assert_eq!(config.run.lane, Lane::Ci);
-        assert_eq!(config.mobile.apk_path, "/tmp/app.apk");
+        assert_eq!(config.run.artifacts_dir, "/tmp/artifacts");
     }
 
     #[test]
@@ -447,10 +448,15 @@ mod lane_examples {
     }
 
     #[test]
-    fn mobile_v2_example_selects_the_v2_profile_and_package() {
-        let config = load("mobile-v2.example.toml");
-        assert_eq!(config.mobile.profile, "mobile-v2");
-        assert_eq!(config.mobile.package, "foundation.mostro.app");
-        assert_eq!(config.mobile.source_dir, "../mobilev2");
+    fn every_example_drives_the_v2_app_from_its_checkout() {
+        for name in [
+            "local.example.toml",
+            "ci.example.toml",
+            "canary.example.toml",
+        ] {
+            let config = load(name);
+            assert_eq!(config.mobile.profile, "mobile-v2", "{name}");
+            assert_eq!(config.mobile.source_dir, "../mobilev2", "{name}");
+        }
     }
 }

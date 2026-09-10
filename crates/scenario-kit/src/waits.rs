@@ -118,7 +118,7 @@ mod tests {
         .await;
         assert_eq!(seen, Some(7));
     }
-    /// A probe that never answers (a wedged Appium call) must not push the
+    /// A probe that never answers (a wedged WebDriver call) must not push the
     /// caller past its own deadline.
     #[tokio::test]
     async fn a_probe_that_never_answers_still_ends_at_the_deadline() {

@@ -2,8 +2,8 @@
 //!
 //! Two layers protect secrets: typed [`crate::Secret`] values that cannot be
 //! printed, and this scrubber that removes known secret values and
-//! secret-shaped patterns from free text produced by external tools (adb
-//! logcat, relay logs, WebDriver responses) before it is persisted.
+//! secret-shaped patterns from free text produced by external tools (client
+//! logs, relay logs, WebDriver responses) before it is persisted.
 
 use std::sync::LazyLock;
 

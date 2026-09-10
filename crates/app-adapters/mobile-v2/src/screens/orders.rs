@@ -655,7 +655,7 @@ async fn page_source(device: &DeviceContext<'_>) -> Result<String, AdapterError>
         .map_err(|e| AdapterError::infrastructure(format!("page source: {e}")))
 }
 
-/// Extracts `resource-id` values with `prefix` from a UiAutomator XML dump.
+/// Extracts `resource-id` values with `prefix` from an accessibility XML dump.
 pub fn ids_with_prefix(xml: &str, prefix: &str) -> Vec<String> {
     let mut out = Vec::new();
     let needle = format!("resource-id=\"{prefix}");

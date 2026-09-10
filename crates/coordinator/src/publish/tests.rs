@@ -43,12 +43,12 @@ fn run_dir(world: &World, run_id: &str) -> PathBuf {
 }
 
 const SUMMARY: &str = r#"{
-  "run_id": "r1", "lane": "ci", "command": "run", "app_profile": "mobile-legacy",
+  "run_id": "r1", "lane": "ci", "command": "run", "app_profile": "profile-b",
   "app_version": null, "mainnet_cleared": false, "relay": null, "actors": [],
   "results": [
-    {"name": "happy_sell", "app_profile": "mobile-legacy", "app_version": null,
+    {"name": "happy_sell", "app_profile": "profile-b", "app_version": null,
      "outcome": {"outcome": "passed"}, "attempts": 2, "duration": {"secs": 61, "nanos": 0}},
-    {"name": "cancel_pending", "app_profile": "mobile-legacy", "app_version": null,
+    {"name": "cancel_pending", "app_profile": "profile-b", "app_version": null,
      "outcome": {"outcome": "failed", "category": "relay", "message": "relay silent, wallet nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=71a8c14c1407c113601079c4302dab36460f0ccd0ad506f1f2dc73b5100e4f3c"},
      "attempts": 1, "duration": {"secs": 5, "nanos": 0}}
   ],

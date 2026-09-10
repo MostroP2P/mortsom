@@ -75,10 +75,7 @@ async fn a_bought_range_leaves_its_remainder_to_the_buyer() {
     assert_eq!(fixture.relay_states(REMAINDER), ["pending", "canceled"]);
     let cleanup = fixture.context.cleanup.report();
     assert!(cleanup.is_clean());
-    assert_eq!(
-        cleanup.entries[1].actor,
-        mortsom_android_driver::avd::Actor::Bob
-    );
+    assert_eq!(cleanup.entries[1].actor, mortsom_common::Actor::Bob);
 }
 
 /// A market order goes on the book without sats; the daemon prices it at

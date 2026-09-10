@@ -2,8 +2,8 @@
 //! order or a pending payment through the UI, and asserting which trade
 //! actions the app offers (unauthorized-action UX). Nothing here pays.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{CancelOutcome, OrderReference};
+use mortsom_common::Actor;
 
 use crate::context::{Context, ScenarioError};
 use crate::timeline::TimelineKind;

@@ -2,15 +2,12 @@
 //! reporting and the `mortsom` command-line interface.
 
 pub mod accounting;
-pub mod apk;
-pub mod app_setup;
 pub mod artifacts;
 pub mod banner;
 pub mod bootstrap;
 pub mod cleanup_run;
 pub mod cli;
 pub mod config;
-pub mod device_smoke;
 pub mod doctor;
 pub mod evidence;
 pub mod lock;

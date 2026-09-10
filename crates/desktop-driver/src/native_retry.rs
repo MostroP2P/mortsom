@@ -1,14 +1,14 @@
 //! Typed retries for vanished public accessibility objects, never message text.
 use atspi::zbus;
-use mortsom_android_driver::appium::AppiumError;
+use mortsom_ui_driver::error::UiError;
 use std::{future::Future, time::Duration};
 
 pub(crate) enum AccessError {
     Stale,
-    Permanent(AppiumError),
+    Permanent(UiError),
 }
-impl From<AppiumError> for AccessError {
-    fn from(cause: AppiumError) -> Self {
+impl From<UiError> for AccessError {
+    fn from(cause: UiError) -> Self {
         Self::Permanent(cause)
     }
 }
@@ -33,7 +33,7 @@ pub(crate) fn classify(cause: zbus::Error) -> AccessError {
     }
 }
 
-pub(crate) async fn retry<T, F, Fut>(timeout: Duration, mut operation: F) -> Result<T, AppiumError>
+pub(crate) async fn retry<T, F, Fut>(timeout: Duration, mut operation: F) -> Result<T, UiError>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<T, AccessError>>,
@@ -58,10 +58,10 @@ pub(crate) async fn with_fresh_node<T, Find, Found, Read, ReadResult>(
     timeout: Duration,
     mut find: Find,
     mut read: Read,
-) -> Result<T, AppiumError>
+) -> Result<T, UiError>
 where
     Find: FnMut(String) -> Found,
-    Found: Future<Output = Result<Option<crate::native::Node>, AppiumError>>,
+    Found: Future<Output = Result<Option<crate::native::Node>, UiError>>,
     Read: FnMut(crate::native::Node) -> ReadResult,
     ReadResult: Future<Output = Result<T, AccessError>>,
 {

@@ -1,7 +1,7 @@
 //! Reopens two real desktop identities through fresh handles without trading.
 use mortsom_adapter_mobile_v2::MobileV2Adapter;
-use mortsom_android_driver::{avd::Actor, process::TokioRunner, ui::UiSession};
 use mortsom_app_contract::{AppAdapter, DeviceContext, Identity, TestEnvironment};
+use mortsom_common::Actor;
 use mortsom_common::{Redactor, RunId, check::DoctorReport};
 use mortsom_coordinator::{
     Config,
@@ -17,6 +17,7 @@ use mortsom_coordinator::{
     stack::StackSnapshot,
 };
 use mortsom_desktop_driver::{Platform, storage::ensure_stopped};
+use mortsom_ui_driver::{process::TokioRunner, ui::UiSession};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
@@ -160,7 +161,7 @@ async fn exercise(
         relay_url: format!("ws://127.0.0.1:{}", config.relay.host_port),
         lane: config.run.lane,
     };
-    let adapter = MobileV2Adapter::new(&config.mobile.package, PathBuf::new(), &env.relay_url);
+    let adapter = MobileV2Adapter::new();
     let recorder = StepRecorder::default();
     round(config, options, &adapter, &env, artifacts, &recorder).await?;
     let root = options

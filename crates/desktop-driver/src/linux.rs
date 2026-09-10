@@ -6,9 +6,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use atspi::proxy::bus::{BusProxy, StatusProxy};
 use atspi::zbus;
-use mortsom_android_driver::appium::AppiumError;
-use mortsom_android_driver::process::{ChildProcess, Command, CommandRunner, run_ok};
-use mortsom_android_driver::ui::UiSession;
+use mortsom_ui_driver::error::UiError;
+use mortsom_ui_driver::process::{ChildProcess, Command, CommandRunner, run_ok};
+use mortsom_ui_driver::ui::UiSession;
 use tokio::sync::Mutex;
 
 use crate::native::{Native, Node, error, label};
@@ -23,7 +23,7 @@ struct Runtime {
 }
 
 impl Runtime {
-    fn native(&self) -> Result<&Native, AppiumError> {
+    fn native(&self) -> Result<&Native, UiError> {
         self.native
             .as_ref()
             .ok_or_else(|| error("accessibility session not ready"))
@@ -57,7 +57,7 @@ impl LinuxSession {
         self
     }
 
-    async fn prepare(&self, slot: &mut Option<Runtime>) -> Result<(), AppiumError> {
+    async fn prepare(&self, slot: &mut Option<Runtime>) -> Result<(), UiError> {
         use std::os::unix::fs::DirBuilderExt;
         let storage = self
             .storage
@@ -114,7 +114,7 @@ impl LinuxSession {
         root: &Path,
         storage: &Path,
         services: &mut Vec<Box<dyn ChildProcess>>,
-    ) -> Result<(std::collections::BTreeMap<String, String>, Native), AppiumError> {
+    ) -> Result<(std::collections::BTreeMap<String, String>, Native), UiError> {
         let display_file = root.join("display");
         services.push(
             self.runner
@@ -148,7 +148,7 @@ impl LinuxSession {
                     .lines()
                     .find(|line| !line.is_empty() && line.chars().all(|c| c.is_ascii_digit()))
                 {
-                    return Ok::<_, AppiumError>(format!(":{number}"));
+                    return Ok::<_, UiError>(format!(":{number}"));
                 }
             }
         })
@@ -208,7 +208,7 @@ impl LinuxSession {
                     .await
                     .map_err(error)?
                 {
-                    return Ok::<_, AppiumError>(());
+                    return Ok::<_, UiError>(());
                 }
             }
         })
@@ -251,7 +251,7 @@ impl LinuxSession {
         Ok((env, Native::connect(&a11y).await?))
     }
 
-    async fn find(&self, id: &str) -> Result<Node, AppiumError> {
+    async fn find(&self, id: &str) -> Result<Node, UiError> {
         self.runtime
             .lock()
             .await
@@ -260,14 +260,14 @@ impl LinuxSession {
             .native()?
             .find(id)
             .await?
-            .ok_or_else(|| AppiumError::WaitTimeout {
+            .ok_or_else(|| UiError::WaitTimeout {
                 accessibility_id: id.into(),
                 condition: "not found",
                 timeout: Duration::ZERO,
             })
     }
 
-    async fn wait(&self, id: &str, present: bool, timeout: Duration) -> Result<(), AppiumError> {
+    async fn wait(&self, id: &str, present: bool, timeout: Duration) -> Result<(), UiError> {
         let result = tokio::time::timeout(timeout, async {
             let mut tick = tokio::time::interval(Duration::from_millis(150));
             loop {
@@ -279,7 +279,7 @@ impl LinuxSession {
         })
         .await;
         result.unwrap_or_else(|_| {
-            Err(AppiumError::WaitTimeout {
+            Err(UiError::WaitTimeout {
                 accessibility_id: id.into(),
                 condition: if present {
                     "not found"
@@ -292,7 +292,7 @@ impl LinuxSession {
     }
 }
 
-async fn wait_for_keyring(connection: &zbus::Connection) -> Result<(), AppiumError> {
+async fn wait_for_keyring(connection: &zbus::Connection) -> Result<(), UiError> {
     tokio::time::timeout(Duration::from_secs(15), async {
         let bus = zbus::fdo::DBusProxy::new(connection).await.map_err(error)?;
         let mut tick = tokio::time::interval(Duration::from_millis(100));
@@ -333,7 +333,7 @@ async fn wait_for_keyring(connection: &zbus::Connection) -> Result<(), AppiumErr
                 .await
                 .map_err(error)?
             {
-                return Ok::<_, AppiumError>(());
+                return Ok::<_, UiError>(());
             }
         }
     })
@@ -341,7 +341,7 @@ async fn wait_for_keyring(connection: &zbus::Connection) -> Result<(), AppiumErr
     .map_err(error)?
 }
 
-async fn connect_bus(address: &str) -> Result<zbus::Connection, AppiumError> {
+async fn connect_bus(address: &str) -> Result<zbus::Connection, UiError> {
     tokio::time::timeout(Duration::from_secs(15), async {
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         loop {
@@ -359,7 +359,7 @@ async fn connect_bus(address: &str) -> Result<zbus::Connection, AppiumError> {
     .map_err(error)?
 }
 
-async fn stop(runtime: &mut Runtime) -> Result<(), AppiumError> {
+async fn stop(runtime: &mut Runtime) -> Result<(), UiError> {
     let mut failures = Vec::new();
     if let Some(app) = &runtime.app {
         match app.kill().await {
@@ -393,7 +393,7 @@ async fn stop(runtime: &mut Runtime) -> Result<(), AppiumError> {
 
 #[async_trait]
 impl UiSession for LinuxSession {
-    async fn exists(&self, id: &str) -> Result<bool, AppiumError> {
+    async fn exists(&self, id: &str) -> Result<bool, UiError> {
         let guard = self.runtime.lock().await;
         Ok(guard
             .as_ref()
@@ -403,13 +403,13 @@ impl UiSession for LinuxSession {
             .await?
             .is_some())
     }
-    async fn wait_for(&self, id: &str, timeout: Duration) -> Result<(), AppiumError> {
+    async fn wait_for(&self, id: &str, timeout: Duration) -> Result<(), UiError> {
         self.wait(id, true, timeout).await
     }
-    async fn wait_gone(&self, id: &str, timeout: Duration) -> Result<(), AppiumError> {
+    async fn wait_gone(&self, id: &str, timeout: Duration) -> Result<(), UiError> {
         self.wait(id, false, timeout).await
     }
-    async fn tap(&self, id: &str) -> Result<(), AppiumError> {
+    async fn tap(&self, id: &str) -> Result<(), UiError> {
         let node = self.find(id).await?;
         self.runtime
             .lock()
@@ -420,7 +420,7 @@ impl UiSession for LinuxSession {
             .click(&node)
             .await
     }
-    async fn type_text(&self, id: &str, text: &str) -> Result<(), AppiumError> {
+    async fn type_text(&self, id: &str, text: &str) -> Result<(), UiError> {
         let node = self.find(id).await?;
         self.runtime
             .lock()
@@ -431,12 +431,12 @@ impl UiSession for LinuxSession {
             .type_text(&node, text)
             .await
     }
-    async fn label_of(&self, id: &str) -> Result<String, AppiumError> {
+    async fn label_of(&self, id: &str) -> Result<String, UiError> {
         Ok(label(&self.find(id).await?.name)
             .map(|(_, value)| value.to_owned())
             .unwrap_or_default())
     }
-    async fn text_of(&self, id: &str) -> Result<String, AppiumError> {
+    async fn text_of(&self, id: &str) -> Result<String, UiError> {
         let node = self.find(id).await?;
         self.runtime
             .lock()
@@ -447,7 +447,7 @@ impl UiSession for LinuxSession {
             .text_value(&node)
             .await
     }
-    async fn is_enabled(&self, id: &str) -> Result<bool, AppiumError> {
+    async fn is_enabled(&self, id: &str) -> Result<bool, UiError> {
         let node = self.find(id).await?;
         self.runtime
             .lock()
@@ -458,7 +458,7 @@ impl UiSession for LinuxSession {
             .enabled(&node)
             .await
     }
-    async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
+    async fn screenshot_png(&self) -> Result<Vec<u8>, UiError> {
         let guard = self.runtime.lock().await;
         let runtime = guard
             .as_ref()
@@ -471,7 +471,7 @@ impl UiSession for LinuxSession {
         std::fs::remove_file(path).map_err(error)?;
         Ok(image)
     }
-    async fn page_source(&self) -> Result<String, AppiumError> {
+    async fn page_source(&self) -> Result<String, UiError> {
         let guard = self.runtime.lock().await;
         let runtime = guard
             .as_ref()
@@ -490,10 +490,10 @@ impl UiSession for LinuxSession {
         xml.push_str("</hierarchy>");
         Ok(xml)
     }
-    async fn background(&self, _: u64) -> Result<(), AppiumError> {
+    async fn background(&self, _: u64) -> Result<(), UiError> {
         Err(error("Linux background capability not implemented"))
     }
-    async fn terminate_app(&self) -> Result<(), AppiumError> {
+    async fn terminate_app(&self) -> Result<(), UiError> {
         if let Some(runtime) = self.runtime.lock().await.as_mut()
             && let Some(app) = &runtime.app
         {
@@ -502,7 +502,7 @@ impl UiSession for LinuxSession {
         }
         Ok(())
     }
-    async fn activate_app(&self) -> Result<(), AppiumError> {
+    async fn activate_app(&self) -> Result<(), UiError> {
         let mut guard = self.runtime.lock().await;
         if guard.is_none()
             && self
@@ -537,7 +537,7 @@ impl UiSession for LinuxSession {
         );
         Ok(())
     }
-    async fn clear_app(&self) -> Result<(), AppiumError> {
+    async fn clear_app(&self) -> Result<(), UiError> {
         if self
             .storage
             .as_ref()
@@ -552,13 +552,13 @@ impl UiSession for LinuxSession {
         }
         self.prepare(&mut guard).await
     }
-    async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
+    async fn set_connectivity(&self, _: bool) -> Result<(), UiError> {
         Err(error("Linux network capability not implemented"))
     }
-    async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
+    async fn set_orientation(&self, _: bool) -> Result<(), UiError> {
         Err(error("Linux rotation capability not implemented"))
     }
-    async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+    async fn hide_keyboard(&self) -> Result<(), UiError> {
         Ok(())
     }
     /// The app's stdout and stderr, which the Rust core's bridge log and
@@ -573,7 +573,7 @@ impl UiSession for LinuxSession {
             .map(|text| vec![("app.log".to_owned(), text)])
             .unwrap_or_default()
     }
-    async fn end(&self) -> Result<(), AppiumError> {
+    async fn end(&self) -> Result<(), UiError> {
         let mut guard = self.runtime.lock().await;
         if let Some(runtime) = guard.as_mut() {
             stop(runtime).await?;

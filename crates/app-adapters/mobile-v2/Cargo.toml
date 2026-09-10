@@ -10,7 +10,7 @@ rust-version.workspace = true
 [dependencies]
 mortsom-common = { workspace = true }
 mortsom-app-contract = { workspace = true }
-mortsom-android-driver = { workspace = true }
+mortsom-ui-driver = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
@@ -18,7 +18,7 @@ tracing = { workspace = true }
 serde = { workspace = true }
 
 [dev-dependencies]
-mortsom-android-driver = { workspace = true, features = ["testing"] }
+mortsom-ui-driver = { workspace = true, features = ["testing"] }
 tempfile = { workspace = true }
 
 [lints]

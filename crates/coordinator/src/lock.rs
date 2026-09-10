@@ -1,5 +1,5 @@
 //! Single-operator locking: one Mortsom mutation per canonical home at a time.
-//! Two runs would fight over emulator slots and, on the canary, could spend
+//! Two runs would fight over the stack and its clients and, on the canary, could spend
 //! twice; the lock is an advisory file lock that the OS releases when the
 //! process ends, however it ends. Waiting is never done: a busy operator is
 //! reported.

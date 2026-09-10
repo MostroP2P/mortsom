@@ -56,14 +56,10 @@ async fn teardown_with_evidence_failure(leaf: Option<&str>) -> (RunSummary, bool
     if let Some(leaf) = leaf {
         std::fs::create_dir(artifacts.file(leaf).unwrap()).unwrap();
     }
-    let runner = FakeRunner::default();
-    let ui = FakeUi(Flags::default());
     let env = |_: &str| None;
     let deps = RunDeps {
         desktop_factory: &RealDesktopFactory,
         net: None,
-        runner: &runner,
-        ui: &ui,
         docker: Arc::new(FakeDocker::default()),
         probe: Arc::new(AlwaysReady),
         adapter: Arc::new(FakeAdapter::full()),
@@ -80,11 +76,7 @@ async fn teardown_with_evidence_failure(leaf: Option<&str>) -> (RunSummary, bool
         None,
         false,
     );
-    let _sessions = attach_runtime(
-        &mut world,
-        &journal,
-        options.desktop.as_ref().unwrap().bundle.clone(),
-    );
+    let _sessions = attach_runtime(&mut world, &journal, options.desktop.bundle.clone());
     attach_evidence_sources(&mut world, &fixture);
     world.tear_down(&mut summary).await;
     let report = super::super::report::finish(&artifacts, &mut summary);

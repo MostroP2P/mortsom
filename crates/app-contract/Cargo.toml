@@ -13,7 +13,7 @@ serde = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
 nostr = { workspace = true }
-mortsom-android-driver = { workspace = true }
+mortsom-ui-driver = { workspace = true }
 tokio = { workspace = true }
 
 [lints]

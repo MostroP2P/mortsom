@@ -1,13 +1,13 @@
 //! Public DOM scrolling, W3C editing and value-property verification.
 use crate::web::{error, selector};
-use mortsom_android_driver::{
-    appium::AppiumError,
+use mortsom_ui_driver::{
+    error::UiError,
     webdriver::{Element, Locator, Session, WebDriverError},
 };
 use serde_json::json;
 use std::time::Duration;
 
-async fn input(session: &Session, id: &str) -> Result<Element, AppiumError> {
+async fn input(session: &Session, id: &str) -> Result<Element, UiError> {
     Ok(session
         .find_element(
             Locator::XPath,
@@ -19,7 +19,7 @@ async fn input(session: &Session, id: &str) -> Result<Element, AppiumError> {
         .await?)
 }
 
-pub(crate) async fn read(session: &Session, id: &str) -> Result<String, AppiumError> {
+pub(crate) async fn read(session: &Session, id: &str) -> Result<String, UiError> {
     let node = input(session, id).await?;
     let value = session
         .get(&format!("element/{}/property/value", node.id))
@@ -36,7 +36,7 @@ pub(crate) async fn enter(
     id: &str,
     text: &str,
     timeout: Duration,
-) -> Result<(), AppiumError> {
+) -> Result<(), UiError> {
     let result = tokio::time::timeout(timeout, async {
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         loop {
@@ -55,7 +55,7 @@ pub(crate) async fn enter(
     result.map_err(|cause| error(redactor.redact(&cause.to_string())))
 }
 
-async fn replace(session: &Session, id: &str, text: &str) -> Result<bool, AppiumError> {
+async fn replace(session: &Session, id: &str, text: &str) -> Result<bool, UiError> {
     if read(session, id).await? == text {
         return Ok(true);
     }
@@ -97,11 +97,7 @@ async fn replace(session: &Session, id: &str, text: &str) -> Result<bool, Appium
 /// has a size. Errors that mean the click was never delivered are retried
 /// until `timeout`; a delivered click is never repeated, because the
 /// business action behind it may already be on its way.
-pub(crate) async fn press(
-    session: &Session,
-    id: &str,
-    timeout: Duration,
-) -> Result<(), AppiumError> {
+pub(crate) async fn press(session: &Session, id: &str, timeout: Duration) -> Result<(), UiError> {
     tokio::time::timeout(timeout, async {
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         loop {
@@ -119,7 +115,7 @@ pub(crate) async fn press(
 }
 
 /// One attempt: `Ok(false)` when the node was still moving or had no size.
-async fn press_once(session: &Session, id: &str) -> Result<bool, AppiumError> {
+async fn press_once(session: &Session, id: &str) -> Result<bool, UiError> {
     let node = session.find_element(Locator::XPath, &selector(id)?).await?;
     session
         .post(
@@ -141,7 +137,7 @@ async fn press_once(session: &Session, id: &str) -> Result<bool, AppiumError> {
 }
 
 /// `(x, y, width, height)` of the node as the browser lays it out now.
-async fn rect(session: &Session, node: &Element) -> Result<(f64, f64, f64, f64), AppiumError> {
+async fn rect(session: &Session, node: &Element) -> Result<(f64, f64, f64, f64), UiError> {
     let value = session.get(&format!("element/{}/rect", node.id)).await?;
     let number = |key: &str| value.get(key).and_then(serde_json::Value::as_f64);
     match (number("x"), number("y"), number("width"), number("height")) {
@@ -150,8 +146,8 @@ async fn rect(session: &Session, node: &Element) -> Result<(f64, f64, f64, f64),
     }
 }
 
-fn transient(cause: &AppiumError) -> bool {
-    matches!(cause, AppiumError::WebDriver(WebDriverError::Server {error, ..})
+fn transient(cause: &UiError) -> bool {
+    matches!(cause, UiError::WebDriver(WebDriverError::Server {error, ..})
         if matches!(error.as_str(), "no such element" | "stale element reference" |
             "element not interactable" | "element click intercepted"))
 }

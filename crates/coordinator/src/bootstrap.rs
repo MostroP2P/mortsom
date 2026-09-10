@@ -1,15 +1,12 @@
-//! Per-actor session bootstrap shared by `app setup` and the scenario
-//! runner: launch clean, onboard, configure node and relay, connect the
-//! wallet if the app has one, prove the identity survives a restart. Each
-//! step records evidence and a check.
+//! Per-actor session bootstrap of the scenario runner: launch clean,
+//! onboard, configure node and relay, connect the wallet if the app has one,
+//! prove the identity survives a restart. Each step records evidence and a
+//! check.
 
-use std::time::Duration;
-
-use mortsom_android_driver::avd::Actor;
-use mortsom_android_driver::farm::Device;
 use mortsom_app_contract::{
     AppAdapter, DeviceContext, Identity, TestEnvironment, WalletConnection,
 };
+use mortsom_common::Actor;
 use mortsom_common::check::{CheckStatus, DoctorReport};
 use mortsom_environment::WalletConfig;
 use serde::{Deserialize, Serialize};
@@ -43,24 +40,6 @@ fn default_wallet_expected() -> bool {
 
 /// Runs the per-actor journey: launch, onboard, node and relay, NWC, restart.
 /// Each step records evidence and one check; a failed step ends the journey.
-pub async fn bootstrap_actor(
-    config: &Config,
-    adapter: &dyn AppAdapter,
-    device: &Device,
-    env: &TestEnvironment,
-    artifacts: &RunArtifacts,
-    recorder: &StepRecorder,
-    checks: &mut DoctorReport,
-) -> ActorSetup {
-    let ctx = DeviceContext {
-        actor: device.actor,
-        ui: device.session.as_ref(),
-        ui_timeout: Duration::from_secs(config.ui_timeout_secs()),
-    };
-    bootstrap_session(config, adapter, ctx, env, artifacts, recorder, checks).await
-}
-
-/// The same bootstrap journey for any public UI session.
 pub async fn bootstrap_session(
     config: &Config,
     adapter: &dyn AppAdapter,

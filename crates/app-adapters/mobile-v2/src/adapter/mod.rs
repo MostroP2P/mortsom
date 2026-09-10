@@ -1,46 +1,27 @@
 //! `AppAdapter` implementation for the v2 app.
 
-use std::path::PathBuf;
-
 use async_trait::async_trait;
-use mortsom_android_driver::process::CommandRunner;
 use mortsom_app_contract::{
-    AdapterError, Apk, AppAdapter, AppOrderState, AppProfile, BuildContext, CancelOutcome,
-    Capability, CapabilitySet, DeviceContext, Identity, OrderDraft, OrderKind, OrderReference,
-    PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
+    AdapterError, AppAdapter, AppOrderState, AppProfile, CancelOutcome, Capability, CapabilitySet,
+    DeviceContext, Identity, OrderDraft, OrderKind, OrderReference, PaymentHandoff, PaymentPath,
+    TestEnvironment, VisibleOrder, WalletConnection,
 };
 use mortsom_common::Secret;
 
-use crate::build::build_apk;
 use crate::screens::{self, label, nav, onboarding, orders, settings, wallet};
 use crate::selectors::Ids;
 
 /// Profile name.
 pub const PROFILE: &str = "mobile-v2";
-/// Application id of the v2 app.
-pub const DEFAULT_PACKAGE: &str = "foundation.mostro.app";
 
 /// The v2 app adapter.
-#[derive(Debug, Clone)]
-pub struct MobileV2Adapter {
-    package: String,
-    flutter: PathBuf,
-    relay_url_for_build: String,
-}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MobileV2Adapter;
 
 impl MobileV2Adapter {
-    /// Creates the adapter for `package`, building with `flutter` and
-    /// seeding `relay_url_for_build` into test builds.
-    pub fn new(
-        package: impl Into<String>,
-        flutter: PathBuf,
-        relay_url_for_build: impl Into<String>,
-    ) -> Self {
-        Self {
-            package: package.into(),
-            flutter,
-            relay_url_for_build: relay_url_for_build.into(),
-        }
+    /// Creates the adapter.
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -49,7 +30,6 @@ impl AppAdapter for MobileV2Adapter {
     fn profile(&self) -> AppProfile {
         AppProfile {
             name: PROFILE.into(),
-            package: self.package.clone(),
         }
     }
 
@@ -77,21 +57,6 @@ impl AppAdapter for MobileV2Adapter {
             Capability::Rating,
             Capability::TestEnvironmentMarker,
         ])
-    }
-
-    async fn build(
-        &self,
-        ctx: &BuildContext,
-        runner: &dyn CommandRunner,
-    ) -> Result<Apk, AdapterError> {
-        build_apk(
-            runner,
-            &self.flutter,
-            ctx,
-            &self.relay_url_for_build,
-            &self.package,
-        )
-        .await
     }
 
     /// Walkthrough, then the identity the app generated on first launch.

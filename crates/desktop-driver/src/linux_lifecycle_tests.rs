@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use super::*;
-use mortsom_android_driver::process::{Output, ProcessError};
+use mortsom_ui_driver::process::{Output, ProcessError};
 use std::sync::{
     Mutex as StdMutex,
     atomic::{AtomicUsize, Ordering},
@@ -108,7 +108,7 @@ async fn cancelled_shutdown_keeps_all_service_handles_for_the_next_attempt() {
         .unwrap();
     let attempts = Arc::new(AtomicUsize::new(0));
     let session = LinuxSession::new(
-        Arc::new(mortsom_android_driver::process::TokioRunner),
+        Arc::new(mortsom_ui_driver::process::TokioRunner),
         "app".into(),
         "Xvfb".into(),
     );
@@ -150,7 +150,7 @@ async fn failed_app_stop_retains_its_handle_before_a_retry() {
     let root = tempfile::tempdir().unwrap();
     let attempts = Arc::new(AtomicUsize::new(0));
     let session = LinuxSession::new(
-        Arc::new(mortsom_android_driver::process::TokioRunner),
+        Arc::new(mortsom_ui_driver::process::TokioRunner),
         "app".into(),
         "Xvfb".into(),
     );

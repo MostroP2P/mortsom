@@ -1,8 +1,6 @@
 //! Offline settings for inspecting artifacts and cleaning recorded resources.
 use super::{Config, ConfigError};
-use mortsom_android_driver::AndroidConfig;
 use mortsom_common::Lane;
-use mortsom_environment::RelayConfig;
 use serde::Deserialize;
 use std::path::Path;
 
@@ -21,31 +19,16 @@ pub struct ArtifactSettings {
 pub struct MaintenanceConfig {
     /// Artifact location and lane only; spend caps are not consumed here.
     pub run: ArtifactSettings,
-    /// Legacy emulator cleanup settings, used only for recorded Android runs.
-    #[serde(default)]
-    pub android: Option<AndroidConfig>,
-    /// Legacy per-run relay naming, never the persistent desktop stack.
-    #[serde(default)]
-    pub relay: RelayConfig,
 }
 
 impl MaintenanceConfig {
     /// Loads only maintenance fields; runtime env references are irrelevant.
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
-        let config: Self = project(path, &["run", "android", "relay"])?
+        let config: Self = project(path, &["run"])?
             .try_into()
             .map_err(|error: toml::de::Error| ConfigError::Parse(error.to_string()))?;
         config.run.validate()?;
-        let mut errors = Vec::new();
-        config.relay.validate(&mut errors);
-        if let Some(android) = &config.android {
-            android.validate(&mut errors);
-        }
-        if errors.is_empty() {
-            Ok(config)
-        } else {
-            Err(ConfigError::Invalid(errors))
-        }
+        Ok(config)
     }
 }
 
@@ -102,8 +85,6 @@ impl From<&Config> for MaintenanceConfig {
                 artifacts_dir: config.run.artifacts_dir.clone(),
                 lane: config.run.lane,
             },
-            android: config.android.clone(),
-            relay: config.relay.clone(),
         }
     }
 }
@@ -139,7 +120,6 @@ mod tests {
         .unwrap();
         let loaded = MaintenanceConfig::load(&path).unwrap();
         assert_eq!(loaded.run.artifacts_dir, "./artifacts");
-        assert!(loaded.android.is_none());
         std::fs::write(
             dir.path().join("desktop.local.toml"),
             "[run]\nartifacts_dir='somewhere-else'\n",

@@ -1,5 +1,5 @@
-//! Process boundary for Android tooling (`adb`, `emulator`, `avdmanager`,
-//! `appium`). The real runner uses `tokio::process`; tests inject a fake.
+//! Process boundary for every tool the harness shells out to (`docker`,
+//! `flutter`, `Xvfb`, `chromedriver`, the client itself). The real runner uses `tokio::process`; tests inject a fake.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -91,7 +91,7 @@ pub enum ProcessError {
     },
 }
 
-/// A long-lived child process (emulator, Appium server).
+/// A long-lived child process (a client, a driver server, a virtual display).
 #[async_trait]
 pub trait ChildProcess: Send + Sync {
     /// Kills the process; a process that already exited is not an error.
@@ -141,7 +141,7 @@ pub async fn run_ok(
 pub struct TokioRunner;
 
 /// A real child handle. The child is started in its own process group so
-/// that helpers it forks (the emulator launcher re-executes qemu) die with it.
+/// that helpers it forks (a browser and its driver, a display server) die with it.
 pub struct TokioChild {
     child: Mutex<tokio::process::Child>,
     pid: Option<u32>,
@@ -348,8 +348,8 @@ mod tests {
 
     #[test]
     fn command_renders_for_logs() {
-        let command = Command::new("/bin/adb", &["-s", "emulator-5554", "shell"]).env("A", "1");
-        assert_eq!(command.display(), "/bin/adb -s emulator-5554 shell");
+        let command = Command::new("/bin/docker", &["compose", "ps"]).env("A", "1");
+        assert_eq!(command.display(), "/bin/docker compose ps");
         assert_eq!(command.env.get("A").map(String::as_str), Some("1"));
     }
 

@@ -1,8 +1,8 @@
 //! App restart at each durable trade state (Phase 5.1): the app must
 //! reconstruct the same order state and must not repeat any action.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::OrderState;
+use mortsom_common::Actor;
 use mortsom_scenario_kit::context::{Context, ScenarioError};
 use mortsom_scenario_kit::recovery::restart_app;
 

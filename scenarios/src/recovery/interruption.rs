@@ -2,8 +2,8 @@
 //! stop, connectivity loss, relay restart, duplicate and stale daemon
 //! events, rotation. None of these move value.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::OrderState;
+use mortsom_common::Actor;
 use mortsom_scenario_kit::context::{Context, ScenarioError};
 use mortsom_scenario_kit::recovery::{
     Replay, background_app, network_outage, replay_order_events, restart_relay, rotate_device,

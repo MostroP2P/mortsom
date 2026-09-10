@@ -97,7 +97,7 @@ fn doctor_without_config_file_fails_cleanly() {
 }
 
 #[test]
-fn web_prebuilt_doctor_does_not_require_android_or_build_tools() {
+fn web_prebuilt_doctor_does_not_require_build_tools() {
     let output = Command::cargo_bin("mortsom")
         .unwrap()
         .args([
@@ -122,14 +122,7 @@ fn web_prebuilt_doctor_does_not_require_android_or_build_tools() {
         .iter()
         .map(|check| check["name"].as_str().unwrap())
         .collect();
-    for unwanted in [
-        "android-sdk",
-        "appium",
-        "emulator",
-        "Xvfb",
-        "flutter",
-        "cargo",
-    ] {
+    for unwanted in ["Xvfb", "flutter", "cargo"] {
         assert!(!names.contains(&unwanted), "{unwanted}: {names:?}");
     }
     assert!(names.contains(&"chromedriver"));

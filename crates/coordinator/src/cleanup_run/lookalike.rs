@@ -3,8 +3,8 @@
 //! Run ids are long timestamp-plus-nonce strings that operators copy by hand
 //! from a guard message, so a dropped or doubled character is the common
 //! failure. A cleanup for an id nothing on this host has ever used would
-//! still probe containers and emulators and then print an ambiguous
-//! "run directory: not found" report; naming the id the operator almost
+//! print an ambiguous "run directory: not found" report; naming the id the
+//! operator almost
 //! certainly meant is more useful than that.
 
 use std::path::Path;

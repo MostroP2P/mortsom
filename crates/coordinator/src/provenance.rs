@@ -59,9 +59,6 @@ impl BuildProvenance {
         platform: Platform,
         host: &dyn HostProbe,
     ) -> Result<Self, String> {
-        if platform == Platform::Android {
-            return Err("desktop provenance does not describe an Android build".into());
-        }
         let identity = source_identity(source, host).await?;
         let version = package_version(source, host).await?;
         let mut tools = BTreeMap::new();
@@ -74,7 +71,6 @@ impl BuildProvenance {
         let selected: &[&str] = match platform {
             Platform::Linux => &["clang", "cmake", "ninja", "pkg-config"],
             Platform::Web => &["wasm-pack", "python3"],
-            Platform::Android => &[],
         };
         for tool in selected {
             tools.insert(

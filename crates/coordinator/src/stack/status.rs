@@ -1,5 +1,5 @@
 //! `stack status`: what runs, what each node holds, which identity answers.
-use mortsom_android_driver::process::CommandRunner;
+use mortsom_ui_driver::process::CommandRunner;
 
 use super::compose::{BASE_SERVICES, Compose, DAEMON_SERVICE, attempt};
 use super::descriptor::Descriptor;

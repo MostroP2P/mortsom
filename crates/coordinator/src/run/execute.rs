@@ -5,8 +5,8 @@ use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
 use futures::FutureExt;
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{CancelOutcome, OrderReference, OrderState};
+use mortsom_common::Actor;
 use mortsom_common::FailureCategory;
 use mortsom_scenario_kit::cleanup::CleanupResult;
 use mortsom_scenario_kit::context::Context;

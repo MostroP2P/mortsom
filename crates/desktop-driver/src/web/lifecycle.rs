@@ -1,9 +1,9 @@
 //! Startup and teardown keep ownership until every child has stopped.
 use super::{Runtime, error};
-use mortsom_android_driver::{appium::AppiumError, process::ChildProcess};
+use mortsom_ui_driver::{error::UiError, process::ChildProcess};
 use std::{path::Path, time::Duration};
 
-pub(super) async fn driver_port(driver: &dyn ChildProcess, log: &Path) -> Result<u16, AppiumError> {
+pub(super) async fn driver_port(driver: &dyn ChildProcess, log: &Path) -> Result<u16, UiError> {
     tokio::time::timeout(Duration::from_secs(20), async {
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         loop {
@@ -26,7 +26,7 @@ pub(super) async fn driver_port(driver: &dyn ChildProcess, log: &Path) -> Result
     .map_err(|_| error("ChromeDriver readiness deadline"))?
 }
 
-pub(super) async fn stop(runtime: &mut Runtime) -> Result<(), AppiumError> {
+pub(super) async fn stop(runtime: &mut Runtime) -> Result<(), UiError> {
     let mut failures = Vec::new();
     if let Some(session) = &runtime.session {
         match session.delete().await {

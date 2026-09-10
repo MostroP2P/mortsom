@@ -38,24 +38,24 @@ jobs:
       - name: Configure (canary lane; caps live in the config, not here)
         run: cp config/canary.example.toml mortsom.toml
       - name: Preflight (liquidity, daemon, relay, tools)
-        run: cargo run --release -p mortsom-coordinator --bin mortsom -- doctor
+        run: cargo run --release -p mortsom-coordinator --bin mortsom -- --config mortsom.toml doctor
       - name: Run once, never retried
-        run: cargo run --release -p mortsom-coordinator --bin mortsom -- run --tag smoke
+        run: cargo run --release -p mortsom-coordinator --bin mortsom -- --config mortsom.toml run --tag smoke
       - name: Cleanup what the run may have left
         if: always()
         run: |
           for run in $(ls -1 artifacts | grep -v '^\.' | grep -v '^accounting'); do
-            cargo run --release -p mortsom-coordinator --bin mortsom -- cleanup "$run" || true
+            cargo run --release -p mortsom-coordinator --bin mortsom -- --config mortsom.toml cleanup "$run" || true
           done
       - name: Accounting trend
         if: always()
-        run: cargo run --release -p mortsom-coordinator --bin mortsom -- accounting --lane canary
+        run: cargo run --release -p mortsom-coordinator --bin mortsom -- --config mortsom.toml accounting --lane canary
       - name: Publish sanitized evidence (no screenshots off the canary host)
         if: always()
         run: |
           mkdir -p bundle
           for run in $(ls -1 artifacts | grep -v '^\.' | grep -v '^accounting'); do
-            cargo run --release -p mortsom-coordinator --bin mortsom -- publish "$run" --out "bundle/$run" --screenshots none
+            cargo run --release -p mortsom-coordinator --bin mortsom -- --config mortsom.toml publish "$run" --out "bundle/$run" --screenshots none
           done
           cp artifacts/accounting.md artifacts/accounting.json bundle/ 2>/dev/null || true
       - uses: actions/upload-artifact@v4

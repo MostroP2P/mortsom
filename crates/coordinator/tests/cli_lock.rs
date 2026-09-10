@@ -13,8 +13,6 @@ fn busy_host_blocks_mutations_before_loading_config_or_starting_processes() {
         vec!["stack", "up"],
         vec!["stack", "down"],
         vec!["cleanup", "missing-run"],
-        vec!["app", "setup"],
-        vec!["device", "smoke"],
         vec!["relay", "smoke"],
         vec!["relay", "down", "--all"],
     ] {

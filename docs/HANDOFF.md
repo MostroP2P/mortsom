@@ -56,13 +56,11 @@ No journal is retained, no harness process is left running, and the regtest stac
 
 ## What is left
 
-1. **Isolate the frozen Android path.** `crates/android-driver` and `crates/app-adapters/mobile-legacy`
-   still build by default. Put them behind a Cargo feature so the default workspace is desktop and Web only.
-2. **Measure coverage.** The spec requires 80% of lines under `cargo llvm-cov`. Last measured at 83.88%
+1. **Measure coverage.** The spec requires 80% of lines under `cargo llvm-cov`. Last measured at 83.88%
    several commits ago (`5c764ba`); it has not been re-run since.
-3. **Land the dispute branches.** App `feat/mortsom-dispute-back-id` (the dispute screen's `appbar.back`)
+2. **Land the dispute branches.** App `feat/mortsom-dispute-back-id` (the dispute screen's `appbar.back`)
    and Mortsom `feat/dispute-family`. Until the app PR is merged, build the clients from that branch.
-4. **Further families**, when the operator asks. Spec section 8.1 lists them; section 14 is the roadmap.
+3. **Further families**, when the operator asks. Spec section 8.1 lists them; section 14 is the roadmap.
    The buy-side range remainder is driven by `range_buy_order` (app branch `feat/mortsom-range-buy-remainder`
    on top of #410, Mortsom branch `feat/range-buy-order`).
 

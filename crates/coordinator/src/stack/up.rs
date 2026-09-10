@@ -2,7 +2,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use mortsom_android_driver::process::{Command, CommandRunner};
+use mortsom_ui_driver::process::{Command, CommandRunner};
 use nostr_sdk::prelude::{Keys, ToBech32};
 
 use super::compose::{

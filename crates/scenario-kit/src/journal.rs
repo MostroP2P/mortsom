@@ -1,6 +1,6 @@
 //! Durable boundary for actions whose outcome must survive coordinator failure.
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::OrderReference;
+use mortsom_common::Actor;
 use serde::{Deserialize, Serialize};
 
 /// Public recovery facts only; invoice text and private identity material are forbidden.
@@ -45,7 +45,7 @@ pub trait RecoveryJournal: Send + Sync {
     fn record(&self, event: RecoveryEvent) -> Result<(), String>;
 }
 
-/// Existing Android callers retain their historical cleanup behavior.
+/// A run that keeps no durable journal: nothing is recorded or resumed.
 #[derive(Default)]
 pub struct NoJournal;
 impl RecoveryJournal for NoJournal {

@@ -1,10 +1,10 @@
 //! Scenario run report schema and final verdict rendering.
+use super::farm::TeardownItem;
 use crate::{
     artifacts::{RunArtifacts, files},
     bootstrap::ActorSetup,
     report::{RunReport, write_report},
 };
-use mortsom_android_driver::farm::TeardownItem;
 use mortsom_common::check::DoctorReport;
 use mortsom_common::{Lane, RunId};
 use mortsom_environment::relay::{RelayHandle, RelayTeardown};
@@ -31,7 +31,7 @@ pub struct RunSummary {
     /// Version observed in a fresh signed daemon info event.
     #[serde(default)]
     pub mostrod_version: Option<String>,
-    /// Public persistent stack snapshot, absent in historical Android reports.
+    /// Public persistent stack snapshot, absent in historical reports.
     #[serde(default)]
     pub stack: Option<crate::stack::StackSnapshot>,
     /// Stable identity of the public stack configuration, when available.
@@ -155,10 +155,7 @@ pub(super) fn initial_summary(
         command: "run".into(),
         app_profile,
         app_version: None,
-        app_build: options
-            .desktop
-            .as_ref()
-            .map(|desktop| desktop.provenance.clone()),
+        app_build: Some(options.desktop.provenance.clone()),
         mostrod_version: None,
         stack: options.stack.clone(),
         stack_fingerprint: options
@@ -166,16 +163,8 @@ pub(super) fn initial_summary(
             .as_ref()
             .map(crate::stack::StackSnapshot::fingerprint)
             .transpose()?,
-        app_artifact: options
-            .desktop
-            .as_ref()
-            .map(|d| d.bundle.fingerprint().clone()),
-        platform: Some(
-            options
-                .desktop
-                .as_ref()
-                .map_or(mortsom_desktop_driver::Platform::Android, |d| d.platform),
-        ),
+        app_artifact: Some(options.desktop.bundle.fingerprint().clone()),
+        platform: Some(options.desktop.platform),
         mainnet_cleared,
         relay: None,
         actors: Vec::new(),

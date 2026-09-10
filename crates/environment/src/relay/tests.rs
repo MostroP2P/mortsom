@@ -102,7 +102,6 @@ async fn start_creates_named_container_data_dir_and_urls() {
             .docker_url()
             .starts_with("ws://host.docker.internal:")
     );
-    assert!(handle.emulator_url().starts_with("ws://10.0.2.2:"));
     assert!(runtime.is_running("mortsom-relay-run1").await.unwrap());
 }
 

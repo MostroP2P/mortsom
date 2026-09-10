@@ -6,17 +6,17 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mortsom_android_driver::appium::AppiumError;
-use mortsom_android_driver::avd::Actor;
-use mortsom_android_driver::ui::UiSession;
 use mortsom_app_contract::{
-    AdapterError, Apk, AppAdapter, AppOrderState, AppProfile, BuildContext, CancelOutcome,
-    CapabilitySet, DeviceContext, Identity, OrderDraft, OrderReference, OrderState, PaymentHandoff,
-    PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
+    AdapterError, AppAdapter, AppOrderState, AppProfile, CancelOutcome, CapabilitySet,
+    DeviceContext, Identity, OrderDraft, OrderReference, OrderState, PaymentHandoff, PaymentPath,
+    TestEnvironment, VisibleOrder, WalletConnection,
 };
+use mortsom_common::Actor;
 use mortsom_common::{Lane, Secret};
 use mortsom_observers::relay::{ObserverScope, RelayObserver};
 use mortsom_observers::wallet::{WalletObserver, WalletReader};
+use mortsom_ui_driver::error::UiError;
+use mortsom_ui_driver::ui::UiSession;
 use nostr_sdk::prelude::Keys;
 
 use crate::budget::{Budget, SpendCaps};
@@ -34,18 +34,10 @@ impl AppAdapter for StateAdapter {
     fn profile(&self) -> AppProfile {
         AppProfile {
             name: "fake".into(),
-            package: "p".into(),
         }
     }
     fn capabilities(&self) -> CapabilitySet {
         CapabilitySet::default()
-    }
-    async fn build(
-        &self,
-        _: &BuildContext,
-        _: &dyn mortsom_android_driver::process::CommandRunner,
-    ) -> Result<Apk, AdapterError> {
-        Err(AdapterError::infrastructure("no"))
     }
     async fn onboard(
         &self,
@@ -153,58 +145,58 @@ impl AppAdapter for StateAdapter {
 pub struct NoUi;
 #[async_trait]
 impl UiSession for NoUi {
-    async fn exists(&self, _: &str) -> Result<bool, AppiumError> {
+    async fn exists(&self, _: &str) -> Result<bool, UiError> {
         Ok(false)
     }
-    async fn wait_for(&self, _: &str, _: Duration) -> Result<(), AppiumError> {
+    async fn wait_for(&self, _: &str, _: Duration) -> Result<(), UiError> {
         Ok(())
     }
-    async fn wait_gone(&self, _: &str, _: Duration) -> Result<(), AppiumError> {
+    async fn wait_gone(&self, _: &str, _: Duration) -> Result<(), UiError> {
         Ok(())
     }
-    async fn tap(&self, _: &str) -> Result<(), AppiumError> {
+    async fn tap(&self, _: &str) -> Result<(), UiError> {
         Ok(())
     }
-    async fn type_text(&self, _: &str, _: &str) -> Result<(), AppiumError> {
+    async fn type_text(&self, _: &str, _: &str) -> Result<(), UiError> {
         Ok(())
     }
-    async fn text_of(&self, _: &str) -> Result<String, AppiumError> {
+    async fn text_of(&self, _: &str) -> Result<String, UiError> {
         Ok(String::new())
     }
-    async fn is_enabled(&self, _: &str) -> Result<bool, AppiumError> {
+    async fn is_enabled(&self, _: &str) -> Result<bool, UiError> {
         Ok(true)
     }
-    async fn label_of(&self, _: &str) -> Result<String, AppiumError> {
+    async fn label_of(&self, _: &str) -> Result<String, UiError> {
         Ok(String::new())
     }
-    async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
+    async fn screenshot_png(&self) -> Result<Vec<u8>, UiError> {
         Ok(vec![])
     }
-    async fn page_source(&self) -> Result<String, AppiumError> {
+    async fn page_source(&self) -> Result<String, UiError> {
         Ok(String::new())
     }
-    async fn background(&self, _: u64) -> Result<(), AppiumError> {
+    async fn background(&self, _: u64) -> Result<(), UiError> {
         Ok(())
     }
-    async fn terminate_app(&self) -> Result<(), AppiumError> {
+    async fn terminate_app(&self) -> Result<(), UiError> {
         Ok(())
     }
-    async fn activate_app(&self) -> Result<(), AppiumError> {
+    async fn activate_app(&self) -> Result<(), UiError> {
         Ok(())
     }
-    async fn clear_app(&self) -> Result<(), AppiumError> {
+    async fn clear_app(&self) -> Result<(), UiError> {
         Ok(())
     }
-    async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
+    async fn set_connectivity(&self, _: bool) -> Result<(), UiError> {
         Ok(())
     }
-    async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+    async fn hide_keyboard(&self) -> Result<(), UiError> {
         Ok(())
     }
-    async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
+    async fn set_orientation(&self, _: bool) -> Result<(), UiError> {
         Ok(())
     }
-    async fn end(&self) -> Result<(), AppiumError> {
+    async fn end(&self) -> Result<(), UiError> {
         Ok(())
     }
 }

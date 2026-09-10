@@ -14,9 +14,6 @@ pub(super) async fn check(
     deps: &RunDeps<'_>,
     summary: &mut RunSummary,
 ) -> bool {
-    if options.desktop.is_none() {
-        return true;
-    }
     if options.stack.is_none() {
         summary.checks.push(
             "desktop-preflight",

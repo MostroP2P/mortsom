@@ -5,6 +5,7 @@
 //! creating a dependency cycle through the coordinator. It contains no I/O
 //! beyond what the logging initializer requires.
 
+pub mod actor;
 pub mod check;
 pub mod env_resolve;
 pub mod failure;
@@ -15,6 +16,7 @@ pub mod run_id;
 pub mod secret;
 pub mod tls;
 
+pub use actor::Actor;
 pub use check::{CheckResult, CheckStatus, DoctorReport};
 pub use env_resolve::{MissingEnv, resolve_env_with};
 pub use failure::FailureCategory;

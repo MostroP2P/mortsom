@@ -2,7 +2,7 @@
 //! configuration tree.
 //!
 //! Resolution fails closed: every missing variable is collected and reported
-//! at once, and nothing downstream (containers, emulators, wallets) can start
+//! at once, and nothing downstream (containers, clients, wallets) can start
 //! until the tree is fully resolved.
 
 use std::collections::BTreeSet;

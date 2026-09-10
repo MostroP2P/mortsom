@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use mortsom_android_driver::ui::UiSession;
 use mortsom_common::Secret;
 use mortsom_scenario_kit::evidence::EvidenceSink;
+use mortsom_ui_driver::ui::UiSession;
 
 use crate::artifacts::RunArtifacts;
 use crate::evidence::StepRecorder;

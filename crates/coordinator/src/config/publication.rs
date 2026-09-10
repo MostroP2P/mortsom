@@ -23,7 +23,8 @@ impl PublishSettings {
         Self::load_inner(path, stack_dir, None, lookup)
     }
 
-    /// Uses recorded platform identity to preserve Android versus desktop credential resolution.
+    /// Resolves stack credential references only when the run recorded a platform
+    /// (or none, for a run that never started) and the config references them.
     pub fn load_for_run(
         path: &Path,
         stack_dir: &Path,
@@ -43,26 +44,19 @@ impl PublishSettings {
         super::load::reject_literal_secrets(&raw)?;
         let artifacts = ArtifactSettings::from_run(raw.get("run").cloned(), &lookup)?;
         let references = references(&raw)?;
-        let platform = run_id
-            .map(|run_id| {
-                crate::artifacts::recorded_platform(
-                    &Path::new(&artifacts.artifacts_dir).join(run_id.as_str()),
-                )
-            })
-            .transpose()
+        if let Some(run_id) = run_id {
+            crate::artifacts::recorded_platform(
+                &Path::new(&artifacts.artifacts_dir).join(run_id.as_str()),
+            )
             .map_err(|_| {
                 ConfigError::Invalid(vec![
                     "cannot verify the recorded publication platform".into(),
                 ])
-            })?
-            .flatten();
-        let desktop = platform.map_or(raw.get("android").is_none(), |platform| {
-            platform != mortsom_desktop_driver::Platform::Android
-        });
-        let needs_stack_dir = desktop
-            && references
-                .iter()
-                .any(|name| crate::stack::credential_reference(Path::new("/"), name).is_some());
+            })?;
+        }
+        let needs_stack_dir = references
+            .iter()
+            .any(|name| crate::stack::credential_reference(Path::new("/"), name).is_some());
         let root = if needs_stack_dir {
             Some(
                 stack_dir
@@ -147,7 +141,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn recorded_android_uses_environment_credentials_without_a_stack_directory() {
+    fn unreadable_run_metadata_refuses_publication_instead_of_guessing() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("desktop.toml");
         let text = include_str!("../../../../config/desktop.example.toml").replace(
@@ -155,13 +149,13 @@ mod tests {
             "artifacts_dir = \"env:REPORTS\"",
         );
         std::fs::write(&path, text).unwrap();
-        let run = root.path().join("android-run");
+        let run = root.path().join("broken-run");
         std::fs::create_dir(&run).unwrap();
-        std::fs::write(run.join("environment.json"), r#"{"platform":"android"}"#).unwrap();
-        let settings = PublishSettings::load_for_run(
+        std::fs::write(run.join("environment.json"), "not json").unwrap();
+        let error = PublishSettings::load_for_run(
             &path,
             Path::new("/missing/stack"),
-            &"android-run".parse().unwrap(),
+            &"broken-run".parse().unwrap(),
             |name| {
                 Some(if name == "REPORTS" {
                     root.path().display().to_string()
@@ -170,12 +164,10 @@ mod tests {
                 })
             },
         )
-        .unwrap();
+        .unwrap_err();
         assert!(
-            settings
-                .secrets
-                .iter()
-                .all(|secret| secret.expose().starts_with("explicit-"))
+            error.to_string().contains("recorded publication platform"),
+            "{error}"
         );
     }
 

@@ -4,8 +4,8 @@
 //! for the fiat left of the range, and closed by the maker like any other
 //! pending order.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{CancelOutcome, OrderKind, OrderReference, OrderState};
+use mortsom_common::Actor;
 use mortsom_scenario_kit::actions;
 use mortsom_scenario_kit::cancel::cancel_order;
 use mortsom_scenario_kit::context::{Context, ScenarioError};

@@ -2,7 +2,7 @@
 //! what the relay must and must not show, and what the escrow does.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use mortsom_android_driver::avd::Actor;
+use mortsom_common::Actor;
 use mortsom_scenario_kit::{cleanup::CleanupResult, registry};
 
 use crate::flow_fixture::{Fixture, Misbehaviour, ORDER};

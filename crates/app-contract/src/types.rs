@@ -1,7 +1,6 @@
 //! Shared value types of the application contract.
 
 use std::fmt;
-use std::path::PathBuf;
 
 use mortsom_common::{Lane, Secret};
 use serde::{Deserialize, Serialize};
@@ -11,30 +10,8 @@ use crate::states::OrderState;
 /// A named application profile (spec §12.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppProfile {
-    /// Profile name (`mobile-legacy`, `mobile-v2`).
+    /// Profile name (`mobile-v2`).
     pub name: String,
-    /// Android application id.
-    pub package: String,
-}
-
-/// Inputs to build the app.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BuildContext {
-    /// Source checkout.
-    pub source_dir: PathBuf,
-    /// Build flavor.
-    pub flavor: String,
-    /// Non-secret `KEY=VALUE` dart defines.
-    pub dart_defines: Vec<String>,
-}
-
-/// A built (or supplied) APK.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Apk {
-    /// File path.
-    pub path: PathBuf,
-    /// Application id.
-    pub package: String,
 }
 
 /// The test environment an app instance must be pointed at.
@@ -42,7 +19,7 @@ pub struct Apk {
 pub struct TestEnvironment {
     /// Daemon public key (hex).
     pub mostro_pubkey: String,
-    /// Relay URL as the emulator reaches it (`ws://10.0.2.2:<port>`).
+    /// Relay URL as the client reaches it (`ws://127.0.0.1:<port>`).
     pub relay_url: String,
     /// Lane, shown in reports and in the app's environment marker.
     pub lane: Lane,

@@ -1,18 +1,12 @@
 //! Relay URL equivalence across vantage points. The same host relay is
-//! `127.0.0.1` for the runner, `host.docker.internal` for a containerized
-//! daemon and `10.0.2.2` for the Android emulator; comparisons treat those
-//! aliases as one host and otherwise rely on `RelayUrl` normalization.
+//! `127.0.0.1` for the runner and `host.docker.internal` for a containerized
+//! daemon; comparisons treat those aliases as one host and otherwise rely
+//! on `RelayUrl` normalization.
 
 use nostr_sdk::prelude::RelayUrl;
 
 /// Host names that all mean "the machine running Mortsom".
-pub const HOST_ALIASES: &[&str] = &[
-    "127.0.0.1",
-    "::1",
-    "localhost",
-    "host.docker.internal",
-    "10.0.2.2",
-];
+pub const HOST_ALIASES: &[&str] = &["127.0.0.1", "::1", "localhost", "host.docker.internal"];
 
 /// Canonical comparison key of a relay URL: `(scheme, host-class, port, path)`.
 pub fn relay_key(url: &str) -> Option<(String, String, u16, String)> {
@@ -74,7 +68,7 @@ mod tests {
         assert!(same_relay("ws://[::1]:7000", "ws://127.0.0.1:7000"));
         assert!(same_relay(
             "ws://host.docker.internal:7000",
-            "ws://10.0.2.2:7000"
+            "ws://127.0.0.1:7000"
         ));
         assert!(same_relay("WS://LOCALHOST:7000", "ws://localhost:7000"));
     }

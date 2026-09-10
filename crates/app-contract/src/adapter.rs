@@ -4,19 +4,18 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mortsom_android_driver::avd::Actor;
-use mortsom_android_driver::process::CommandRunner;
-use mortsom_android_driver::ui::UiSession;
+use mortsom_common::Actor;
 use mortsom_common::Secret;
+use mortsom_ui_driver::ui::UiSession;
 
 use crate::capabilities::CapabilitySet;
 use crate::error::AdapterError;
 use crate::types::{
-    Apk, AppOrderState, AppProfile, BuildContext, CancelOutcome, Identity, OrderDraft,
-    OrderReference, PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
+    AppOrderState, AppProfile, CancelOutcome, Identity, OrderDraft, OrderReference, PaymentHandoff,
+    PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };
 
-/// A device as seen by an adapter: one actor, one UI session, one deadline
+/// A client as seen by an adapter: one actor, one UI session, one deadline
 /// for any single UI wait.
 pub struct DeviceContext<'a> {
     /// Actor operating this device.
@@ -34,12 +33,6 @@ pub trait AppAdapter: Send + Sync {
     fn profile(&self) -> AppProfile;
     /// What this profile supports.
     fn capabilities(&self) -> CapabilitySet;
-    /// Builds the APK from source.
-    async fn build(
-        &self,
-        ctx: &BuildContext,
-        runner: &dyn CommandRunner,
-    ) -> Result<Apk, AdapterError>;
     /// Drives first-launch onboarding with a fresh generated identity and
     /// returns the identity as displayed.
     async fn onboard(

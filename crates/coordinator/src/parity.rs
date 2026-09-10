@@ -518,7 +518,7 @@ mod tests {
             "a",
             &summary(
                 "a",
-                "mobile-legacy",
+                "profile-b",
                 &[
                     ("happy_sell", "passed"),
                     ("other", "passed"),
@@ -592,8 +592,8 @@ mod tests {
     #[test]
     fn same_profile_and_missing_runs_are_errors() {
         let dir = tempfile::tempdir().unwrap();
-        write_run(dir.path(), "a", &summary("a", "mobile-legacy", &[]), "");
-        write_run(dir.path(), "b", &summary("b", "mobile-legacy", &[]), "");
+        write_run(dir.path(), "a", &summary("a", "profile-b", &[]), "");
+        write_run(dir.path(), "b", &summary("b", "profile-b", &[]), "");
         assert!(
             compare_runs(dir.path(), "a", "b", &[])
                 .unwrap_err()
@@ -605,7 +605,7 @@ mod tests {
     #[test]
     fn missing_timeline_is_empty_but_unreadable_timeline_is_an_error() {
         let dir = tempfile::tempdir().unwrap();
-        write_run(dir.path(), "a", &summary("a", "mobile-legacy", &[]), "");
+        write_run(dir.path(), "a", &summary("a", "profile-b", &[]), "");
         write_run(dir.path(), "b", &summary("b", "mobile-v2", &[]), "");
         assert!(compare_runs(dir.path(), "a", "b", &[]).is_ok());
 

@@ -103,8 +103,6 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
             };
             format!("stack {action} · {}", stack_dir.display())
         }
-        Command::App { .. } => format!("app · {config}"),
-        Command::Device { .. } => format!("device · {config}"),
         Command::Relay { .. } => format!("relay · {config}"),
     }
 }

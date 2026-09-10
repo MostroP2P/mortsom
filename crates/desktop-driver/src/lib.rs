@@ -11,8 +11,6 @@ pub enum Platform {
     Linux,
     /// Flutter Web in isolated browser profiles.
     Web,
-    /// Existing Android implementation (frozen).
-    Android,
 }
 
 impl std::fmt::Display for Platform {
@@ -20,7 +18,6 @@ impl std::fmt::Display for Platform {
         f.write_str(match self {
             Self::Linux => "linux",
             Self::Web => "web",
-            Self::Android => "android",
         })
     }
 }
@@ -31,8 +28,7 @@ impl std::str::FromStr for Platform {
         match value {
             "linux" => Ok(Self::Linux),
             "web" => Ok(Self::Web),
-            "android" => Ok(Self::Android),
-            _ => Err("platform must be linux, web or android".into()),
+            _ => Err("platform must be linux or web".into()),
         }
     }
 }
@@ -44,7 +40,7 @@ mod tests {
     fn defaults_to_linux_and_refuses_unrecognized_platforms() {
         assert_eq!(Platform::default(), Platform::Linux);
         assert_eq!("web".parse::<Platform>(), Ok(Platform::Web));
-        assert_eq!("android".parse::<Platform>(), Ok(Platform::Android));
+        assert!("android".parse::<Platform>().is_err());
         assert!("desktop".parse::<Platform>().is_err());
     }
 }

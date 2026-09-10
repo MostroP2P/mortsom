@@ -7,12 +7,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mortsom_android_driver::avd::Actor;
-use mortsom_android_driver::ui::UiSession;
 use mortsom_app_contract::{AppAdapter, DeviceContext, TestEnvironment};
+use mortsom_common::Actor;
 use mortsom_common::{FailureCategory, Lane, Secret};
 use mortsom_observers::relay::RelayObserver;
 use mortsom_observers::wallet::WalletObserver;
+use mortsom_ui_driver::ui::UiSession;
 use thiserror::Error;
 
 use crate::budget::Budget;

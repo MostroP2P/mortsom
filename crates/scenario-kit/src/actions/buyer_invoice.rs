@@ -1,6 +1,6 @@
 //! Exact payout invoice preparation before the public submission action.
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::OrderReference;
+use mortsom_common::Actor;
 use mortsom_common::Secret;
 use mortsom_observers::wallet::{amount_msats_of, payment_hash_of};
 

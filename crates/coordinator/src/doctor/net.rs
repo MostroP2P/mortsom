@@ -128,24 +128,6 @@ fn unresolved_credential(wallet: &WalletConfig) -> Option<&'static str> {
     }
 }
 
-/// Reports whether the configured relay base port is available.
-pub async fn check_relay_port(
-    net: &dyn NetProbes,
-    port: u16,
-    report: &mut DoctorReport,
-) -> PortState {
-    let state = net.local_port(port).await;
-    match state {
-        PortState::Free => report.push("relay-port", CheckStatus::Pass, format!("{port} is free")),
-        PortState::InUse => report.push(
-            "relay-port",
-            CheckStatus::Warn,
-            format!("{port} is in use; the run will allocate the next free port"),
-        ),
-    }
-    state
-}
-
 /// Mortsom's own relay, as the doctor needs to reason about it: a relay
 /// that only exists while a run is live.
 #[derive(Debug, Clone, PartialEq, Eq)]

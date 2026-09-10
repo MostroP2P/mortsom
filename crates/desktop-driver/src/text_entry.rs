@@ -1,22 +1,22 @@
 //! Verified text entry through public accessibility operations.
 use crate::native::{Node, error};
 use async_trait::async_trait;
-use mortsom_android_driver::appium::AppiumError;
+use mortsom_ui_driver::error::UiError;
 use std::time::Duration;
 
 /// Public accessibility boundary, injectable without a desktop session.
 #[async_trait]
 pub trait TextEntry: Send + Sync {
     /// Fresh lookup of the semantic identifier.
-    async fn find(&self, id: &str) -> Result<Option<Node>, AppiumError>;
+    async fn find(&self, id: &str) -> Result<Option<Node>, UiError>;
     /// Invokes the named user tap action to request focus.
-    async fn focus(&self, node: &Node) -> Result<(), AppiumError>;
+    async fn focus(&self, node: &Node) -> Result<(), UiError>;
     /// Reads the actual focused state.
-    async fn focused(&self, node: &Node) -> Result<bool, AppiumError>;
+    async fn focused(&self, node: &Node) -> Result<bool, UiError>;
     /// Sends text through the public editable interface.
-    async fn set(&self, node: &Node, value: &str) -> Result<(), AppiumError>;
+    async fn set(&self, node: &Node, value: &str) -> Result<(), UiError>;
     /// Reads the public editable text value.
-    async fn text(&self, node: &Node) -> Result<String, AppiumError>;
+    async fn text(&self, node: &Node) -> Result<String, UiError>;
 }
 
 /// Waits for focus and verified text, never treating an acknowledgement as editing.
@@ -25,7 +25,7 @@ pub async fn enter(
     id: &str,
     value: &str,
     timeout: Duration,
-) -> Result<(), AppiumError> {
+) -> Result<(), UiError> {
     let result = tokio::time::timeout(timeout, async {
         let mut tick = tokio::time::interval(Duration::from_millis(50));
         let mut focused_node = None;
@@ -54,7 +54,7 @@ pub async fn enter(
     .await
     .map_err(|_| error("text-entry deadline: public value mismatch"))?;
     let redactor = mortsom_common::Redactor::new().with_secret(&mortsom_common::Secret::new(value));
-    result.map_err(|cause: AppiumError| error(redactor.redact(&cause.to_string())))
+    result.map_err(|cause: UiError| error(redactor.redact(&cause.to_string())))
 }
 
 #[cfg(test)]
@@ -79,7 +79,7 @@ mod tests {
     }
     #[async_trait]
     impl TextEntry for Fake {
-        async fn find(&self, _: &str) -> Result<Option<Node>, AppiumError> {
+        async fn find(&self, _: &str) -> Result<Option<Node>, UiError> {
             let mut state = self.state.lock().unwrap();
             state.finds += 1;
             Ok(Some(Node {
@@ -88,16 +88,16 @@ mod tests {
                 name: "[mortsom:input]".into(),
             }))
         }
-        async fn focus(&self, _: &Node) -> Result<(), AppiumError> {
+        async fn focus(&self, _: &Node) -> Result<(), UiError> {
             self.state.lock().unwrap().requested_focus = true;
             Ok(())
         }
-        async fn focused(&self, _: &Node) -> Result<bool, AppiumError> {
+        async fn focused(&self, _: &Node) -> Result<bool, UiError> {
             let mut state = self.state.lock().unwrap();
             state.focused_reads += 1;
             Ok(state.requested_focus && state.focused_reads > 2)
         }
-        async fn set(&self, node: &Node, value: &str) -> Result<(), AppiumError> {
+        async fn set(&self, node: &Node, value: &str) -> Result<(), UiError> {
             let mut state = self.state.lock().unwrap();
             assert!(state.requested_focus && state.focused_reads > 2);
             assert_eq!(node.path, "/new");
@@ -107,7 +107,7 @@ mod tests {
             }
             Ok(())
         }
-        async fn text(&self, _: &Node) -> Result<String, AppiumError> {
+        async fn text(&self, _: &Node) -> Result<String, UiError> {
             if let Some(text) = self.error_text {
                 return Err(error(format!("backend rejected: {text}")));
             }

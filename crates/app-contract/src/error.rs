@@ -32,7 +32,7 @@ impl AdapterError {
         Self::new(FailureCategory::AutomationContract, message)
     }
 
-    /// Emulator, Appium or tooling failed.
+    /// A client process, a driver or host tooling failed.
     pub fn infrastructure(message: impl Into<String>) -> Self {
         Self::new(FailureCategory::TestInfrastructure, message)
     }

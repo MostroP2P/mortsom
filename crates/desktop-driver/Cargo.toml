@@ -7,7 +7,7 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-mortsom-android-driver.workspace = true
+mortsom-ui-driver.workspace = true
 mortsom-common.workspace = true
 tokio.workspace = true
 tracing.workspace = true

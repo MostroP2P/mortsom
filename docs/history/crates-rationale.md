@@ -29,7 +29,7 @@ The workspace mirrors the package tree in the archived spec §12:
 crates/common              mortsom-common              secrets, run ids, errors, clock, logging
 crates/coordinator         mortsom-coordinator         config, runner, budgets, cleanup, reporting, `mortsom` binary
 crates/app-contract        mortsom-app-contract        AppAdapter trait, normalized states, capabilities
-crates/android-driver      mortsom-android-driver      shared UI/process traits, WebDriver, legacy Android primitives
+crates/android-driver      mortsom-ui-driver      shared UI/process traits, WebDriver, legacy Android primitives
 crates/desktop-driver      mortsom-desktop-driver      native AT-SPI, Chromium, private server and actor lifecycle
 crates/environment         mortsom-environment         Docker relay, daemon readiness, wallet provisioning
 crates/observers           mortsom-observers           UI, notification, relay, wallet, artifact observers

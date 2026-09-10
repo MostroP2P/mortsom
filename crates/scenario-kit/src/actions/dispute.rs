@@ -2,8 +2,8 @@
 //! proof of each step is the daemon's public dispute event, not a screen:
 //! the event names the dispute id (which the run learns only from it) and
 //! carries the dispute status the daemon moved it to.
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::OrderReference;
+use mortsom_common::Actor;
 use mortsom_observers::relay::ObservedEvent;
 
 use crate::context::{Context, ScenarioError};

@@ -1,7 +1,7 @@
 //! Durable desktop ownership and public UI recovery, separate from scenario narratives.
 use super::*;
 use crate::recovery_store::{FileJournal, RecoveryManifest};
-use mortsom_android_driver::avd::Actor;
+use mortsom_common::Actor;
 use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
 
 pub(super) fn prepare(
@@ -9,9 +9,7 @@ pub(super) fn prepare(
     run: &RunId,
     deps: &RunDeps<'_>,
 ) -> Result<(), String> {
-    let Some(desktop) = options.desktop.as_mut() else {
-        return Ok(());
-    };
+    let desktop = &mut options.desktop;
     if desktop.resume {
         let journal = desktop
             .recovery
@@ -79,8 +77,8 @@ pub(super) fn prepare(
     Ok(())
 }
 
-pub(super) fn journal(options: Option<&DesktopOptions>) -> Arc<dyn RecoveryJournal> {
-    match options.and_then(|options| options.recovery.as_ref()) {
+pub(super) fn journal(options: &DesktopOptions) -> Arc<dyn RecoveryJournal> {
+    match options.recovery.as_ref() {
         Some(journal) => Arc::clone(journal) as Arc<dyn RecoveryJournal>,
         None => Arc::new(mortsom_scenario_kit::journal::NoJournal),
     }

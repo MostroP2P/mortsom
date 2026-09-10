@@ -115,7 +115,7 @@ mod tests {
             run_id: &run_id,
             lane: Lane::Ci,
             command: "relay smoke",
-            app_profile: Some("mobile-legacy"),
+            app_profile: Some("profile-b"),
             checks: &checks,
             passed: true,
             stack: None,
@@ -135,9 +135,8 @@ mod tests {
 
         let timeline = std::fs::read_to_string(artifacts.file(files::TIMELINE).unwrap()).unwrap();
         assert!(
-            timeline.starts_with(
-                "# relay smoke 20260815T000000Z-abcdef (lane ci, profile mobile-legacy)"
-            )
+            timeline
+                .starts_with("# relay smoke 20260815T000000Z-abcdef (lane ci, profile profile-b)")
         );
         assert!(timeline.contains("| relay-start | PASS | ws://127.0.0.1:1\\|2 |"));
         assert!(timeline.ends_with("result: PASS\n"));

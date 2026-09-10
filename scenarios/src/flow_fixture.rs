@@ -5,9 +5,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use async_trait::async_trait;
-use mortsom_android_driver::avd::Actor;
-use mortsom_android_driver::ui::tests_support::ScriptedUi;
 use mortsom_app_contract::{FiatAmount, OrderDraft, OrderKind, OrderPrice, OrderState};
+use mortsom_common::Actor;
 use mortsom_common::{Lane, Secret};
 use mortsom_observers::{
     relay::{ObserverScope, RelayObserver},
@@ -22,6 +21,7 @@ use mortsom_scenario_kit::{
     recovery::NoRelayControl,
     timeline::Timeline,
 };
+use mortsom_ui_driver::ui::tests_support::ScriptedUi;
 use nostr_sdk::prelude::{EventBuilder, FinalizeEvent, Keys, Kind, Tag};
 use std::{
     collections::BTreeMap,

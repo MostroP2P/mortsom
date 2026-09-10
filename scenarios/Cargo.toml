@@ -11,14 +11,14 @@ rust-version.workspace = true
 mortsom-common = { workspace = true }
 mortsom-app-contract = { workspace = true }
 mortsom-scenario-kit = { workspace = true }
-mortsom-android-driver = { workspace = true }
+mortsom-ui-driver = { workspace = true }
 tokio = { workspace = true }
 inventory = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 async-trait = { workspace = true }
-mortsom-android-driver = { workspace = true, features = ["testing"] }
+mortsom-ui-driver = { workspace = true, features = ["testing"] }
 mortsom-observers = { workspace = true }
 nostr-sdk = { workspace = true }
 

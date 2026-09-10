@@ -77,7 +77,6 @@ impl ActorStorage {
         let layout = match platform {
             Platform::Linux => &["data", "config"][..],
             Platform::Web => &["profile"][..],
-            Platform::Android => return Err(invalid("desktop storage cannot contain Android")),
         };
         let marker = format!("mortsom-actor-storage-v1\n{platform}\n");
         validate_path(path)?;

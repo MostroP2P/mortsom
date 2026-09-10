@@ -4,7 +4,7 @@
 
 use super::StackError;
 use super::layout::{Layout, PROJECT};
-use mortsom_android_driver::process::{Command, CommandRunner, run_ok};
+use mortsom_ui_driver::process::{Command, CommandRunner, run_ok};
 use std::{path::Path, time::Duration};
 
 const LABEL_FORMAT: &str = r#"{"working_dir":{{json (index .Config.Labels "com.docker.compose.project.working_dir")}},"config_files":{{json (index .Config.Labels "com.docker.compose.project.config_files")}}}"#;
@@ -101,7 +101,7 @@ fn invalid() -> StackError {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use mortsom_android_driver::process::tests_support::FakeRunner;
+    use mortsom_ui_driver::process::tests_support::FakeRunner;
 
     fn selected() -> (tempfile::TempDir, super::Layout) {
         let dir = tempfile::tempdir().unwrap();

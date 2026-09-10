@@ -3,7 +3,7 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use mortsom_android_driver::ui::UiSession;
+use mortsom_ui_driver::ui::UiSession;
 use tracing::warn;
 
 use crate::artifacts::RunArtifacts;
