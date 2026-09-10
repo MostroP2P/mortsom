@@ -302,6 +302,17 @@ impl UiSession for WebSession {
     async fn hide_keyboard(&self) -> Result<(), AppiumError> {
         Ok(())
     }
+    /// The ChromeDriver log: what the browser was asked and what it
+    /// answered, the record of a session that died mid-trade.
+    async fn diagnostics(&self) -> Vec<(String, String)> {
+        let slot = self.runtime.lock().await;
+        let Some(runtime) = slot.as_ref() else {
+            return Vec::new();
+        };
+        std::fs::read_to_string(runtime.root.join("driver.log"))
+            .map(|text| vec![("driver.log".to_owned(), text)])
+            .unwrap_or_default()
+    }
     async fn end(&self) -> Result<(), AppiumError> {
         let mut slot = self.runtime.lock().await;
         if let Some(runtime) = slot.as_mut() {

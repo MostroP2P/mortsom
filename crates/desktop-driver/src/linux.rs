@@ -561,6 +561,18 @@ impl UiSession for LinuxSession {
     async fn hide_keyboard(&self) -> Result<(), AppiumError> {
         Ok(())
     }
+    /// The app's stdout and stderr, which the Rust core's bridge log and
+    /// Flutter's own prints go to: the only record of what the client did
+    /// between two screens.
+    async fn diagnostics(&self) -> Vec<(String, String)> {
+        let guard = self.runtime.lock().await;
+        let Some(runtime) = guard.as_ref() else {
+            return Vec::new();
+        };
+        std::fs::read_to_string(runtime.root.join("app.log"))
+            .map(|text| vec![("app.log".to_owned(), text)])
+            .unwrap_or_default()
+    }
     async fn end(&self) -> Result<(), AppiumError> {
         let mut guard = self.runtime.lock().await;
         if let Some(runtime) = guard.as_mut() {
