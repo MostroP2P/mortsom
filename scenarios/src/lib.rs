@@ -3,6 +3,7 @@
 //! typed domain narratives; they self-register with the kit's registry.
 
 pub mod cancellation;
+pub mod expiration;
 pub mod flow;
 pub mod happy;
 pub mod recovery;
@@ -58,6 +59,7 @@ pub fn link() {
     smoke::link();
     happy::link();
     cancellation::link();
+    expiration::link();
     recovery::link();
     regression::link();
 }

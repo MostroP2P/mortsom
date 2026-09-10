@@ -143,10 +143,13 @@ impl StackContext {
         self.values.get(name).cloned()
     }
 
-    /// Applies the actual relay binding to shared configuration.
+    /// Applies the actual relay binding to shared configuration, and the
+    /// untaken-order lifetime the stack declares, which the client build
+    /// asks the daemon for on every order it creates.
     pub fn configure_relay(&self, config: &mut crate::Config) {
         config.relay.host_port = self.relay_port;
         config.mostro.relays = vec![self.relay_url.clone()];
+        config.mobile.order_expiry_secs = Some(self.declared_limits.order_expiration_secs);
     }
 }
 

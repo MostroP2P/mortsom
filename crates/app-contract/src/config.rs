@@ -32,6 +32,12 @@ pub struct MobileConfig {
     /// Extra `--dart-define` values passed to the Flutter build. Never secrets.
     #[serde(default)]
     pub dart_defines: Vec<String>,
+    /// Seconds after creation every order the test build creates asks the
+    /// daemon to expire it at (`MORTSOM_ORDER_EXPIRY_SECS`). Set from the
+    /// stack's declared `order_expiration_secs`; `None` leaves the daemon's
+    /// own default, which is hour-granular.
+    #[serde(default)]
+    pub order_expiry_secs: Option<u64>,
     /// Android application id of the build under test.
     #[serde(default = "default_package")]
     pub package: String,
@@ -113,6 +119,7 @@ mod tests {
             apk_path: String::new(),
             mostro_pubkey: HEX.into(),
             dart_defines: vec![format!("MOSTRO_PUB_KEY={HEX}")],
+            order_expiry_secs: None,
             package: "network.mostro.app".into(),
             main_activity: String::new(),
         }

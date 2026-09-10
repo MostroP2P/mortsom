@@ -146,10 +146,7 @@ impl WebSession {
         let log = runtime.root.join("driver.log");
         runtime.driver = Some(
             self.runner
-                .spawn(
-                    &Command::new(&self.driver, &["--port=0", "--allowed-ips=127.0.0.1"]),
-                    Some(&log),
-                )
+                .spawn(&Command::new(&self.driver, &driver_args()), Some(&log))
                 .await?,
         );
         let driver = runtime
@@ -171,6 +168,21 @@ impl WebSession {
             .await?;
         Ok(())
     }
+}
+
+/// Environment variable that turns on ChromeDriver's full log for a run:
+/// every DevTools event, including a target crashing or detaching, which
+/// is the only record of why a browser session died.
+pub const VERBOSE_DRIVER_VARIABLE: &str = "MORTSOM_WEBDRIVER_VERBOSE";
+
+/// ChromeDriver's arguments: a loopback-only port of its choosing, and
+/// the full log when the operator asked for it.
+fn driver_args() -> Vec<&'static str> {
+    let mut args = vec!["--port=0", "--allowed-ips=127.0.0.1"];
+    if std::env::var_os(VERBOSE_DRIVER_VARIABLE).is_some_and(|v| !v.is_empty()) {
+        args.push("--verbose");
+    }
+    args
 }
 
 /// Exact identifier selector. IDs are contract values, not arbitrary XPath.
@@ -302,16 +314,26 @@ impl UiSession for WebSession {
     async fn hide_keyboard(&self) -> Result<(), AppiumError> {
         Ok(())
     }
-    /// The ChromeDriver log: what the browser was asked and what it
-    /// answered, the record of a session that died mid-trade.
+    /// Chromium's own log, which carries the page's console and with it
+    /// the Rust core's bridge log (`app.log`, as on Linux), and the
+    /// ChromeDriver log: what the browser was asked and what it answered,
+    /// the record of a session that died mid-trade.
     async fn diagnostics(&self) -> Vec<(String, String)> {
         let slot = self.runtime.lock().await;
         let Some(runtime) = slot.as_ref() else {
             return Vec::new();
         };
-        std::fs::read_to_string(runtime.root.join("driver.log"))
-            .map(|text| vec![("driver.log".to_owned(), text)])
-            .unwrap_or_default()
+        [
+            ("app.log", runtime.profile.join("chrome_debug.log")),
+            ("driver.log", runtime.root.join("driver.log")),
+        ]
+        .into_iter()
+        .filter_map(|(name, path)| {
+            std::fs::read_to_string(path)
+                .ok()
+                .map(|text| (name.to_owned(), text))
+        })
+        .collect()
     }
     async fn end(&self) -> Result<(), AppiumError> {
         let mut slot = self.runtime.lock().await;

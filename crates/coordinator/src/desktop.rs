@@ -103,6 +103,7 @@ async fn build_artifact(
         platform,
         &config.mobile.mostro_pubkey,
         config.relay.host_port,
+        config.mobile.order_expiry_secs,
     ) {
         run_ok(runner, &command, timeout)
             .await
@@ -133,6 +134,7 @@ fn build_plan(
     platform: Platform,
     pubkey: &str,
     relay_port: u16,
+    order_expiry_secs: Option<u64>,
 ) -> Vec<(Command, Duration)> {
     let script = |args: &[&str]| {
         let mut command = Command::new("env", &[&format!("--chdir={}", source.display())]);
@@ -152,7 +154,7 @@ fn build_plan(
         ));
     }
     commands.push((
-        build_command(source, platform, pubkey, relay_port),
+        build_command(source, platform, pubkey, relay_port, order_expiry_secs),
         Duration::from_secs(3600),
     ));
     commands
@@ -208,21 +210,34 @@ fn build_error(error: mortsom_android_driver::process::ProcessError) -> String {
 }
 
 /// Non-secret Flutter build plan. No arbitrary defines can override isolation.
-pub fn build_command(source: &Path, platform: Platform, pubkey: &str, relay_port: u16) -> Command {
-    Command::new(
-        "env",
-        &[
-            &format!("--chdir={}", source.display()),
-            "flutter",
-            "build",
-            &platform.to_string(),
-            "-t",
-            "lib/main_mortsom.dart",
-            "--dart-define=MORTSOM_TEST_ENV=true",
-            &format!("--dart-define=MOSTRO_PUB_KEY={pubkey}"),
-            &format!("--dart-define=MORTSOM_RELAYS=ws://127.0.0.1:{relay_port}"),
-        ],
-    )
+///
+/// `order_expiry_secs` is the untaken-order lifetime the stack declares
+/// (`order_expiration_secs`): the build asks the daemon for it on every
+/// order it creates, which is what makes that limit true, and what lets a
+/// scenario about the daemon's pending-order clock finish inside a run.
+pub fn build_command(
+    source: &Path,
+    platform: Platform,
+    pubkey: &str,
+    relay_port: u16,
+    order_expiry_secs: Option<u64>,
+) -> Command {
+    let mut args = vec![
+        format!("--chdir={}", source.display()),
+        "flutter".to_owned(),
+        "build".to_owned(),
+        platform.to_string(),
+        "-t".to_owned(),
+        "lib/main_mortsom.dart".to_owned(),
+        "--dart-define=MORTSOM_TEST_ENV=true".to_owned(),
+        format!("--dart-define=MOSTRO_PUB_KEY={pubkey}"),
+        format!("--dart-define=MORTSOM_RELAYS=ws://127.0.0.1:{relay_port}"),
+    ];
+    if let Some(secs) = order_expiry_secs {
+        args.push(format!("--dart-define=MORTSOM_ORDER_EXPIRY_SECS={secs}"));
+    }
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    Command::new("env", &args)
 }
 
 #[cfg(test)]
@@ -230,7 +245,24 @@ mod tests {
     use super::*;
     #[test]
     fn desktop_build_uses_the_actual_host_relay_and_test_entrypoint() {
-        let cmd = build_command(Path::new("/app"), Platform::Linux, "public", 7001);
+        let cmd = build_command(
+            Path::new("/app"),
+            Platform::Linux,
+            "public",
+            7001,
+            Some(600),
+        );
+        assert!(
+            cmd.args
+                .contains(&"--dart-define=MORTSOM_ORDER_EXPIRY_SECS=600".into())
+        );
+        let plain = build_command(Path::new("/app"), Platform::Linux, "public", 7001, None);
+        assert!(
+            !plain
+                .args
+                .iter()
+                .any(|arg| arg.contains("MORTSOM_ORDER_EXPIRY_SECS"))
+        );
         assert!(cmd.args.contains(&"linux".into()));
         assert!(cmd.args.contains(&"lib/main_mortsom.dart".into()));
         assert!(
