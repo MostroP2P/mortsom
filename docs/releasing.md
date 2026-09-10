@@ -47,8 +47,10 @@ name the version.
   no tag yet, tags the merge commit `v0.2.0` and publishes a GitHub release
   with the same changelog section as its description.
 
-CI (`ci.yml`) runs on the pull request as usual, so a release cannot land on a
-red build.
+CI (`ci.yml`) runs on pushes to `release/v*` branches — a pull request opened
+by the workflow bot does not trigger `pull_request` workflows, so the branch
+push is what puts the checks on the release. A release cannot land on a red
+build.
 
 ## Guard rails
 
@@ -59,6 +61,9 @@ red build.
 - The publish job is idempotent. It does nothing when the tag already exists
   or when the version has no changelog entry, so ordinary pushes to `main`
   are ignored.
+- The release workflow refuses a branch whose name does not match the
+  workspace version, so a branch pushed before `cargo release --execute`
+  fails loudly instead of opening a pull request for the stale version.
 
 ## If something goes wrong
 

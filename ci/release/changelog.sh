@@ -35,4 +35,7 @@ fi
 
 cd "${root}"
 git-cliff --config cliff.toml --tag "${tag}" --output "${changelog}"
+# cargo-release commits what it bumped plus whatever is already staged;
+# without this the release commit leaves CHANGELOG.md untracked.
+git add "${changelog}"
 echo "release: CHANGELOG.md written for ${tag}"

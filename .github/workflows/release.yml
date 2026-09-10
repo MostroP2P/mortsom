@@ -11,6 +11,11 @@ on:
       - main
       - 'release/v*'
 
+# One release flow at a time: two merges in flight must not race the tag.
+concurrency:
+  group: mortsom-release
+  cancel-in-progress: false
+
 permissions:
   contents: write
   pull-requests: write
@@ -27,6 +32,14 @@ jobs:
         id: meta
         run: |
           version="$(ci/release/version.sh)"
+          # A branch pushed before `cargo release --execute` (or carrying a
+          # mismatched bump) would otherwise open a pull request titled with
+          # the stale manifest version.
+          expected="release/v${version}"
+          if [ "${GITHUB_REF_NAME}" != "${expected}" ]; then
+            echo "branch ${GITHUB_REF_NAME} does not match the workspace version; expected ${expected}" >&2
+            exit 1
+          fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           ci/release/changelog-section.sh "${version}" > "${RUNNER_TEMP}/notes.md"
 
