@@ -137,6 +137,22 @@ pub async fn create_take_and_fund(ctx: &Context) -> Result<Taken, ScenarioError>
 pub async fn create_buy_and_fund(ctx: &Context) -> Result<Taken, ScenarioError> {
     let order = create_pending_for(ctx, Actor::Bob, OrderKind::Buy).await?;
     actions::take_order(ctx, Actor::Alice, &order).await?;
+    fund_taken_buy(ctx, order).await
+}
+
+/// Alice takes Bob's range buy `order` at `fiat_amount` as seller and funds
+/// it; Bob then submits his payout invoice and both apps become active.
+pub async fn take_buy_at_and_fund(
+    ctx: &Context,
+    order: OrderReference,
+    fiat_amount: u64,
+) -> Result<Taken, ScenarioError> {
+    actions::take_order_at(ctx, Actor::Alice, &order, fiat_amount).await?;
+    fund_taken_buy(ctx, order).await
+}
+
+/// The seller side of a taken buy: Alice's escrow, then Bob's invoice.
+async fn fund_taken_buy(ctx: &Context, order: OrderReference) -> Result<Taken, ScenarioError> {
     actions::wait_both(ctx, &order, OrderState::Taken).await?;
     actions::pay_hold_invoice(ctx, Actor::Alice, &order).await?;
     // The daemon asks the buyer for the payout invoice only once the hold is

@@ -13,6 +13,7 @@ section 8) is accepted on both platforms. All 2026-09-10 runs are on the Mortsom
 | `happy_sell` | happy-path | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528`; again 2026-09-10 in the smoke family run, `20260910T010851Z-c8c1699bbd7d` | **Accepted** 2026-09-09, run `20260909T025026Z-034b13e4fb91`; again 2026-09-10, `20260910T021340Z-75803664d039` |
 | `happy_buy` | happy-path | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763`; again 2026-09-10 in the smoke family run, `20260910T010635Z-39af8ec35ee8` | **Accepted** 2026-09-09, run `20260909T033857Z-e7b88a390989`; again 2026-09-10, `20260910T020954Z-4903a85e9ad9` |
 | `range_order` | happy-path | **Accepted** 2026-09-10, run `20260910T005840Z-947a61b7b662` | **Accepted** 2026-09-10, run `20260910T022005Z-f7291e5a978f` |
+| `range_buy_order` | happy-path | Pending | Pending |
 | `market_price_order` | happy-path | **Accepted** 2026-09-10, run `20260910T000326Z-0addeab149ad` | **Accepted** 2026-09-10, run `20260910T021649Z-1e0e801e1aa5` |
 | `full_trade_with_rating` | happy-path | **Accepted** 2026-09-10, run `20260910T010128Z-5fb05c5eaf84` | **Accepted** 2026-09-10, run `20260910T020544Z-f942ddcef9b1` |
 | `cancel_before_taken` | cancellation | **Accepted** 2026-09-10, run `20260910T000205Z-e9bffac02708`; again in the smoke family run, `20260910T010459Z-d19a13953368` | **Accepted** 2026-09-10, run `20260910T011431Z-eea18b36f496` |

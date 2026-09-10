@@ -23,6 +23,7 @@ fn the_happy_path_family_is_every_shape_of_a_trade_that_works() {
             "happy_sell",
             "happy_buy",
             "range_order",
+            "range_buy_order",
             "market_price_order",
             "full_trade_with_rating",
         ])

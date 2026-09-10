@@ -161,6 +161,7 @@ A scenario the app profile cannot support is skipped with a reason, never failed
 | `happy_sell` | Alice sells | Bob buys | Bob provides the payout invoice, then Alice pays the hold |
 | `happy_buy` | Bob buys | Alice sells | Alice pays the hold first, then Bob provides the payout invoice |
 | `range_order` | Alice sells a fiat range | Bob buys at an amount inside it | As `happy_sell`; the daemon publishes the remainder as a new order of Alice's, which she cancels |
+| `range_buy_order` | Bob buys a fiat range | Alice sells at an amount inside it | As `happy_buy`; the remainder becomes a new order of Bob's, which he cancels |
 | `market_price_order` | Alice sells at market price | Bob buys | As `happy_sell`; the daemon prices the take (its exchange-rate source must be reachable) |
 | `full_trade_with_rating` | Alice sells | Bob buys | As `happy_sell`, then each rates the other; the daemon publishes each rating |
 

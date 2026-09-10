@@ -221,7 +221,7 @@ a whole family; `smoke` cuts across families to mark the cheap subset (`happy_se
 
 | Family | Tag | What it covers |
 |---|---|---|
-| Happy path | `happy-path` | Trades that work: sell, buy, range, market price, rating |
+| Happy path | `happy-path` | Trades that work: sell, buy, range (sold and bought), market price, rating |
 | Cancellations | `cancellation` | Orders ended before the sats move — unilateral, abandoned, cooperative |
 | Expirations | `expiration` | The daemon's own clocks reaping what nobody touched |
 | Disputes | `dispute` | Disputes opened, resolved by a solver, or undone by the parties themselves |
@@ -242,6 +242,7 @@ skipped scenario is never counted as accepted.
 | `happy_sell` | Alice creates a sell order. Bob takes it and provides a payout invoice. Alice pays the hold invoice. Bob reports fiat sent. Alice releases. | Matching order ID on both screens and in relay events. Hold invoice paid by Alice and settled once. Payout received by Bob once. Both clients show completion. |
 | `happy_buy` | Bob creates a buy order. Alice takes it as seller and pays the hold invoice. Bob provides a payout invoice and reports fiat sent. Alice releases. | Same evidence with maker and taker roles reversed. |
 | `range_order` | Alice creates a sell order for a fiat range (one to three times the configured fiat amount). Bob takes it at twice the amount. The trade completes as `happy_sell`. | The book carries both bounds of the range. The daemon prices the take; the hold and payout settle once each. After settlement the daemon publishes the remainder as a new pending order of Alice's, for the fiat left of the range; her app lists it, and she cancels it with relay confirmation. |
+| `range_buy_order` | Bob creates a buy order for the same fiat range. Alice takes it as seller at twice the amount and pays the hold; the trade completes as `happy_buy`. | Same evidence as `range_order` with the roles reversed: the remainder is a new pending order of Bob's, named by the trade key he sent with fiat sent, listed by his app and cancelled by him with relay confirmation. |
 | `market_price_order` | Alice creates a sell order priced at market (no premium). Bob takes it. The trade completes as `happy_sell`. | The book carries the order with no sats amount. The daemon prices the take: the hold invoice asks for a positive amount within the per-order cap, the buyer invoice matches what the app requests, both settle once. |
 | `full_trade_with_rating` | `happy_sell`, then Alice and Bob each rate the other with five stars. | After completion each app offers the rating; after each rating the app shows the trade rated and the daemon publishes a reputation event on the run relay. |
 
