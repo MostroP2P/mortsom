@@ -4,8 +4,10 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 14/14, Web 14/14.** Every scenario of the happy-path, cancellation and expiration
-families (spec section 8) is accepted on both platforms. The expiration
+**Accepted: Linux 17/17, Web 17/17.** Every scenario of the happy-path, cancellation, expiration and
+dispute families (spec section 8) is accepted on both platforms. The dispute family ran on 2026-09-10 with
+the clients built from app branch `feat/mortsom-dispute-back-id` (`6222334`, the dispute screen's
+`appbar.back`), each run registering its own solver with the daemon. The expiration
 family ran on a stack rebuilt on 2026-09-10 for the declared `order_expiration_secs` of 600 (daemon
 `6e18952f…`), with the clients built from app branch `feat/mortsom-order-expiry-define` (`d03afed`). All 2026-09-10 runs are on the Mortsom-owned stack (daemon
 `f17567fc…`) with the app at `e8d7c06` (branch `feat/mortsom-range-and-rating-ids`).
@@ -26,9 +28,9 @@ family ran on a stack rebuilt on 2026-09-10 for the declared `order_expiration_s
 | `hold_invoice_expires` | expiration | **Accepted** 2026-09-10, run `20260910T064434Z-c663f82bd44a` (family batch) | **Accepted** 2026-09-10, run `20260910T072145Z-69fcdb0ab80f` (family batch) |
 | `buyer_invoice_deadline` | expiration | **Accepted** 2026-09-10, run `20260910T064027Z-fce2b2d421e5` (family batch; hold refunded) | **Accepted** 2026-09-10, run `20260910T071729Z-c61799b99dc1` (family batch; hold refunded) |
 | `unilateral_cancel_rejected` | cancellation | **Accepted** 2026-09-10, run `20260910T002921Z-704f54b3ff05` | **Accepted** 2026-09-10, run `20260910T012017Z-0e1186dbd6e7` (family batch) |
-| `dispute_settled_by_solver` | dispute | **Accepted** 2026-09-10, run `20260910T115327Z-f2a515741b09` (dispute initiated → in-progress → settled; hold and payout settled once each) | not yet run |
-| `dispute_canceled_by_solver` | dispute | **Accepted** 2026-09-10, run `20260910T115609Z-0039c33d54ae` (dispute initiated → in-progress → seller-refunded; hold refunded) | not yet run |
-| `dispute_released_by_seller` | dispute | **Accepted** 2026-09-10, run `20260910T115806Z-c9f7dfc464fd` (dispute initiated → settled on the release) | not yet run |
+| `dispute_settled_by_solver` | dispute | **Accepted** 2026-09-10, run `20260910T115327Z-f2a515741b09` (dispute initiated → in-progress → settled; hold and payout settled once each) | **Accepted** 2026-09-10, run `20260910T120310Z-ca276d92a07b` |
+| `dispute_canceled_by_solver` | dispute | **Accepted** 2026-09-10, run `20260910T115609Z-0039c33d54ae` (dispute initiated → in-progress → seller-refunded; hold refunded) | **Accepted** 2026-09-10, run `20260910T120645Z-b8e2f466b31e` (hold refunded) |
+| `dispute_released_by_seller` | dispute | **Accepted** 2026-09-10, run `20260910T115806Z-c9f7dfc464fd` (dispute initiated → settled on the release) | **Accepted** 2026-09-10, run `20260910T120935Z-ee1fb55d8b99` |
 
 ## Live attempts
 

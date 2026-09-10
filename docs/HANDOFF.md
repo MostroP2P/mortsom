@@ -5,8 +5,17 @@ Repository content is English; the operator conversation is Spanish.
 
 ## Where things stand (2026-09-10)
 
-**Three families are implemented and accepted live on Linux (14/14) and Web (14/14): happy path,
-cancellations and expirations.** The expiration family needed a stack rebuilt for the declared
+**Four families are implemented and accepted live on Linux (17/17) and Web (17/17): happy path,
+cancellations, expirations and disputes.** The dispute family (Mortsom `feat/dispute-family`, app
+`feat/mortsom-dispute-back-id`) adds `crates/solver`: each run that needs one mints a solver identity,
+registers it with `admin-add-solver` sent from the daemon key read from `stack/local/config/settings.toml`
+(the message needs an id or the daemon drops it silently), and rules with `admin-take-dispute` (dispute
+id) and `admin-settle`/`admin-cancel` (order id) on the dispute wrapper — the shapes the reference
+client uses. Scenarios see it as `Context::solver`; the proof of each step is the daemon's kind-38386
+event after a baseline. `cleanup` on an owned stack registers a solver too, so a disputed leftover is
+cancelled by it. The operator tool `cargo run -p mortsom-solver --example solve -- <relay> <daemon-pubkey>
+stack/local/config/settings.toml <dispute-id> [cancel|settle]` rules on one dispute by hand. The
+expiration family needed a stack rebuilt for the declared
 `order_expiration_secs` of 600 (daemon `6e18952f…`) and clients built from app branch
 `feat/mortsom-order-expiry-define` (`MORTSOM_ORDER_EXPIRY_SECS`, which the build asks the daemon for on
 every order). An open Web flake is recorded in the ledger: Alice's Chromium died twice as her client applied
@@ -51,8 +60,8 @@ No journal is retained, no harness process is left running, and the regtest stac
    still build by default. Put them behind a Cargo feature so the default workspace is desktop and Web only.
 2. **Measure coverage.** The spec requires 80% of lines under `cargo llvm-cov`. Last measured at 83.88%
    several commits ago (`5c764ba`); it has not been re-run since.
-3. **Land the expiration branches.** App `feat/mortsom-order-expiry-define` (the order-expiry define) and
-   Mortsom `feat/expiration-family`. Until the app PR is merged, build the clients from that branch.
+3. **Land the dispute branches.** App `feat/mortsom-dispute-back-id` (the dispute screen's `appbar.back`)
+   and Mortsom `feat/dispute-family`. Until the app PR is merged, build the clients from that branch.
 4. **Further families**, when the operator asks. Spec section 8.1 lists them; section 14 is the roadmap.
    The buy-side range remainder is driven by `range_buy_order` (app branch `feat/mortsom-range-buy-remainder`
    on top of #410, Mortsom branch `feat/range-buy-order`).
