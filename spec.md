@@ -287,7 +287,10 @@ in one of three ways: a solver settles the order for the buyer, a solver cancels
 seller releases and the daemon closes the dispute itself. A solver is a user the daemon's operator
 registers, signed with the daemon's own key. Mortsom owns the stack, so it holds that key: a run that needs
 a solver mints a fresh solver identity, registers it with `admin-add-solver` as the operator would, and
-rules through the protocol exactly as a solver client does. The keys stay in the coordinator; a scenario
+rules through the protocol exactly as a solver client does: `admin-add-solver` travels from the daemon key as
+identity and trade key alike and carries a message id (the daemon's structural check demands one and drops
+the message silently without it); `admin-take-dispute` carries the dispute id and `admin-settle` /
+`admin-cancel` the order id, all on the dispute wrapper. The keys stay in the coordinator; a scenario
 sees only *take*, *settle* and *cancel*. Without a Mortsom-owned stack such a scenario is skipped with the
 reason, never failed. The solver's public key is scoped into the relay observer, so its protocol traffic is
 run evidence like the actors'.
