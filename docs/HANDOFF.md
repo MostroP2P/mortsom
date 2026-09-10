@@ -51,7 +51,8 @@ No journal is retained, no harness process is left running, and the regtest stac
    commits) is open; merge it, then the Mortsom branch `feat/happy-path-and-cancellation-scenarios`.
    Until #410 is merged, build the clients from the app branch, not from `main`.
 4. **Further families**, when the operator asks. Spec section 8.1 lists them; section 14 is the roadmap.
-   The buy-side range remainder (a buyer maker's `next_trade` goes in `fiat-sent`) is not driven yet.
+   The buy-side range remainder is driven by `range_buy_order` (app branch `feat/mortsom-range-buy-remainder`
+   on top of #410, Mortsom branch `feat/range-buy-order`).
 
 ## Workspace
 

@@ -48,6 +48,39 @@ async fn a_range_order_is_taken_at_an_amount_and_its_remainder_is_closed() {
     );
 }
 
+/// The mirror: Bob buys a range, Alice takes it as seller at the middle,
+/// and the remainder is Bob's to list and close.
+#[tokio::test]
+async fn a_bought_range_leaves_its_remainder_to_the_buyer() {
+    let fixture = Fixture::new(false).await;
+
+    (scenario("range_buy_order").run)(&fixture.context)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        fixture.actions(),
+        [
+            "create:bob",
+            "take-at-20:alice",
+            "take:alice",
+            "hold:alice",
+            "pay:alice",
+            "invoice:bob",
+            "fiat:bob",
+            "release:alice",
+            "cancel:bob"
+        ]
+    );
+    assert_eq!(fixture.relay_states(REMAINDER), ["pending", "canceled"]);
+    let cleanup = fixture.context.cleanup.report();
+    assert!(cleanup.is_clean());
+    assert_eq!(
+        cleanup.entries[1].actor,
+        mortsom_android_driver::avd::Actor::Bob
+    );
+}
+
 /// A market order goes on the book without sats; the daemon prices it at
 /// the take and the trade settles like any other.
 #[tokio::test]
