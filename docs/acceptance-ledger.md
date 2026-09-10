@@ -4,7 +4,7 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 10/10, Web 10/10.** Every scenario of the happy-path and cancellation families (spec
+**Accepted: Linux 11/11, Web 11/11.** Every scenario of the happy-path and cancellation families (spec
 section 8) is accepted on both platforms. All 2026-09-10 runs are on the Mortsom-owned stack (daemon
 `f17567fc…`) with the app at `e8d7c06` (branch `feat/mortsom-range-and-rating-ids`).
 
@@ -13,7 +13,7 @@ section 8) is accepted on both platforms. All 2026-09-10 runs are on the Mortsom
 | `happy_sell` | happy-path | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528`; again 2026-09-10 in the smoke family run, `20260910T010851Z-c8c1699bbd7d` | **Accepted** 2026-09-09, run `20260909T025026Z-034b13e4fb91`; again 2026-09-10, `20260910T021340Z-75803664d039` |
 | `happy_buy` | happy-path | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763`; again 2026-09-10 in the smoke family run, `20260910T010635Z-39af8ec35ee8` | **Accepted** 2026-09-09, run `20260909T033857Z-e7b88a390989`; again 2026-09-10, `20260910T020954Z-4903a85e9ad9` |
 | `range_order` | happy-path | **Accepted** 2026-09-10, run `20260910T005840Z-947a61b7b662` | **Accepted** 2026-09-10, run `20260910T022005Z-f7291e5a978f` |
-| `range_buy_order` | happy-path | Pending | Pending |
+| `range_buy_order` | happy-path | **Accepted** 2026-09-10, run `20260910T053658Z-e0a210deca14` | **Accepted** 2026-09-10, run `20260910T054723Z-05e6492912c8` |
 | `market_price_order` | happy-path | **Accepted** 2026-09-10, run `20260910T000326Z-0addeab149ad` | **Accepted** 2026-09-10, run `20260910T021649Z-1e0e801e1aa5` |
 | `full_trade_with_rating` | happy-path | **Accepted** 2026-09-10, run `20260910T010128Z-5fb05c5eaf84` | **Accepted** 2026-09-10, run `20260910T020544Z-f942ddcef9b1` |
 | `cancel_before_taken` | cancellation | **Accepted** 2026-09-10, run `20260910T000205Z-e9bffac02708`; again in the smoke family run, `20260910T010459Z-d19a13953368` | **Accepted** 2026-09-10, run `20260910T011431Z-eea18b36f496` |
@@ -28,6 +28,7 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260910T054152Z-af527d9fa59c` | Web | range_buy_order | Bob's create form: currency picked | The currency picker was still open when the harness typed the range minimum (`text-entry deadline: public value mismatch`); the known Web picker flake. No order was created (no daemon order event in the run window), so the journal was resolved with `cleanup --attribute-order bob=none`. Re-run passed |
 | `20260910T015130Z-a242d7d4309a` | Web | full_trade_with_rating | Bring-up: Alice onboarded; Bob's browser session dropped during launch (`clear app: error sending request`), so the identity check saw one identity | Environment. Resolved by `cleanup` (`20260910T015130Z`, no order, storage removed). Re-run passed; the family was then run one scenario at a time |
 | `20260910T012740Z-39a56d852673` | Web | full_trade_with_rating (first of the `--tag happy-path` batch) | Order created, taken, invoice provided, hold `ab508538…` paid by Alice; both browsers then closed their connections at once | Environment: the host attempted to suspend at 01:29:06 (`systemd-suspend.service` in the system log) and both Chromium sessions died. The batch stopped and listed the rest as not run. `cleanup` run `20260910T013000Z-1ffcb8135701` reopened the retained profiles, cancelled cooperatively, verified the hold refunded (0 settled records) and removed the profiles |
 | `20260910T005258Z-ca31cbded8af` | Linux | range_order | Trade settled; the daemon sent the remainder's `new-order` to the next trade key, the app received it and left it untouched | The daemon's payload names no trade keys (a create's confirmation does not either), so the adoption check on `seller_trade_pubkey` never matched. App `e8d7c06` adopts by the trade index the daemon echoes from the release. Cleanup healthy; the unadopted remainder expired on the daemon |
