@@ -3,8 +3,8 @@
 //! cancel and observe the displayed state.
 
 use mortsom_app_contract::{
-    AdapterError, AppOrderState, CancelOutcome, DeviceContext, OrderDraft, OrderKind,
-    OrderReference, OrderState, PaymentHandoff, PaymentPath, VisibleOrder,
+    AdapterError, AppOrderState, CancelOutcome, DeviceContext, FiatAmount, OrderDraft, OrderKind,
+    OrderPrice, OrderReference, OrderState, PaymentHandoff, PaymentPath, VisibleOrder,
 };
 use mortsom_common::Secret;
 
@@ -23,6 +23,15 @@ pub async fn create(
     device: &DeviceContext<'_>,
     draft: &OrderDraft,
 ) -> Result<VisibleOrder, AdapterError> {
+    // The classic app is frozen (spec §6.3): only the ordinary fixed-price
+    // order it always created is driven.
+    let (OrderPrice::Fixed { amount_sats }, FiatAmount::Exact(fiat_amount)) =
+        (draft.price, draft.fiat)
+    else {
+        return Err(AdapterError::contract(
+            "the classic app adapter creates fixed-price orders for one fiat amount only",
+        ));
+    };
     let known_before = trade_ids(device).await?;
     go_home(device).await?;
     tap(device, Ids::ORDER_ADD_FAB).await?;
@@ -36,7 +45,7 @@ pub async fn create(
     type_into(
         device,
         Ids::ORDER_CREATE_FIAT_AMOUNT,
-        &draft.fiat_amount.to_string(),
+        &fiat_amount.to_string(),
     )
     .await?;
     type_into(
@@ -58,7 +67,7 @@ pub async fn create(
     type_into(
         device,
         Ids::ORDER_CREATE_SATS_AMOUNT,
-        &draft.amount_sats.to_string(),
+        &amount_sats.to_string(),
     )
     .await?;
     tap(device, Ids::ORDER_CREATE_SUBMIT).await?;

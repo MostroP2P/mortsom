@@ -77,13 +77,13 @@ mod tests {
         let error = crate::actions::create_order(
             &ctx,
             Actor::Alice,
-            &mortsom_app_contract::OrderDraft {
-                kind: mortsom_app_contract::OrderKind::Sell,
-                amount_sats: 100,
-                fiat_code: "ARS".into(),
-                fiat_amount: 10,
-                payment_method: "Cash".into(),
-            },
+            &mortsom_app_contract::OrderDraft::fixed(
+                mortsom_app_contract::OrderKind::Sell,
+                100,
+                "ARS",
+                10,
+                "Cash",
+            ),
         )
         .await
         .unwrap_err();

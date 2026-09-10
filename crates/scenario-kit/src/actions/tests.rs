@@ -300,3 +300,188 @@ fn a_refused_settlement_is_still_accounted_for() {
     assert_eq!(entry.payment_hash.as_deref(), Some("aa"));
     assert!(budget.totals().reserved_sats > 0, "still counted as spend");
 }
+
+/// An app whose pay form is still open from the take: the form keeps
+/// saying `waiting-payment`, while the trade detail already shows what the
+/// daemon did. A wait for a state the form can never become must read the
+/// detail; a wait for one the form flows into on its own keeps reading the
+/// form.
+mod form_left_open {
+    use std::sync::{Arc, Mutex};
+
+    use async_trait::async_trait;
+    use mortsom_app_contract::{
+        AdapterError, AppOrderState, DeviceContext, OrderReference, OrderState,
+    };
+
+    use super::super::*;
+    use crate::test_support::{StateAdapter, context};
+
+    struct FormOpen {
+        detail: StateAdapter,
+        detail_reads: Mutex<u32>,
+    }
+
+    #[async_trait]
+    impl mortsom_app_contract::AppAdapter for FormOpen {
+        fn profile(&self) -> mortsom_app_contract::AppProfile {
+            self.detail.profile()
+        }
+        fn capabilities(&self) -> mortsom_app_contract::CapabilitySet {
+            self.detail.capabilities()
+        }
+        async fn build(
+            &self,
+            c: &mortsom_app_contract::BuildContext,
+            r: &dyn mortsom_android_driver::process::CommandRunner,
+        ) -> Result<mortsom_app_contract::Apk, AdapterError> {
+            self.detail.build(c, r).await
+        }
+        async fn onboard(
+            &self,
+            d: &DeviceContext<'_>,
+            e: &mortsom_app_contract::TestEnvironment,
+        ) -> Result<mortsom_app_contract::Identity, AdapterError> {
+            self.detail.onboard(d, e).await
+        }
+        async fn displayed_identity(
+            &self,
+            d: &DeviceContext<'_>,
+        ) -> Result<mortsom_app_contract::Identity, AdapterError> {
+            self.detail.displayed_identity(d).await
+        }
+        async fn configure_node_and_relay(
+            &self,
+            d: &DeviceContext<'_>,
+            e: &mortsom_app_contract::TestEnvironment,
+        ) -> Result<(), AdapterError> {
+            self.detail.configure_node_and_relay(d, e).await
+        }
+        async fn configure_nwc(
+            &self,
+            d: &DeviceContext<'_>,
+            l: &str,
+            u: &mortsom_common::Secret,
+        ) -> Result<mortsom_app_contract::WalletConnection, AdapterError> {
+            self.detail.configure_nwc(d, l, u).await
+        }
+        async fn create_order(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &mortsom_app_contract::OrderDraft,
+        ) -> Result<mortsom_app_contract::VisibleOrder, AdapterError> {
+            self.detail.create_order(d, o).await
+        }
+        async fn find_and_take_order(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<(), AdapterError> {
+            self.detail.find_and_take_order(d, o).await
+        }
+        async fn pay_hold_invoice(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+            p: mortsom_app_contract::PaymentPath,
+        ) -> Result<mortsom_app_contract::PaymentHandoff, AdapterError> {
+            self.detail.pay_hold_invoice(d, o, p).await
+        }
+        async fn provide_buyer_invoice(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+            i: Option<&mortsom_common::Secret>,
+        ) -> Result<Option<mortsom_common::Secret>, AdapterError> {
+            self.detail.provide_buyer_invoice(d, o, i).await
+        }
+        async fn confirm_fiat_sent(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<(), AdapterError> {
+            self.detail.confirm_fiat_sent(d, o).await
+        }
+        async fn release(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<(), AdapterError> {
+            self.detail.release(d, o).await
+        }
+        async fn cancel_if_open(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<mortsom_app_contract::CancelOutcome, AdapterError> {
+            self.detail.cancel_if_open(d, o).await
+        }
+        async fn visible_actions(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<Vec<String>, AdapterError> {
+            self.detail.visible_actions(d, o).await
+        }
+        async fn cancel_payment(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<(), AdapterError> {
+            self.detail.cancel_payment(d, o).await
+        }
+        /// The form on screen: a fixed waiting state, whatever happened.
+        async fn observe_order(
+            &self,
+            _: &DeviceContext<'_>,
+            _: &OrderReference,
+        ) -> Result<AppOrderState, AdapterError> {
+            Ok(AppOrderState {
+                state: OrderState::Taken,
+                raw_label: "waiting-payment".into(),
+            })
+        }
+        async fn observe_order_detail(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<AppOrderState, AdapterError> {
+            *self.detail_reads.lock().unwrap() += 1;
+            self.detail.observe_order(d, o).await
+        }
+    }
+
+    #[tokio::test]
+    async fn a_state_that_leaves_the_take_is_read_from_the_detail_not_the_open_form() {
+        let adapter = Arc::new(FormOpen {
+            detail: StateAdapter(Mutex::new(OrderState::Pending)),
+            detail_reads: Mutex::new(0),
+        });
+        let ctx = context(adapter.clone());
+        let order = OrderReference::new("o1");
+
+        let raw = wait_app_state(&ctx, Actor::Alice, &order, OrderState::Pending)
+            .await
+            .unwrap();
+
+        assert_eq!(raw, "pending");
+        assert!(*adapter.detail_reads.lock().unwrap() > 0);
+    }
+
+    #[tokio::test]
+    async fn a_state_the_form_flows_into_keeps_reading_the_form() {
+        let adapter = Arc::new(FormOpen {
+            detail: StateAdapter(Mutex::new(OrderState::Active)),
+            detail_reads: Mutex::new(0),
+        });
+        let ctx = context(adapter.clone());
+        let order = OrderReference::new("o1");
+
+        let raw = wait_app_state(&ctx, Actor::Alice, &order, OrderState::Taken)
+            .await
+            .unwrap();
+
+        assert_eq!(raw, "waiting-payment");
+        assert_eq!(*adapter.detail_reads.lock().unwrap(), 0);
+    }
+}

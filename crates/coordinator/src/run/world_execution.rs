@@ -150,6 +150,17 @@ impl World<'_> {
             }
         }
         if let Some(farm) = self.farm.take() {
+            // The clients' own logs go with their profiles; keep them first.
+            for (actor, session) in farm.sessions() {
+                for (name, text) in session.diagnostics().await {
+                    if let Err(e) = self
+                        .artifacts
+                        .write_actor_text(actor.as_str(), &name, &text)
+                    {
+                        self.evidence_failed(summary, &format!("{actor}/{name}"), e);
+                    }
+                }
+            }
             summary.farm_teardown = farm.tear_down(self.deps.runner).await;
             let ok = summary.farm_teardown.iter().all(|i| i.ok);
             summary.checks.push(

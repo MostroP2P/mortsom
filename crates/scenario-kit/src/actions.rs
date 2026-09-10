@@ -50,7 +50,7 @@ pub async fn create_order(
     let id = visible
         .id
         .ok_or_else(|| ScenarioError::product("the app shows no id for the created order"))?;
-    let order = OrderReference::with_kind(id.clone(), draft.kind);
+    let order = OrderReference::from_draft(id.clone(), draft);
     ctx.cleanup.register(actor, &order);
     ctx.journal
         .record(RecoveryEvent::OrderFound {
@@ -70,8 +70,8 @@ pub async fn create_order(
         TimelineKind::Step,
         Some(actor.as_str()),
         format!(
-            "created {:?} order {id} ({} sats, {} {})",
-            draft.kind, draft.amount_sats, draft.fiat_amount, draft.fiat_code
+            "created {:?} order {id} ({}, {} {})",
+            draft.kind, draft.price, draft.fiat, draft.fiat_code
         ),
         Some(step),
     );
@@ -102,6 +102,45 @@ pub async fn take_order(
     Ok(())
 }
 
+/// Takes the range `order` as `actor` at `fiat_amount`.
+pub async fn take_order_at(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+    fiat_amount: u64,
+) -> Result<(), ScenarioError> {
+    let session = ctx.actor(actor)?;
+    ctx.adapter
+        .find_and_take_order_at(&session.device(ctx.ui_timeout), order, fiat_amount)
+        .await?;
+    let step = ctx
+        .evidence
+        .checkpoint(actor.as_str(), "take-order", session.ui.as_ref())
+        .await;
+    ctx.timeline.push(
+        TimelineKind::Step,
+        Some(actor.as_str()),
+        format!(
+            "took range order {} at {fiat_amount} {}",
+            order.id, ctx.fiat_code
+        ),
+        Some(step),
+    );
+    Ok(())
+}
+
+/// States an open invoice or payment form can never turn into on its own:
+/// the trade has left the take behind (the taker walked away, the order was
+/// cancelled or expired). A form still on screen from an earlier step then
+/// keeps reporting its fixed waiting state, so these are read from the
+/// trade detail, which reflects the change.
+fn leaves_the_take(state: OrderState) -> bool {
+    matches!(
+        state,
+        OrderState::Pending | OrderState::Cancelled | OrderState::Expired
+    )
+}
+
 /// Waits until `actor`'s app shows `expected` for `order`, bounded by the
 /// state timeout. Returns the raw label the app rendered.
 pub async fn wait_app_state(
@@ -114,7 +153,12 @@ pub async fn wait_app_state(
     let device = session.device(ctx.ui_timeout);
     let last: Mutex<LastSeen> = Mutex::new(LastSeen::default());
     let found = wait_until(ctx.state_timeout, STATE_POLL, || async {
-        match ctx.adapter.observe_order(&device, order).await {
+        let observed = if leaves_the_take(expected) {
+            ctx.adapter.observe_order_detail(&device, order).await
+        } else {
+            ctx.adapter.observe_order(&device, order).await
+        };
+        match observed {
             Ok(state) if state.state == expected => Some(Ok(state.raw_label)),
             // A terminal state other than the expected one can never become
             // it: fail fast instead of waiting out the deadline.
@@ -421,6 +465,12 @@ pub async fn wait_relay_state(
 #[path = "actions/hold.rs"]
 mod hold;
 pub use hold::{expect_hold_refunded, pay_hold_invoice, settle_hold_payment};
+#[path = "actions/rating.rs"]
+mod rating;
+pub use rating::{RATING_EVENT_KIND, rate_counterpart, wait_rating_published};
+#[path = "actions/relay.rs"]
+mod relay;
+pub use relay::{expect_relay_state_absent, relay_cursor, relay_order_tag, wait_relay_state_since};
 
 mod buyer_invoice;
 
@@ -645,3 +695,6 @@ pub fn is_observable(path: PaymentPath) -> bool {
 #[cfg(test)]
 #[path = "actions/tests.rs"]
 mod tests;
+#[cfg(test)]
+#[path = "actions/tests_relay.rs"]
+mod tests_relay;

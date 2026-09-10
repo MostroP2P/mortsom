@@ -28,10 +28,13 @@ cargo build -p mortsom-coordinator --bin mortsom
 
 ./target/debug/mortsom run happy_sell    # builds app v2, starts Alice and Bob, runs one trade
 ./target/debug/mortsom run happy_buy --platform web
+./target/debug/mortsom run --tag smoke   # the cheap subset: three scenarios, one run each
+./target/debug/mortsom list              # every scenario, its tags and requirements
 ```
 
 Every `run` creates fresh Alice and Bob identities, runs one scenario, resolves every order it created and
-removes its clients. Results land in `artifacts/<run-id>/`. The exit status is non-zero when the run fails.
+removes its clients. `--tag` runs a whole family the same way: one run per scenario, in sequence, with a
+report at the end. Results land in `artifacts/<run-id>/`. The exit status is non-zero when a run fails.
 
 ## Requirements
 
@@ -133,15 +136,47 @@ For Linux, point at the executable inside the complete bundle. For Web, point at
 directory. Mortsom hashes the whole bundle and records it. Rebuild after any app change or a changed daemon
 identity.
 
+## What it tests
+
+Scenarios are grouped in families. Each scenario carries its family name as a tag; `smoke` cuts across
+families to mark the cheap subset (`happy_sell`, `happy_buy`, `cancel_before_taken`).
+
+| Family | Tag | What it covers |
+|---|---|---|
+| Happy path | `happy-path` | Trades that work: sell, buy, range, market price, rating |
+| Cancellations | `cancellation` | Orders ended before the sats move — unilateral, abandoned, cooperative |
+| Expirations | `expiration` | The daemon's own clocks reaping what nobody touched |
+| Disputes | `dispute` | Disputes opened, resolved by a solver, or undone by the parties themselves |
+| Payment failures | `payment-failure` | Invoices the daemon cannot pay, how it recovers, and how many unresolved payouts it lets one payee pin |
+| Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
+| Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
+
+The first two families are implemented; the others are roadmap ([spec.md](spec.md), sections 8 and 14).
+A scenario the app profile cannot support is skipped with a reason, never failed and never counted.
+
 ## Running scenarios
 
 | Scenario | Maker | Taker | Order of funding |
 |---|---|---|---|
 | `happy_sell` | Alice sells | Bob buys | Bob provides the payout invoice, then Alice pays the hold |
 | `happy_buy` | Bob buys | Alice sells | Alice pays the hold first, then Bob provides the payout invoice |
+| `range_order` | Alice sells a fiat range | Bob buys at an amount inside it | As `happy_sell`; the daemon publishes the remainder as a new order of Alice's, which she cancels |
+| `market_price_order` | Alice sells at market price | Bob buys | As `happy_sell`; the daemon prices the take (its exchange-rate source must be reachable) |
+| `full_trade_with_rating` | Alice sells | Bob buys | As `happy_sell`, then each rates the other; the daemon publishes each rating |
 
-Both continue with Bob marking fiat sent and Alice releasing. A pass requires both clients' completed state,
-matching relay evidence, the hold settled once on Alice's node and the payout settled once on Bob's.
+Trades continue with Bob marking fiat sent and Alice releasing. A pass requires both clients' completed
+state, matching relay evidence, the hold settled once on Alice's node and the payout settled once on Bob's.
+
+Cancellations, all with Alice as maker and Bob as taker: `cancel_before_taken` (Alice cancels a pending
+order), `cancel_after_take_unpaid` (Bob takes and walks away; the daemon reaps the take after its window),
+`taker_cancel_at_taken` (Bob cancels before Alice pays), `cooperative_cancel` (both agree to undo a funded
+order; the escrow returns) and `unilateral_cancel_rejected` (Alice alone cannot cancel a funded order; the
+relay never shows it cancelled during the window). The maker's own screen never proves a cancellation: the
+relay must show it.
+
+Range and rating scenarios need an app build carrying the range and star identifiers
+(`order.create.range`, `order.create.fiat_min`, `order.create.fiat_max`, `trade.rate.star.<n>`); an older
+build fails them as a contract gap.
 
 Web finds Chromium and ChromeDriver on `PATH`. When `PATH` offers the Chromium snap wrapper, which runs
 confined and cannot write browser profiles under `~/.local`, Mortsom uses the unconfined `chrome` and
@@ -194,7 +229,7 @@ run is refused while a journal is unresolved. Details and failure categories are
 |---|---|
 | `stack up`, `stack status`, `stack down` | Regtest environment lifecycle |
 | `doctor --platform linux\|web` | Read-only prerequisite and readiness checks |
-| `run <scenario> [--platform linux\|web\|android]` | One scenario with isolated clients, caps and cleanup |
+| `run <scenario>... [--tag <family>] [--platform linux\|web\|android]` | Scenarios with isolated clients, caps and cleanup; on Linux and Web one run per scenario |
 | `cleanup <run-id>` | Recover a run's identities and orders |
 | `list` | Registered scenarios |
 | `publish <run-id> --out <dir>` | Redacted evidence bundle |

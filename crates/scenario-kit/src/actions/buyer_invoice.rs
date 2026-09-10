@@ -25,7 +25,19 @@ pub(super) async fn prepare(
     let session = ctx.actor(actor)?;
     let device = session.device(ctx.ui_timeout);
     let requested = ctx.adapter.buyer_invoice_amount(&device, order).await?;
-    validate_request(requested, ctx.amount_sats)?;
+    // A fixed order's payout can never exceed the sats the maker named. An
+    // order the daemon prices (market, range) has no such number: there the
+    // bound is the per-order spend cap the operator set.
+    let cap = if order.priced_by_daemon {
+        ctx.budget
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .caps()
+            .max_order_sats
+    } else {
+        ctx.amount_sats
+    };
+    validate_request(requested, cap)?;
     let invoice = node
         .make_invoice(requested, &format!("mortsom {}", order.id))
         .await

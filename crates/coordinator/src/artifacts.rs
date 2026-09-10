@@ -144,6 +144,14 @@ impl RunArtifacts {
         std::fs::write(self.file(name)?, self.redact(text))
     }
 
+    /// Writes a text log of one actor's session (`alice/app.log`) after
+    /// redaction.
+    pub fn write_actor_text(&self, actor: &str, name: &str, text: &str) -> io::Result<()> {
+        let dir = self.dir.join(safe_segment(actor)?);
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join(safe_segment(name)?), self.redact(text))
+    }
+
     /// Appends one JSON line, redacted on the value tree before escaping.
     pub fn append_jsonl<T: Serialize>(&self, name: &str, value: &T) -> io::Result<()> {
         use std::io::Write;

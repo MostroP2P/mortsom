@@ -1,6 +1,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use mostro_core::prelude::{NOSTR_INFO_EVENT_KIND, NOSTR_ORDER_EVENT_KIND};
+use mostro_core::prelude::{
+    NOSTR_INFO_EVENT_KIND, NOSTR_ORDER_EVENT_KIND, NOSTR_RATING_EVENT_KIND,
+};
 use nostr_sdk::prelude::{EventBuilder, FinalizeEvent, Keys, Kind, Tag};
 
 use super::*;
@@ -104,8 +106,20 @@ fn scope_matches_only_run_evidence() {
         &[&["p", &stranger.public_key().to_hex()]],
     );
     let stranger_info = event(&stranger, Kind::Custom(NOSTR_INFO_EVENT_KIND), &[]);
+    // A rating names the rated trade key, never an order id the run knows.
+    let rating = event(
+        &daemon,
+        Kind::Custom(NOSTR_RATING_EVENT_KIND),
+        &[&["d", &stranger.public_key().to_hex()]],
+    );
+    let stranger_rating = event(&stranger, Kind::Custom(NOSTR_RATING_EVENT_KIND), &[]);
 
     assert!(scope.matches(&info));
+    assert!(
+        scope.matches(&rating),
+        "the daemon's rating events are run evidence"
+    );
+    assert!(!scope.matches(&stranger_rating));
     assert!(scope.matches(&my_order));
     assert!(!scope.matches(&other_order));
     assert!(scope.matches(&dm_to_alice));

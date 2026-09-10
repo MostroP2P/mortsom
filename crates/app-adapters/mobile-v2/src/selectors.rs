@@ -56,6 +56,10 @@ impl Ids {
     pub const ORDER_CREATE_CURRENCY: &'static str = "order.create.currency";
     pub const ORDER_CREATE_CURRENCY_SEARCH: &'static str = "order.create.currency.search";
     pub const ORDER_CREATE_FIAT_AMOUNT: &'static str = "order.create.fiat_amount";
+    // Range orders: the toggle replaces the single amount with a min/max pair.
+    pub const ORDER_CREATE_RANGE: &'static str = "order.create.range";
+    pub const ORDER_CREATE_FIAT_MIN: &'static str = "order.create.fiat_min";
+    pub const ORDER_CREATE_FIAT_MAX: &'static str = "order.create.fiat_max";
     pub const ORDER_CREATE_PAYMENT_METHOD: &'static str = "order.create.payment_method";
     pub const ORDER_CREATE_PRICE_TYPE: &'static str = "order.create.price_type";
     pub const ORDER_CREATE_SATS_AMOUNT: &'static str = "order.create.sats_amount";
@@ -80,6 +84,8 @@ impl Ids {
     pub const TRADE_DISPUTE: &'static str = "trade.dispute";
     pub const TRADE_DISPUTE_CONFIRM: &'static str = "trade.dispute.confirm";
     pub const TRADE_RATE: &'static str = "trade.rate";
+    pub const TRADE_RATE_SUBMIT: &'static str = "trade.rate.submit";
+    pub const TRADE_RATE_CLOSE: &'static str = "trade.rate.close";
     // Buyer invoice and hold invoice payment.
     //
     // There is no generate/confirm pair: with a wallet connected v2 asks NWC
@@ -143,6 +149,9 @@ impl Ids {
         Self::ORDER_CREATE_CURRENCY,
         Self::ORDER_CREATE_CURRENCY_SEARCH,
         Self::ORDER_CREATE_FIAT_AMOUNT,
+        Self::ORDER_CREATE_RANGE,
+        Self::ORDER_CREATE_FIAT_MIN,
+        Self::ORDER_CREATE_FIAT_MAX,
         Self::ORDER_CREATE_PAYMENT_METHOD,
         Self::ORDER_CREATE_PRICE_TYPE,
         Self::ORDER_CREATE_SATS_AMOUNT,
@@ -165,6 +174,8 @@ impl Ids {
         Self::TRADE_DISPUTE,
         Self::TRADE_DISPUTE_CONFIRM,
         Self::TRADE_RATE,
+        Self::TRADE_RATE_SUBMIT,
+        Self::TRADE_RATE_CLOSE,
         Self::INVOICE_NWC_TEXT,
         Self::INVOICE_MANUAL,
         Self::INVOICE_AMOUNT,
@@ -186,6 +197,11 @@ impl Ids {
     /// Row of `order_id` in the trades list.
     pub fn trades_item(order_id: &str) -> String {
         format!("trades.item.{order_id}")
+    }
+
+    /// Star `score` (1-5) on the rating screen.
+    pub fn rate_star(score: u8) -> String {
+        format!("trade.rate.star.{score}")
     }
 
     /// Currency option in the create-order currency picker.
@@ -270,6 +286,7 @@ mod tests {
             "order.book.item.$",
             "trades.item.$",
             "order.create.currency.$",
+            "trade.rate.star.$",
         ] {
             assert!(dart.contains(prefix), "dynamic prefix {prefix} missing");
         }
@@ -289,6 +306,7 @@ mod tests {
         assert_eq!(Ids::order_book_item("o1"), "order.book.item.o1");
         assert_eq!(Ids::trades_item("o1"), "trades.item.o1");
         assert_eq!(Ids::currency_option("USD"), "order.create.currency.USD");
+        assert_eq!(Ids::rate_star(5), "trade.rate.star.5");
         assert_eq!(
             Ids::relay_item("ws://10.0.2.2:7000"),
             "settings.relays.item.ws://10.0.2.2:7000"

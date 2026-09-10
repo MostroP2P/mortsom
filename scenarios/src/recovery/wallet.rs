@@ -31,7 +31,7 @@ pub const NWC_CANCEL_REQUIRES: &[Capability] = &[
 pub async fn nwc_cancel_payment(ctx: &Context) -> Result<(), ScenarioError> {
     let taken = flow::create_and_take(ctx).await?;
     cancel_payment(ctx, Actor::Alice, &taken.order).await?;
-    flow::expect_cancelled(ctx, &taken.order).await
+    flow::expect_cancelled(ctx, &taken.order, &Actor::ALL).await
 }
 
 /// The seller's wallet is unreachable (device offline) when the order is

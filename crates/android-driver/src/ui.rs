@@ -53,6 +53,13 @@ pub trait UiSession: Send + Sync {
     async fn set_orientation(&self, landscape: bool) -> Result<(), AppiumError>;
     /// Dismiss the soft keyboard if one is up.
     async fn hide_keyboard(&self) -> Result<(), AppiumError>;
+    /// Text logs the session's own processes wrote so far (the app's
+    /// stdout, a driver log), as `(file name, contents)` pairs, for the run
+    /// to keep as evidence before the session and its private directories
+    /// go. Empty for a session that keeps none.
+    async fn diagnostics(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
     /// End the session.
     async fn end(&self) -> Result<(), AppiumError>;
 }

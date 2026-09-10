@@ -4,12 +4,22 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 2/2, Web 2/2.** All four checkpoint cells are accepted.
+**Accepted: Linux 10/10, Web 10/10.** Every scenario of the happy-path and cancellation families (spec
+section 8) is accepted on both platforms. All 2026-09-10 runs are on the Mortsom-owned stack (daemon
+`f17567fc…`) with the app at `e8d7c06` (branch `feat/mortsom-range-and-rating-ids`).
 
-| Scenario | Linux | Web |
-|---|---|---|
-| `happy_sell` | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528` | **Accepted** 2026-09-09, run `20260909T025026Z-034b13e4fb91` |
-| `happy_buy` | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763` | **Accepted** 2026-09-09, run `20260909T033857Z-e7b88a390989` |
+| Scenario | Family | Linux | Web |
+|---|---|---|---|
+| `happy_sell` | happy-path | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528`; again 2026-09-10 in the smoke family run, `20260910T010851Z-c8c1699bbd7d` | **Accepted** 2026-09-09, run `20260909T025026Z-034b13e4fb91`; again 2026-09-10, `20260910T021340Z-75803664d039` |
+| `happy_buy` | happy-path | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763`; again 2026-09-10 in the smoke family run, `20260910T010635Z-39af8ec35ee8` | **Accepted** 2026-09-09, run `20260909T033857Z-e7b88a390989`; again 2026-09-10, `20260910T020954Z-4903a85e9ad9` |
+| `range_order` | happy-path | **Accepted** 2026-09-10, run `20260910T005840Z-947a61b7b662` | **Accepted** 2026-09-10, run `20260910T022005Z-f7291e5a978f` |
+| `market_price_order` | happy-path | **Accepted** 2026-09-10, run `20260910T000326Z-0addeab149ad` | **Accepted** 2026-09-10, run `20260910T021649Z-1e0e801e1aa5` |
+| `full_trade_with_rating` | happy-path | **Accepted** 2026-09-10, run `20260910T010128Z-5fb05c5eaf84` | **Accepted** 2026-09-10, run `20260910T020544Z-f942ddcef9b1` |
+| `cancel_before_taken` | cancellation | **Accepted** 2026-09-10, run `20260910T000205Z-e9bffac02708`; again in the smoke family run, `20260910T010459Z-d19a13953368` | **Accepted** 2026-09-10, run `20260910T011431Z-eea18b36f496` |
+| `cancel_after_take_unpaid` | cancellation | **Accepted** 2026-09-10, run `20260910T003143Z-95733e80e9ec` (the daemon republished the order as pending 175 s after the take) | **Accepted** 2026-09-10, run `20260910T012237Z-b281ee1c1439` (family batch) |
+| `taker_cancel_at_taken` | cancellation | **Accepted** 2026-09-10, run `20260910T002521Z-4b4fde2673ae` | **Accepted** 2026-09-10, run `20260910T011604Z-5d1f4ddb0661` (family batch) |
+| `cooperative_cancel` | cancellation | **Accepted** 2026-09-10, run `20260910T002711Z-e02786ef112e` | **Accepted** 2026-09-10, run `20260910T011803Z-17007d8cd2a8` (family batch) |
+| `unilateral_cancel_rejected` | cancellation | **Accepted** 2026-09-10, run `20260910T002921Z-704f54b3ff05` | **Accepted** 2026-09-10, run `20260910T012017Z-0e1186dbd6e7` (family batch) |
 
 ## Live attempts
 
@@ -17,6 +27,15 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260910T015130Z-a242d7d4309a` | Web | full_trade_with_rating | Bring-up: Alice onboarded; Bob's browser session dropped during launch (`clear app: error sending request`), so the identity check saw one identity | Environment. Resolved by `cleanup` (`20260910T015130Z`, no order, storage removed). Re-run passed; the family was then run one scenario at a time |
+| `20260910T012740Z-39a56d852673` | Web | full_trade_with_rating (first of the `--tag happy-path` batch) | Order created, taken, invoice provided, hold `ab508538…` paid by Alice; both browsers then closed their connections at once | Environment: the host attempted to suspend at 01:29:06 (`systemd-suspend.service` in the system log) and both Chromium sessions died. The batch stopped and listed the rest as not run. `cleanup` run `20260910T013000Z-1ffcb8135701` reopened the retained profiles, cancelled cooperatively, verified the hold refunded (0 settled records) and removed the profiles |
+| `20260910T005258Z-ca31cbded8af` | Linux | range_order | Trade settled; the daemon sent the remainder's `new-order` to the next trade key, the app received it and left it untouched | The daemon's payload names no trade keys (a create's confirmation does not either), so the adoption check on `seller_trade_pubkey` never matched. App `e8d7c06` adopts by the trade index the daemon echoes from the release. Cleanup healthy; the unadopted remainder expired on the daemon |
+| `20260910T004513Z-b3c91a139dce` | Linux | range_order | Trade settled; the daemon created the remainder and sent its `new-order` to the next trade key | The app's bulk kind-14 filter refresh was not confirmed by the relay before the release went out and the message never reached the handler. App `2917ecc` also opens the per-trade subscription a create relies on for the next key, awaited before publishing. Cleanup healthy |
+| `20260910T003606Z-d7a4dab2ed18` | Linux | range_order | Trade settled (hold 1612 sats, payout 1596 sats, once each) | Daemon: `handle_child_order failed (Release without NextTrade); skipping remainder`. App v2 sent no `next_trade` in the release, so no remainder was ever published. App `83d9b8a` derives a fresh trade key for a range order it sold, covers it and sends it as `NextTrade`; the remainder's `new-order` is adopted as a maker trade. Cleanup healthy |
+| `20260910T002034Z-5cf09c98d9c3` | Linux | taker_cancel_at_taken | The daemon republished the order and Alice's client resynced it to pending (app `8e12332`, seen in the client log the harness now keeps) | Harness: `wait_app_state` read the pay-invoice form Alice still had open from the take, which reports `waiting-payment` for as long as it is on screen. Fixed in `c7e8b67`: a wait for pending, cancelled or expired reads the trade detail. Cleanup healthy |
+| `20260910T001441Z-2f47e5c93651` | Linux | taker_cancel_at_taken | As below, with the app fix built in | Could not be diagnosed: the client's own log lived in the profile cleanup removes. Harness `d945470` keeps `app.log` (and ChromeDriver's `driver.log`) per actor in the run artifacts. Cleanup healthy |
+| `20260910T000547Z-0d37e4dd35e1` | Linux | taker_cancel_at_taken | Bob cancelled; the daemon republished the order as pending and sent Alice a `new-order` with the order in pending | App v2 applied `new-order` only to a create it was waiting for, so Alice's trade stayed `waiting-payment` until the 30-minute stale sweep. App `8e12332` resyncs a waiting maker trade to pending on that message. Cleanup healthy |
+| `20260909T235802Z-9f7e720e17bf` | Linux | cancel_before_taken | Alice cancelled her pending order; her app and the relay showed it cancelled | Harness: `expect_cancelled` asked Bob's app too, and Bob never listed an order he had not touched. Fixed in `c7e8b67`: only the order's parties are asked. Cleanup healthy, no payment |
 | `20260909T180201Z-8743a4025779` | Linux | happy_buy | **Passed** on the Mortsom-owned stack (`mortsom stack up`, no Ortsom checkout) | None. Hold and payout settled once each; order resolved |
 | `20260909T175938Z-905f12907c4d` | Linux | happy_sell | **Passed** on the Mortsom-owned stack (`mortsom stack up`, no Ortsom checkout) | None. Hold and payout settled once each; order resolved |
 | `20260909T122846Z-31d9701a9752` | Web | happy_sell | **Passed** on app `f1f995f` (book event checked for order id, lock acquisition races the request promise) | None. Hold and payout settled once each |
