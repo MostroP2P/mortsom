@@ -689,25 +689,9 @@ fn list_scenarios() -> ExitCode {
         eprintln!("{e}");
         return ExitCode::from(2);
     }
-    for def in mortsom_scenario_kit::registry::all() {
-        println!(
-            "{:<28} tags=[{}] requires=[{}] moves_value={} timeout={}s{}",
-            def.name,
-            def.tags.join(","),
-            def.requires
-                .iter()
-                .map(|c| c.as_str())
-                .collect::<Vec<_>>()
-                .join(","),
-            def.moves_value,
-            def.timeout_secs,
-            if def.needs_solver {
-                " needs=solver"
-            } else {
-                ""
-            }
-        );
-    }
+    let defs = mortsom_scenario_kit::registry::all();
+    let listing = crate::scenario_list::Listing::from_defs(&defs);
+    print!("{}", listing.render(use_color()));
     ExitCode::SUCCESS
 }
 
