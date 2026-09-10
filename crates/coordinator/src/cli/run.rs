@@ -151,7 +151,12 @@ impl Batch {
             }
             Some(Outcome::Failed { category, message }) => {
                 self.failed += 1;
-                format!("failed ({category}): {message}")
+                // One line per scenario: a driver error carries its own
+                // line breaks and would push the rest of the row off it.
+                format!(
+                    "failed ({category}): {}",
+                    message.split_whitespace().collect::<Vec<_>>().join(" ")
+                )
             }
             None => {
                 self.failed += 1;
@@ -526,6 +531,27 @@ mod batch_tests {
         assert!(report.contains("happy_buy                    not started (see above)"));
         assert!(report.contains("range_order                  not run"));
         assert!(report.ends_with("1 passed, 0 failed, 0 skipped, 2 not run"));
+    }
+
+    /// A driver's multi-line error stays on the scenario's one line.
+    #[test]
+    fn a_multi_line_failure_message_is_reported_on_one_line() {
+        let mut batch = Batch::default();
+        batch.record(
+            "happy_sell",
+            Some(view(
+                Some(Outcome::Failed {
+                    category: FailureCategory::TestInfrastructure,
+                    message: "session deleted\n  (Session info: chrome=152)".into(),
+                }),
+                Some(false),
+            )),
+        );
+        let report = batch.render();
+        assert!(
+            report.contains("session deleted (Session info: chrome=152) · cleanup UNRESOLVED"),
+            "{report}"
+        );
     }
 
     /// A run that ended without a result for its scenario is a failure,
