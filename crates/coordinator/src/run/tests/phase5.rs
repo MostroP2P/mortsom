@@ -3,33 +3,6 @@
 
 use super::*;
 
-#[tokio::test]
-async fn live_relay_control_restarts_only_the_run_container() {
-    use mortsom_scenario_kit::recovery::RelayControl;
-
-    let docker = Arc::new(FakeDocker::default());
-    let handle = RelayHandle {
-        container_name: "mortsom-relay-run1".into(),
-        host_port: 1,
-        data_dir: std::env::temp_dir(),
-        image: "img".into(),
-    };
-    let control = super::relay_control::LiveRelayControl::new(
-        Arc::clone(&docker) as Arc<dyn ContainerRuntime>,
-        Arc::new(AlwaysReady),
-        handle,
-        Duration::from_millis(50),
-    );
-    control.restart().await.unwrap();
-    assert_eq!(
-        *docker.restarted.lock().unwrap(),
-        vec!["mortsom-relay-run1".to_owned()]
-    );
-    // Replay against a port nobody listens on fails closed.
-    let err = control.replay(&["{}".into()]).await.unwrap_err();
-    assert!(!err.is_empty());
-}
-
 /// Every Phase 5 scenario that moves no value runs end to end against the
 /// fakes; the two relay-replay ones fail honestly because nothing listens
 /// on the fake relay port, the relay restart fails because the stack relay

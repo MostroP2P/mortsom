@@ -56,7 +56,6 @@ jobs = 1
 artifacts_dir = "./artifacts"
 cleanup = true
 allow_mainnet = true              # canary is explicit; MORTSOM_MAINNET_CONFIRM is still required at run time
-infra_retries = 0                 # a canary failure requires review, never a retry that spends more
 fiat_code = "USD"
 fiat_amount = 1
 payment_method = "cash"

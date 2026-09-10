@@ -439,11 +439,10 @@ mod lane_examples {
     }
 
     #[test]
-    fn canary_example_opts_into_mainnet_with_tiny_caps_and_no_retries() {
+    fn canary_example_opts_into_mainnet_with_tiny_caps() {
         let config = load("canary.example.toml");
         assert_eq!(config.run.lane, Lane::Canary);
         assert!(config.run.allow_mainnet);
-        assert_eq!(config.run.infra_retries, 0);
         assert!(config.run.max_run_spend_sats <= 3000);
     }
 

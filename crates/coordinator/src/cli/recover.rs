@@ -222,7 +222,7 @@ async fn recover(
         chromedriver: web_tools.chromedriver.path,
         browser: web_tools.browser.path,
     };
-    let adapter = select_adapter(&config);
+    let adapter = select_adapter();
     let env = |name: &str| std::env::var(name).ok();
     let net = RealNet::with_daemon_timeout(std::time::Duration::from_secs(
         config.mostro.health_timeout_secs,

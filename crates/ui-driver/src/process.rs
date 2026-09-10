@@ -274,8 +274,8 @@ impl Drop for TokioChild {
 #[async_trait]
 impl CommandRunner for TokioRunner {
     async fn run(&self, command: &Command, timeout: Duration) -> Result<Output, ProcessError> {
-        // stdin is closed so a tool that prompts (avdmanager asks about
-        // custom hardware profiles) fails fast instead of hanging.
+        // stdin is closed so a tool that prompts fails fast instead of
+        // hanging on input nobody will type.
         let future = tokio::process::Command::new(&command.program)
             .args(&command.args)
             .envs(&command.env)

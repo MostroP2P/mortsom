@@ -3,12 +3,17 @@
 # and AT-SPI; Web clients need Chromium and ChromeDriver; the stack needs the
 # Docker socket (`-v /var/run/docker.sock:/var/run/docker.sock`).
 #
+# Debian rather than Ubuntu: Ubuntu's `chromium` and `chromium-driver`
+# packages are transitional stubs for the snap, which cannot run in a
+# container, while Debian ships the real browser and driver.
+#
 # Nothing in this image is Mortsom logic; it is the host contract that
 # `mortsom doctor` verifies.
 
-FROM ubuntu:24.04
+FROM debian:bookworm-slim
 
 ARG RUST_VERSION=1.94.0
+ARG WASM_PACK_VERSION=0.15.0
 ARG FLUTTER_VERSION=3.41.9
 ARG DOCKER_CLI_VERSION=28.3.3
 
@@ -22,15 +27,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git unzip xz-utils zip \
       pkg-config build-essential clang cmake ninja-build protobuf-compiler \
       libgtk-3-dev libsecret-1-dev \
-      xvfb dbus-daemon gnome-keyring at-spi2-core imagemagick \
+      xvfb dbus gnome-keyring at-spi2-core imagemagick \
       chromium chromium-driver python3 \
     && apt-get clean
 
-# Rust, pinned.
+# Rust, pinned; nightly with rust-src for the app's Web (wasm) build.
 RUN curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain ${RUST_VERSION} \
     && rustup component add rustfmt clippy \
     && rustup target add wasm32-unknown-unknown \
-    && cargo install wasm-pack
+    && rustup toolchain install nightly --profile minimal --component rust-src \
+    && cargo install --locked wasm-pack --version ${WASM_PACK_VERSION}
 
 # Flutter, pinned, for building the app under test on Linux and Web.
 RUN git clone --depth 1 --branch ${FLUTTER_VERSION} https://github.com/flutter/flutter.git ${FLUTTER_HOME} \

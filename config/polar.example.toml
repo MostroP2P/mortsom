@@ -75,7 +75,6 @@ cleanup = true
 allow_mainnet = false             # stays false on Polar: with both wallets on LND nodes, value
                                   # scenarios clear at startup once every node proves it runs on
                                   # regtest -- no MORTSOM_MAINNET_CONFIRM needed for worthless sats
-infra_retries = 1                 # only classified infrastructure failures retry, at most once
 fiat_code = "USD"                 # order drafts
 fiat_amount = 1
 payment_method = "cash"

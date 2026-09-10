@@ -130,7 +130,7 @@ async fn unknown_scenario_and_missing_capability_are_explicit() {
         matches!(&summary.results[0].outcome, Outcome::Skipped { reason } if reason.contains("lacks"))
     );
     assert!(
-        summary.relay.is_none(),
+        summary.actors.is_empty(),
         "nothing was started for a fully gated run"
     );
 }
@@ -351,7 +351,7 @@ async fn a_silent_driver_cannot_hold_the_run_open_while_it_is_photographed() {
 }
 
 #[tokio::test]
-async fn infrastructure_failure_after_payment_is_final_and_cleanup_cancels_open_orders() {
+async fn infrastructure_failure_after_payment_leaves_cleanup_to_cancel_the_open_order() {
     mortsom_scenarios::link();
     let world = world(true);
     let mut adapter = FakeAdapter::full();
@@ -369,10 +369,7 @@ async fn infrastructure_failure_after_payment_is_final_and_cleanup_cancels_open_
 
     assert!(!summary.passed);
     let result = &summary.results[0];
-    assert_eq!(
-        result.attempts, 1,
-        "no retry once the attempt paid the hold invoice"
-    );
+    assert_eq!(result.attempts, 1, "a scenario runs exactly once");
     assert!(matches!(
         &result.outcome,
         Outcome::Failed {
@@ -390,16 +387,6 @@ async fn infrastructure_failure_after_payment_is_final_and_cleanup_cancels_open_
         1000,
         "exactly one payment"
     );
-    let timeline = std::fs::read_to_string(
-        world
-            .dir
-            .path()
-            .join("artifacts")
-            .join(summary.run_id.as_str())
-            .join(files::TIMELINE),
-    )
-    .unwrap();
-    assert!(timeline.contains("retry refused"));
 }
 
 fn noop(_ctx: &Context) -> ScenarioFuture<'_> {

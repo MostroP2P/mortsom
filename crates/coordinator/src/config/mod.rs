@@ -17,7 +17,7 @@ use thiserror::Error;
 pub use load::{ConfigDiagnosis, LOCAL_OVERLAY_SUFFIX};
 pub use maintenance::{ArtifactSettings, MaintenanceConfig};
 pub use publication::PublishSettings;
-pub use run::{MAX_INFRA_RETRIES, MAX_RUN_SPEND_CEILING_SATS, RunConfig};
+pub use run::{MAX_RUN_SPEND_CEILING_SATS, RunConfig};
 pub use ui::UiConfig;
 
 /// The complete, resolved and validated Mortsom configuration.

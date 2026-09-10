@@ -434,8 +434,8 @@ pub async fn run(cli: Cli) -> ExitCode {
     }
 }
 
-/// The adapter for `mobile.profile` (validated by the config loader).
-pub fn select_adapter(_config: &Config) -> Arc<dyn mortsom_app_contract::AppAdapter> {
+/// The adapter of the one profile the config loader accepts, `mobile-v2`.
+pub fn select_adapter() -> Arc<dyn mortsom_app_contract::AppAdapter> {
     Arc::new(MobileV2Adapter::new())
 }
 

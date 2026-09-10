@@ -1,3 +1,7 @@
+> Archived: written while the Android emulator path still existed. The crate it calls
+> `crates/android-driver` is now `crates/ui-driver` (`mortsom-ui-driver`) and holds only the
+> shared `UiSession` boundary, the process runner and the WebDriver client.
+
 # Crate selection rationale (archived; written against spec v0.3 §12)
 
 Mortsom is Rust only. Linux/Web with app v2 and the persistent Ortsom regtest stack are the current
@@ -21,7 +25,11 @@ stable releases at the time of writing; see `Cargo.toml` for the exact pins.
 | Scenario registry | `inventory` | Scenarios self-register with name, tags, required capabilities and timeout; the runner never keeps a hand-maintained list. |
 | Tests | `mockall`, `wiremock`, `tempfile`, `assert_cmd`, `cargo-llvm-cov` | Trait fakes for Docker/adb/WebDriver/wallet, a mock Appium server, CLI end-to-end tests and coverage. |
 
-## Crate layout
+#> Archived: written while the Android emulator path still existed. The crate it calls
+> `crates/android-driver` is now `crates/ui-driver` (`mortsom-ui-driver`) and holds only the
+> shared `UiSession` boundary, the process runner and the WebDriver client.
+
+# Crate layout
 
 The workspace mirrors the package tree in the archived spec §12:
 
@@ -29,7 +37,7 @@ The workspace mirrors the package tree in the archived spec §12:
 crates/common              mortsom-common              secrets, run ids, errors, clock, logging
 crates/coordinator         mortsom-coordinator         config, runner, budgets, cleanup, reporting, `mortsom` binary
 crates/app-contract        mortsom-app-contract        AppAdapter trait, normalized states, capabilities
-crates/android-driver      mortsom-ui-driver      shared UI/process traits, WebDriver, legacy Android primitives
+crates/android-driver      mortsom-android-driver      shared UI/process traits, WebDriver, legacy Android primitives
 crates/desktop-driver      mortsom-desktop-driver      native AT-SPI, Chromium, private server and actor lifecycle
 crates/environment         mortsom-environment         Docker relay, daemon readiness, wallet provisioning
 crates/observers           mortsom-observers           UI, notification, relay, wallet, artifact observers
@@ -47,7 +55,11 @@ Chromium/ChromeDriver for Web. The local regtest stack supplies mostrod, relay a
 Legacy Android additionally uses the Android SDK, Appium/UiAutomator2 and a JDK; it retains its existing
 wallet/mainnet guards.
 
-## Linux and Web execution (September 2026)
+#> Archived: written while the Android emulator path still existed. The crate it calls
+> `crates/android-driver` is now `crates/ui-driver` (`mortsom-ui-driver`) and holds only the
+> shared `UiSession` boundary, the process runner and the WebDriver client.
+
+# Linux and Web execution (September 2026)
 
 The desktop driver uses `atspi 0.30.0` (latest stable checked with `cargo info`)
 for Linux's public accessibility protocol, with its Tokio/zbus transport.
@@ -60,7 +72,11 @@ Ortsom remains an external CLI owning persistent regtest infrastructure.
 and invokes Ortsom with that immutable image reference. At verification, latest and v0.18.7 resolve to digest
 `sha256:bff406d11fc90436c9f7da5186f5976a63ae7ee1d711a6636d36205421cbda31`.
 
-### Client bundle fingerprints
+##> Archived: written while the Android emulator path still existed. The crate it calls
+> `crates/android-driver` is now `crates/ui-driver` (`mortsom-ui-driver`) and holds only the
+> shared `UiSession` boundary, the process runner and the WebDriver client.
+
+# Client bundle fingerprints
 
 The coordinator uses `sha2` 0.11.0 (latest stable verified with `cargo info sha2` on
 2026-09-08) for complete bundle content identity. The versioned
@@ -72,7 +88,11 @@ Only explicitly typed public hash fields in run metadata bypass pattern-based
 redaction; registered secrets remain redacted, including in those fields.
 
 
-### Captured clients and offline maintenance
+##> Archived: written while the Android emulator path still existed. The crate it calls
+> `crates/android-driver` is now `crates/ui-driver` (`mortsom-ui-driver`) and holds only the
+> shared `UiSession` boundary, the process runner and the WebDriver client.
+
+# Captured clients and offline maintenance
 
 A run copies the complete app bundle into a private temporary directory before
 launch. Descriptor-relative file access rejects symlinks and special files; the
@@ -100,7 +120,11 @@ platform metadata prevent publication. Strict trading configuration and spend
 caps remain mandatory for `run`.
 
 
-### Durable desktop action and payment ownership
+##> Archived: written while the Android emulator path still existed. The crate it calls
+> `crates/android-driver` is now `crates/ui-driver` (`mortsom-ui-driver`) and holds only the
+> shared `UiSession` boundary, the process runner and the WebDriver client.
+
+# Durable desktop action and payment ownership
 
 Before order submission, a private atomic journal records the actor and known public order IDs. A lost
 confirmation triggers public UI discovery rather than a blind retry. Payment intents record exact hash,

@@ -267,7 +267,7 @@ async fn run_once(
             }
         };
     let docker = DockerCli::default();
-    let adapter = select_adapter(&config);
+    let adapter = select_adapter();
     let env = |name: &str| std::env::var(name).ok();
     let wallets = wallet_factory;
     let net = RealNet::with_daemon_timeout(std::time::Duration::from_secs(

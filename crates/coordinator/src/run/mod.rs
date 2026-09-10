@@ -18,7 +18,6 @@ pub use desktop_factory::{DesktopFactory, DesktopServer, RealDesktopFactory};
 mod farm;
 use farm::Farm;
 pub use farm::{DesktopOptions, TeardownItem};
-mod relay_control;
 mod sink;
 
 use std::collections::BTreeMap;
@@ -33,7 +32,7 @@ use mortsom_common::logging::attach_run_log;
 use mortsom_common::{Redactor, RunId};
 use mortsom_environment::WalletConfig;
 use mortsom_environment::docker::ContainerRuntime;
-use mortsom_environment::relay::{ReadinessProbe, RelayHandle, teardown_relay};
+use mortsom_environment::relay::{ReadinessProbe, RelayHandle};
 use mortsom_observers::relay::RelayObserver;
 use mortsom_observers::wallet::{WalletObserver, WalletReader};
 use mortsom_scenario_kit::budget::{Budget, SpendCaps};
@@ -41,10 +40,9 @@ use mortsom_scenario_kit::cleanup::CleanupRegistry;
 use mortsom_scenario_kit::context::NodeWallet;
 use mortsom_scenario_kit::context::{ActorSession, Context, MainnetClearance, RecoveryTiming};
 use mortsom_scenario_kit::outcome::{Outcome, ScenarioResult};
-use mortsom_scenario_kit::recovery::{NoRelayControl, RelayControl};
+use mortsom_scenario_kit::recovery::NoRelayControl;
 use mortsom_scenario_kit::registry::{ManualPayments, ScenarioDef, required_on, select};
 use mortsom_scenario_kit::timeline::{Timeline, TimelineKind};
-use relay_control::LiveRelayControl;
 use tracing::{error, info, warn};
 
 use crate::artifacts::{RunArtifacts, files};
@@ -365,7 +363,6 @@ struct World<'a> {
     cleanup: Arc<CleanupRegistry>,
     timeline: Arc<Timeline>,
     recorder: Arc<StepRecorder>,
-    relay: Option<RelayHandle>,
     observer: Option<Arc<RelayObserver>>,
     wallets: Option<Arc<WalletObserver>>,
     node_wallets: BTreeMap<String, Arc<dyn NodeWallet>>,
@@ -397,7 +394,6 @@ impl<'a> World<'a> {
             cleanup: Arc::new(CleanupRegistry::default()),
             timeline: Arc::new(Timeline::default()),
             recorder: Arc::new(StepRecorder::default()),
-            relay: None,
             observer: None,
             wallets: None,
             node_wallets: BTreeMap::new(),
@@ -651,19 +647,6 @@ impl<'a> World<'a> {
                 }
             }
             Err(e) => warn!(actor = %actor.actor, error = %e, "actor identity is not a pubkey"),
-        }
-    }
-
-    /// Fault injection over the run relay; refuses when no relay is up.
-    fn relay_control(&self) -> Arc<dyn RelayControl> {
-        match &self.relay {
-            Some(handle) => Arc::new(LiveRelayControl::new(
-                Arc::clone(&self.deps.docker),
-                Arc::clone(&self.deps.probe),
-                handle.clone(),
-                Duration::from_secs(self.config.mostro.health_timeout_secs),
-            )),
-            None => Arc::new(NoRelayControl),
         }
     }
 

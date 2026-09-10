@@ -655,10 +655,11 @@ mod tests {
                 if landscape {
                     return Ok(());
                 }
-                Err(mortsom_ui_driver::error::UiError::NotReady {
-                    url: "x".into(),
-                    timeout: Duration::ZERO,
-                })
+                Err(mortsom_ui_driver::error::UiError::WebDriver(
+                    mortsom_ui_driver::webdriver::WebDriverError::Transport(
+                        "rotation stuck".into(),
+                    ),
+                ))
             }
             async fn exists(&self, _: &str) -> Result<bool, mortsom_ui_driver::error::UiError> {
                 Ok(false)

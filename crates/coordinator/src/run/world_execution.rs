@@ -40,7 +40,7 @@ impl World<'_> {
             relay: Arc::clone(observer),
             wallets: Arc::clone(wallets),
             node_wallets: self.node_wallets.clone(),
-            relay_control: self.relay_control(),
+            relay_control: Arc::new(NoRelayControl),
             solver: self
                 .solver
                 .clone()
@@ -79,16 +79,8 @@ impl World<'_> {
                 }
             }
         }
-        // A client keeps its actor storage across attempts, so a retry would
-        // reopen a half-finished trade rather than start a fresh one.
-        let result = execute_scenario(
-            def,
-            &ctx,
-            0,
-            &summary.app_profile,
-            summary.app_version.clone(),
-        )
-        .await;
+        let result =
+            execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()).await;
         if let Some(journal) = self.desktop.recovery.as_ref()
             && let Err(error) = recovery::discover(&ctx, journal).await
         {
@@ -171,25 +163,6 @@ impl World<'_> {
                 },
                 format!("{} items", summary.farm_teardown.len()),
             );
-        }
-        if let Some(relay) = self.relay.take() {
-            let (teardown, logs) = teardown_relay(self.deps.docker.as_ref(), &relay, false).await;
-            if let Err(e) = self.artifacts.write_text("relay-container.log", &logs) {
-                self.evidence_failed(summary, "relay-container.log", e);
-            }
-            summary.checks.push(
-                "relay-teardown",
-                if teardown.removed {
-                    CheckStatus::Pass
-                } else {
-                    CheckStatus::Fail
-                },
-                teardown
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "container removed".into()),
-            );
-            summary.relay_teardown = Some(teardown);
         }
         if let Err(e) = self.artifacts.write_text(
             files::TIMELINE,

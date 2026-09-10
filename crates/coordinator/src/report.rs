@@ -15,7 +15,7 @@ pub struct RunReport<'a> {
     pub run_id: &'a RunId,
     /// Lane.
     pub lane: Lane,
-    /// Command name (`relay smoke`, `device smoke`, `app setup`).
+    /// Command name (`run`, `cleanup`, `relay smoke`).
     pub command: &'a str,
     /// App profile when an app was involved.
     pub app_profile: Option<&'a str>,

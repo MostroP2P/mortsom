@@ -23,8 +23,10 @@ impl PublishSettings {
         Self::load_inner(path, stack_dir, None, lookup)
     }
 
-    /// Resolves stack credential references only when the run recorded a platform
-    /// (or none, for a run that never started) and the config references them.
+    /// Like [`Self::load`], after checking that `run_id`'s recorded platform
+    /// metadata is readable: a run whose evidence cannot be trusted is not
+    /// published. Stack credential references still resolve through
+    /// `stack_dir`.
     pub fn load_for_run(
         path: &Path,
         stack_dir: &Path,

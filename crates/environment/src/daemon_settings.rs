@@ -163,8 +163,8 @@ impl DaemonSettings {
     }
 
     /// True when the daemon's relay list contains any of `urls`, treating
-    /// host aliases (`localhost`, `127.0.0.1`, `host.docker.internal`,
-    /// `10.0.2.2`) as the same host.
+    /// host aliases (`localhost`, `127.0.0.1`, `host.docker.internal`) as
+    /// the same host.
     pub fn advertises_any_relay(&self, urls: &[String]) -> bool {
         any_same_relay(&self.nostr.relays, urls)
     }

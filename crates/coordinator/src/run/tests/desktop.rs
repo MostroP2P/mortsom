@@ -16,7 +16,6 @@ async fn missing_stack_metadata_fails_before_creating_clients() {
         .unwrap();
     assert!(!summary.passed);
     assert!(summary.actors.is_empty() && summary.farm_teardown.is_empty());
-    assert!(summary.relay.is_none());
     assert!(summary.results.iter().all(|result| result.attempts == 0));
     assert!(
         summary

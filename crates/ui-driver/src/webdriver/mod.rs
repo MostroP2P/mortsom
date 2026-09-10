@@ -15,8 +15,6 @@ use thiserror::Error;
 pub enum Locator {
     /// `accessibility id` — the app's stable semantic identifier.
     AccessibilityId,
-    /// `id` — a native resource id.
-    ResourceId,
     /// `xpath` — the Web session's semantics selectors.
     XPath,
 }
@@ -26,7 +24,6 @@ impl Locator {
     pub fn using(self) -> &'static str {
         match self {
             Locator::AccessibilityId => "accessibility id",
-            Locator::ResourceId => "id",
             Locator::XPath => "xpath",
         }
     }
@@ -261,21 +258,6 @@ impl Session {
             .await
             .map_err(|e| WebDriverError::Transport(e.to_string()))?;
         unwrap_value(response).await.map(|_| ())
-    }
-}
-
-/// GET `<base>/status`; true when the server answers with `ready: true`.
-pub async fn server_ready(base: &str, timeout: Duration) -> bool {
-    let Ok(http) = reqwest::Client::builder().timeout(timeout).build() else {
-        return false;
-    };
-    let url = format!("{}/status", base.trim_end_matches('/'));
-    match http.get(url).send().await {
-        Ok(response) => unwrap_value(response)
-            .await
-            .map(|v| v.get("ready").and_then(Value::as_bool).unwrap_or(false))
-            .unwrap_or(false),
-        Err(_) => false,
     }
 }
 

@@ -56,7 +56,6 @@ jobs = 1
 artifacts_dir = "env:MORTSOM_ARTIFACTS_DIR"
 cleanup = true
 allow_mainnet = false             # value-moving scenarios also need MORTSOM_MAINNET_CONFIRM
-infra_retries = 1                 # only classified infrastructure failures retry, at most once
 fiat_code = "USD"                 # order drafts
 fiat_amount = 1
 payment_method = "cash"

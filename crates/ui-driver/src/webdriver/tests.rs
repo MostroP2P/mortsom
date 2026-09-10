@@ -148,16 +148,8 @@ async fn source_screenshot_execute_and_timeouts() {
 }
 
 #[tokio::test]
-async fn malformed_responses_and_status_endpoint() {
+async fn malformed_responses() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": {"ready": true}})))
-        .mount(&server)
-        .await;
-    assert!(server_ready(&server.uri(), T).await);
-    assert!(!server_ready("http://127.0.0.1:1", Duration::from_millis(200)).await);
-
     let s = Session::attach(&server.uri(), "zz", T).unwrap();
     Mock::given(method("GET"))
         .and(path("/session/zz/source"))

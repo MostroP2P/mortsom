@@ -48,7 +48,6 @@ jobs:
         run: |
           cp config/ci.example.toml mortsom.toml
           sed -i 's/^allow_mainnet = false/allow_mainnet = true/' mortsom.toml
-          sed -i 's|^artifacts_dir = "./artifacts"|artifacts_dir = "env:MORTSOM_ARTIFACTS_DIR"|' mortsom.toml
       - name: Preflight
         run: cargo run --release -p mortsom-coordinator --bin mortsom -- --config mortsom.toml doctor --platform ${{ matrix.platform }}
       - name: Run
