@@ -4,7 +4,7 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 10/10, Web 3/10.** Every scenario of the happy-path and cancellation families (spec
+**Accepted: Linux 10/10, Web 7/10.** Every scenario of the happy-path and cancellation families (spec
 section 8) is accepted on Linux; the Web cells are being run in the same order. All 2026-09-10 runs are on
 the Mortsom-owned stack (daemon `f17567fc…`) with the app at `e8d7c06` (branch
 `feat/mortsom-range-and-rating-ids`).
@@ -17,10 +17,10 @@ the Mortsom-owned stack (daemon `f17567fc…`) with the app at `e8d7c06` (branch
 | `market_price_order` | happy-path | **Accepted** 2026-09-10, run `20260910T000326Z-0addeab149ad` | Pending |
 | `full_trade_with_rating` | happy-path | **Accepted** 2026-09-10, run `20260910T010128Z-5fb05c5eaf84` | Pending |
 | `cancel_before_taken` | cancellation | **Accepted** 2026-09-10, run `20260910T000205Z-e9bffac02708`; again in the smoke family run, `20260910T010459Z-d19a13953368` | **Accepted** 2026-09-10, run `20260910T011431Z-eea18b36f496` |
-| `cancel_after_take_unpaid` | cancellation | **Accepted** 2026-09-10, run `20260910T003143Z-95733e80e9ec` (the daemon republished the order as pending 175 s after the take) | Pending |
-| `taker_cancel_at_taken` | cancellation | **Accepted** 2026-09-10, run `20260910T002521Z-4b4fde2673ae` | Pending |
-| `cooperative_cancel` | cancellation | **Accepted** 2026-09-10, run `20260910T002711Z-e02786ef112e` | Pending |
-| `unilateral_cancel_rejected` | cancellation | **Accepted** 2026-09-10, run `20260910T002921Z-704f54b3ff05` | Pending |
+| `cancel_after_take_unpaid` | cancellation | **Accepted** 2026-09-10, run `20260910T003143Z-95733e80e9ec` (the daemon republished the order as pending 175 s after the take) | **Accepted** 2026-09-10, run `20260910T012237Z-b281ee1c1439` (family batch) |
+| `taker_cancel_at_taken` | cancellation | **Accepted** 2026-09-10, run `20260910T002521Z-4b4fde2673ae` | **Accepted** 2026-09-10, run `20260910T011604Z-5d1f4ddb0661` (family batch) |
+| `cooperative_cancel` | cancellation | **Accepted** 2026-09-10, run `20260910T002711Z-e02786ef112e` | **Accepted** 2026-09-10, run `20260910T011803Z-17007d8cd2a8` (family batch) |
+| `unilateral_cancel_rejected` | cancellation | **Accepted** 2026-09-10, run `20260910T002921Z-704f54b3ff05` | **Accepted** 2026-09-10, run `20260910T012017Z-0e1186dbd6e7` (family batch) |
 
 ## Live attempts
 
