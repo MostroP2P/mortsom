@@ -20,6 +20,41 @@ use crate::waits::{stays_absent, wait_until};
 
 /// Poll interval for state observations.
 pub const STATE_POLL: Duration = Duration::from_secs(3);
+/// How many observations in a row may fail on infrastructure (a driver
+/// request that errors, a session that is gone) before a wait gives up
+/// with that failure instead of polling out its deadline. One failed
+/// request is a blip the next poll answers; a run of them is a dead
+/// session, and waiting fifteen minutes to say so helps nobody.
+pub const MAX_CONSECUTIVE_INFRA_FAILURES: u32 = 3;
+
+/// Counts consecutive infrastructure failures of one wait.
+#[derive(Default)]
+struct InfraFailures(u32);
+
+impl InfraFailures {
+    /// Records the outcome of one observation; `Some(error)` when the wait
+    /// must stop because the infrastructure keeps failing.
+    fn observe(
+        &mut self,
+        result: Result<(), &mortsom_app_contract::AdapterError>,
+    ) -> Option<ScenarioError> {
+        match result {
+            Err(e) if e.category == mortsom_common::FailureCategory::TestInfrastructure => {
+                self.0 += 1;
+                (self.0 >= MAX_CONSECUTIVE_INFRA_FAILURES).then(|| {
+                    ScenarioError::new(
+                        e.category,
+                        format!("{} observations in a row failed: {}", self.0, e.message),
+                    )
+                })
+            }
+            _ => {
+                self.0 = 0;
+                None
+            }
+        }
+    }
+}
 /// Wire kind of order events.
 /// Kind of the daemon's public, replaceable order event.
 pub const ORDER_EVENT_KIND: u16 = 38383;
@@ -152,12 +187,20 @@ pub async fn wait_app_state(
     let session = ctx.actor(actor)?;
     let device = session.device(ctx.ui_timeout);
     let last: Mutex<LastSeen> = Mutex::new(LastSeen::default());
+    let infra: Mutex<InfraFailures> = Mutex::new(InfraFailures::default());
     let found = wait_until(ctx.state_timeout, STATE_POLL, || async {
         let observed = if leaves_the_take(expected) {
             ctx.adapter.observe_order_detail(&device, order).await
         } else {
             ctx.adapter.observe_order(&device, order).await
         };
+        if let Some(dead) = infra
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .observe(observed.as_ref().map(|_| ()))
+        {
+            return Some(Err(dead));
+        }
         match observed {
             Ok(state) if state.state == expected => Some(Ok(state.raw_label)),
             // A terminal state other than the expected one can never become
@@ -239,8 +282,17 @@ pub async fn wait_app_label(
     let session = ctx.actor(actor)?;
     let device = session.device(ctx.ui_timeout);
     let normalize = |raw: &str| raw.trim().to_ascii_lowercase().replace(['_', ' '], "-");
+    let infra: Mutex<InfraFailures> = Mutex::new(InfraFailures::default());
     let found = wait_until(ctx.state_timeout, STATE_POLL, || async {
-        match ctx.adapter.observe_order_detail(&device, order).await {
+        let observed = ctx.adapter.observe_order_detail(&device, order).await;
+        if let Some(dead) = infra
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .observe(observed.as_ref().map(|_| ()))
+        {
+            return Some(Err(dead));
+        }
+        match observed {
             Ok(state) if labels.contains(&normalize(&state.raw_label).as_str()) => {
                 Some(Ok(state.raw_label))
             }
@@ -278,12 +330,20 @@ pub async fn wait_app_state_in(
     let session = ctx.actor(actor)?;
     let device = session.device(ctx.ui_timeout);
     let read_detail = accepted.iter().all(|state| leaves_the_take(*state));
+    let infra: Mutex<InfraFailures> = Mutex::new(InfraFailures::default());
     let found = wait_until(timeout, STATE_POLL, || async {
         let observed = if read_detail {
             ctx.adapter.observe_order_detail(&device, order).await
         } else {
             ctx.adapter.observe_order(&device, order).await
         };
+        if let Some(dead) = infra
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .observe(observed.as_ref().map(|_| ()))
+        {
+            return Some(Err(dead));
+        }
         match observed {
             Ok(state) if accepted.contains(&state.state) => Some(Ok(state)),
             Ok(state) if state.state.is_terminal() => Some(Err(ScenarioError::product(format!(
@@ -332,22 +392,32 @@ pub async fn expect_closed(
 ) -> Result<(), ScenarioError> {
     let session = ctx.actor(actor)?;
     let device = session.device(ctx.ui_timeout);
+    let infra: Mutex<InfraFailures> = Mutex::new(InfraFailures::default());
     let found = wait_until(timeout, STATE_POLL, || async {
-        let listed = match ctx.adapter.owned_orders(&device).await {
+        let listing = ctx.adapter.owned_orders(&device).await;
+        if let Some(dead) = infra
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .observe(listing.as_ref().map(|_| ()))
+        {
+            return Some(Err(dead));
+        }
+        let listed = match listing {
             Ok(ids) => ids.contains(&order.id),
             Err(_) => return None,
         };
         if !listed {
-            return Some("no longer listed".to_owned());
+            return Some(Ok("no longer listed".to_owned()));
         }
         match ctx.adapter.observe_order_detail(&device, order).await {
-            Ok(state) if state.state.is_terminal() => Some(format!("`{}`", state.raw_label)),
+            Ok(state) if state.state.is_terminal() => Some(Ok(format!("`{}`", state.raw_label))),
             _ => None,
         }
     })
     .await;
     match found {
-        Some(how) => {
+        Some(Err(dead)) => Err(dead),
+        Some(Ok(how)) => {
             ctx.timeline.push(
                 TimelineKind::UiState,
                 Some(actor.as_str()),

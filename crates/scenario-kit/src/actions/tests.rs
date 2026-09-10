@@ -485,3 +485,166 @@ mod form_left_open {
         assert_eq!(*adapter.detail_reads.lock().unwrap(), 0);
     }
 }
+
+/// A session that is gone fails every observation the same way. The wait
+/// says so after a few of them instead of polling out its deadline.
+mod dead_session {
+    use std::sync::{Arc, Mutex};
+    use std::time::Duration;
+
+    use async_trait::async_trait;
+    use mortsom_app_contract::{
+        AdapterError, AppOrderState, DeviceContext, OrderReference, OrderState,
+    };
+
+    use super::super::*;
+    use crate::test_support::{StateAdapter, context};
+
+    struct Dead(StateAdapter);
+
+    #[async_trait]
+    impl mortsom_app_contract::AppAdapter for Dead {
+        fn profile(&self) -> mortsom_app_contract::AppProfile {
+            self.0.profile()
+        }
+        fn capabilities(&self) -> mortsom_app_contract::CapabilitySet {
+            self.0.capabilities()
+        }
+        async fn build(
+            &self,
+            c: &mortsom_app_contract::BuildContext,
+            r: &dyn mortsom_android_driver::process::CommandRunner,
+        ) -> Result<mortsom_app_contract::Apk, AdapterError> {
+            self.0.build(c, r).await
+        }
+        async fn onboard(
+            &self,
+            d: &DeviceContext<'_>,
+            e: &mortsom_app_contract::TestEnvironment,
+        ) -> Result<mortsom_app_contract::Identity, AdapterError> {
+            self.0.onboard(d, e).await
+        }
+        async fn displayed_identity(
+            &self,
+            d: &DeviceContext<'_>,
+        ) -> Result<mortsom_app_contract::Identity, AdapterError> {
+            self.0.displayed_identity(d).await
+        }
+        async fn configure_node_and_relay(
+            &self,
+            d: &DeviceContext<'_>,
+            e: &mortsom_app_contract::TestEnvironment,
+        ) -> Result<(), AdapterError> {
+            self.0.configure_node_and_relay(d, e).await
+        }
+        async fn configure_nwc(
+            &self,
+            d: &DeviceContext<'_>,
+            l: &str,
+            u: &mortsom_common::Secret,
+        ) -> Result<mortsom_app_contract::WalletConnection, AdapterError> {
+            self.0.configure_nwc(d, l, u).await
+        }
+        async fn create_order(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &mortsom_app_contract::OrderDraft,
+        ) -> Result<mortsom_app_contract::VisibleOrder, AdapterError> {
+            self.0.create_order(d, o).await
+        }
+        async fn find_and_take_order(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<(), AdapterError> {
+            self.0.find_and_take_order(d, o).await
+        }
+        async fn pay_hold_invoice(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+            p: mortsom_app_contract::PaymentPath,
+        ) -> Result<mortsom_app_contract::PaymentHandoff, AdapterError> {
+            self.0.pay_hold_invoice(d, o, p).await
+        }
+        async fn provide_buyer_invoice(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+            i: Option<&mortsom_common::Secret>,
+        ) -> Result<Option<mortsom_common::Secret>, AdapterError> {
+            self.0.provide_buyer_invoice(d, o, i).await
+        }
+        async fn confirm_fiat_sent(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<(), AdapterError> {
+            self.0.confirm_fiat_sent(d, o).await
+        }
+        async fn release(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<(), AdapterError> {
+            self.0.release(d, o).await
+        }
+        async fn cancel_if_open(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<mortsom_app_contract::CancelOutcome, AdapterError> {
+            self.0.cancel_if_open(d, o).await
+        }
+        async fn visible_actions(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<Vec<String>, AdapterError> {
+            self.0.visible_actions(d, o).await
+        }
+        async fn cancel_payment(
+            &self,
+            d: &DeviceContext<'_>,
+            o: &OrderReference,
+        ) -> Result<(), AdapterError> {
+            self.0.cancel_payment(d, o).await
+        }
+        async fn owned_orders(&self, _: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
+            Err(AdapterError::infrastructure("invalid session id"))
+        }
+        async fn observe_order(
+            &self,
+            _: &DeviceContext<'_>,
+            _: &OrderReference,
+        ) -> Result<AppOrderState, AdapterError> {
+            Err(AdapterError::infrastructure("invalid session id"))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_dead_session_ends_the_wait_after_a_few_failures_not_at_the_deadline() {
+        let mut ctx = context(Arc::new(Dead(StateAdapter(Mutex::new(
+            OrderState::Pending,
+        )))));
+        ctx.state_timeout = Duration::from_secs(30);
+        let order = OrderReference::new("o1");
+        let started = std::time::Instant::now();
+
+        let err = wait_app_state(&ctx, Actor::Alice, &order, OrderState::Cancelled)
+            .await
+            .unwrap_err();
+        let closed = expect_closed(&ctx, Actor::Alice, &order, Duration::from_secs(30))
+            .await
+            .unwrap_err();
+
+        for e in [&err, &closed] {
+            assert_eq!(
+                e.category,
+                mortsom_common::FailureCategory::TestInfrastructure
+            );
+            assert!(e.message.contains("in a row"), "{e}");
+        }
+        assert!(started.elapsed() < Duration::from_secs(25), "gave up early");
+    }
+}

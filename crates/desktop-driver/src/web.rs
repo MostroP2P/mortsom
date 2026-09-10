@@ -302,16 +302,26 @@ impl UiSession for WebSession {
     async fn hide_keyboard(&self) -> Result<(), AppiumError> {
         Ok(())
     }
-    /// The ChromeDriver log: what the browser was asked and what it
-    /// answered, the record of a session that died mid-trade.
+    /// Chromium's own log, which carries the page's console and with it
+    /// the Rust core's bridge log (`app.log`, as on Linux), and the
+    /// ChromeDriver log: what the browser was asked and what it answered,
+    /// the record of a session that died mid-trade.
     async fn diagnostics(&self) -> Vec<(String, String)> {
         let slot = self.runtime.lock().await;
         let Some(runtime) = slot.as_ref() else {
             return Vec::new();
         };
-        std::fs::read_to_string(runtime.root.join("driver.log"))
-            .map(|text| vec![("driver.log".to_owned(), text)])
-            .unwrap_or_default()
+        [
+            ("app.log", runtime.profile.join("chrome_debug.log")),
+            ("driver.log", runtime.root.join("driver.log")),
+        ]
+        .into_iter()
+        .filter_map(|(name, path)| {
+            std::fs::read_to_string(path)
+                .ok()
+                .map(|text| (name.to_owned(), text))
+        })
+        .collect()
     }
     async fn end(&self) -> Result<(), AppiumError> {
         let mut slot = self.runtime.lock().await;
