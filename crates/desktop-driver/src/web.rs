@@ -146,10 +146,7 @@ impl WebSession {
         let log = runtime.root.join("driver.log");
         runtime.driver = Some(
             self.runner
-                .spawn(
-                    &Command::new(&self.driver, &driver_args()),
-                    Some(&log),
-                )
+                .spawn(&Command::new(&self.driver, &driver_args()), Some(&log))
                 .await?,
         );
         let driver = runtime
