@@ -15,7 +15,7 @@ single-scenario runs and prints a family report; the run keeps each client's own
 `artifacts/<run>/<actor>/app.log` (`driver.log` on Web).
 
 The live runs found and fixed three app v2 gaps, all on the app branch `feat/mortsom-range-and-rating-ids`
-(unpushed, on top of `main` at `d49f3c1`): the range and star identifiers (`20e7e90`); a maker's trade
+(PR MostroP2P/app#410, on top of `main` at `d49f3c1`): the range and star identifiers (`20e7e90`); a maker's trade
 stuck at `waiting-payment` after the taker walked away, because `new-order` was only applied to a create
 being waited for (`8e12332`); and range orders never leaving a remainder, because the release carried no
 `NextTrade` and no client would have adopted the child (`83d9b8a`, `2917ecc`, `e8d7c06`). The ledger has
@@ -47,9 +47,9 @@ No journal is retained, no harness process is left running, and the regtest stac
    still build by default. Put them behind a Cargo feature so the default workspace is desktop and Web only.
 2. **Measure coverage.** The spec requires 80% of lines under `cargo llvm-cov`. Last measured at 83.88%
    several commits ago (`5c764ba`); it has not been re-run since.
-3. **Open the app PR** for `feat/mortsom-range-and-rating-ids` against MostroP2P/app `main` (four
-   commits; the Flutter contract test and the Rust core tests pass), and merge the Mortsom branch
-   `feat/happy-path-and-cancellation-scenarios`.
+3. **Land the two branches.** App PR MostroP2P/app#410 (`feat/mortsom-range-and-rating-ids`, five
+   commits) is open; merge it, then the Mortsom branch `feat/happy-path-and-cancellation-scenarios`.
+   Until #410 is merged, build the clients from the app branch, not from `main`.
 4. **Further families**, when the operator asks. Spec section 8.1 lists them; section 14 is the roadmap.
    The buy-side range remainder (a buyer maker's `next_trade` goes in `fiat-sent`) is not driven yet.
 
@@ -58,7 +58,7 @@ No journal is retained, no harness process is left running, and the regtest stac
 | Project | Path | Branch |
 |---|---|---|
 | Mortsom | `/home/negrunch/dev/mortsom` | `main` |
-| App v2 | `/home/negrunch/dev/mobilev2` | `feat/mortsom-range-and-rating-ids` at `e8d7c06` (on `main` at `d49f3c1`; PR to open) |
+| App v2 | `/home/negrunch/dev/mobilev2` | `feat/mortsom-range-and-rating-ids` at `e8d7c06` (PR #410 against `main`) |
 
 Ortsom's own stack (`ortsom-regtest`) was stopped, not destroyed, to free the shared host ports; `docker
 compose -p ortsom-regtest start` brings it back, after `mortsom stack down`. The two cannot run together.
