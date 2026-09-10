@@ -4,8 +4,10 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 11/11, Web 11/11.** Every scenario of the happy-path and cancellation families (spec
-section 8) is accepted on both platforms. All 2026-09-10 runs are on the Mortsom-owned stack (daemon
+**Accepted: Linux 14/14, Web 11/14.** Every scenario of the happy-path, cancellation and expiration
+families (spec section 8) is accepted on Linux; the Web expiration cells are being run. The expiration
+family ran on a stack rebuilt on 2026-09-10 for the declared `order_expiration_secs` of 600 (daemon
+`6e18952f…`), with the clients built from app branch `feat/mortsom-order-expiry-define` (`d03afed`). All 2026-09-10 runs are on the Mortsom-owned stack (daemon
 `f17567fc…`) with the app at `e8d7c06` (branch `feat/mortsom-range-and-rating-ids`).
 
 | Scenario | Family | Linux | Web |
@@ -20,9 +22,9 @@ section 8) is accepted on both platforms. All 2026-09-10 runs are on the Mortsom
 | `cancel_after_take_unpaid` | cancellation | **Accepted** 2026-09-10, run `20260910T003143Z-95733e80e9ec` (the daemon republished the order as pending 175 s after the take) | **Accepted** 2026-09-10, run `20260910T012237Z-b281ee1c1439` (family batch) |
 | `taker_cancel_at_taken` | cancellation | **Accepted** 2026-09-10, run `20260910T002521Z-4b4fde2673ae` | **Accepted** 2026-09-10, run `20260910T011604Z-5d1f4ddb0661` (family batch) |
 | `cooperative_cancel` | cancellation | **Accepted** 2026-09-10, run `20260910T002711Z-e02786ef112e` | **Accepted** 2026-09-10, run `20260910T011803Z-17007d8cd2a8` (family batch) |
-| `pending_order_expires` | expiration | Pending | Pending |
-| `hold_invoice_expires` | expiration | Pending | Pending |
-| `buyer_invoice_deadline` | expiration | Pending | Pending |
+| `pending_order_expires` | expiration | **Accepted** 2026-09-10, run `20260910T070452Z-25eb0c704486` (the daemon expired the order 657 s after creation; the book carried `canceled`) | Pending |
+| `hold_invoice_expires` | expiration | **Accepted** 2026-09-10, run `20260910T064434Z-c663f82bd44a` (family batch) | Pending |
+| `buyer_invoice_deadline` | expiration | **Accepted** 2026-09-10, run `20260910T064027Z-fce2b2d421e5` (family batch; hold refunded) | Pending |
 | `unilateral_cancel_rejected` | cancellation | **Accepted** 2026-09-10, run `20260910T002921Z-704f54b3ff05` | **Accepted** 2026-09-10, run `20260910T012017Z-0e1186dbd6e7` (family batch) |
 
 ## Live attempts
@@ -31,6 +33,7 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260910T064831Z-14808998df9f` | Linux | pending_order_expires | The daemon expired the untaken order 657 s after creation (`Order id … is expired`, status `expired`) | Harness: the wait asked the relay for `expired`, but the daemon publishes every order closed without a trade as `canceled` on the book (`create_status_tags`). Fixed in `73b753c`: the book's `canceled` is accepted for an expired untaken order. Cleanup healthy, no payment |
 | `20260910T054152Z-af527d9fa59c` | Web | range_buy_order | Bob's create form: currency picked | The currency picker was still open when the harness typed the range minimum (`text-entry deadline: public value mismatch`); the known Web picker flake. No order was created (no daemon order event in the run window), so the journal was resolved with `cleanup --attribute-order bob=none`. Re-run passed |
 | `20260910T015130Z-a242d7d4309a` | Web | full_trade_with_rating | Bring-up: Alice onboarded; Bob's browser session dropped during launch (`clear app: error sending request`), so the identity check saw one identity | Environment. Resolved by `cleanup` (`20260910T015130Z`, no order, storage removed). Re-run passed; the family was then run one scenario at a time |
 | `20260910T012740Z-39a56d852673` | Web | full_trade_with_rating (first of the `--tag happy-path` batch) | Order created, taken, invoice provided, hold `ab508538…` paid by Alice; both browsers then closed their connections at once | Environment: the host attempted to suspend at 01:29:06 (`systemd-suspend.service` in the system log) and both Chromium sessions died. The batch stopped and listed the rest as not run. `cleanup` run `20260910T013000Z-1ffcb8135701` reopened the retained profiles, cancelled cooperatively, verified the hold refunded (0 settled records) and removed the profiles |
