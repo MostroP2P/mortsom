@@ -29,7 +29,7 @@ fn fixture(root: &Path) -> String {
         let profile = if run == "run-a" {
             "mobile-v2"
         } else {
-            "mobile-legacy"
+            "profile-b"
         };
         let dir = root.join("artifacts").join(run);
         std::fs::create_dir_all(&dir).unwrap();
@@ -69,10 +69,8 @@ fn default_desktop_artifact_commands_need_neither_exported_runtime_refs_nor_a_st
     command(root.path())
         .args(["cleanup", "run-a"])
         .assert()
-        .code(1)
-        .stdout(predicates::str::contains(
-            "desktop recovery is not implemented",
-        ));
+        .success()
+        .stdout(predicates::str::contains("nothing to reopen"));
     command(root.path())
         .args([
             "publish",

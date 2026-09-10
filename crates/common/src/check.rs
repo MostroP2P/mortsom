@@ -155,7 +155,7 @@ mod tests {
     fn healthy_when_no_failures() {
         let mut report = DoctorReport::default();
         report.push("docker", CheckStatus::Pass, "29.7");
-        report.push("appium", CheckStatus::Warn, "driver missing");
+        report.push("chromedriver", CheckStatus::Warn, "old driver");
         report.push("wallet bob", CheckStatus::Skip, "no network");
 
         assert!(report.is_healthy());
@@ -194,7 +194,7 @@ mod color_tests {
         let mut report = DoctorReport::default();
         report.push("docker", CheckStatus::Pass, "29.7");
         report.push("wallet bob", CheckStatus::Fail, "empty");
-        report.push("appium", CheckStatus::Warn, "old");
+        report.push("chromedriver", CheckStatus::Warn, "old");
         report.push("network", CheckStatus::Skip, "no relay");
         report
     }

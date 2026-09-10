@@ -1,21 +1,8 @@
 use super::*;
 
-fn desktop_options(world: &World) -> RunOptions {
-    let mut options = opts(&["happy_sell"]);
-    let source = world.dir.path().join("bundle");
-    std::fs::create_dir_all(&source).unwrap();
-    std::fs::write(source.join("mostro"), b"fixture").unwrap();
-    options.desktop = Some(crate::run::DesktopOptions {
-        recovery: None,
-        resume: false,
-        provenance: crate::provenance::BuildProvenance::prebuilt(),
-        platform: mortsom_desktop_driver::Platform::Linux,
-        artifact: world.dir.path().join("missing-app"),
-        xvfb: "missing-Xvfb".into(),
-        browser: "missing-browser".into(),
-        chromedriver: "missing-driver".into(),
-        bundle: Arc::new(crate::fingerprint::CapturedBundle::capture(&source).unwrap()),
-    });
+fn no_stack(world: &World) -> RunOptions {
+    let mut options = opts_in(world, &["happy_sell"]);
+    options.stack = None;
     options
 }
 
@@ -23,13 +10,12 @@ fn desktop_options(world: &World) -> RunOptions {
 async fn missing_stack_metadata_fails_before_creating_clients() {
     mortsom_scenarios::link();
     let world = world(true);
-    let options = desktop_options(&world);
+    let options = no_stack(&world);
     let summary = run(&world, Arc::new(FakeAdapter::full()), options, true)
         .await
         .unwrap();
     assert!(!summary.passed);
     assert!(summary.actors.is_empty() && summary.farm_teardown.is_empty());
-    assert!(summary.relay.is_none());
     assert!(summary.results.iter().all(|result| result.attempts == 0));
     assert!(
         summary
@@ -44,7 +30,7 @@ async fn missing_stack_metadata_fails_before_creating_clients() {
 async fn a_different_stack_identity_is_rejected_before_network_or_client_startup() {
     mortsom_scenarios::link();
     let world = world(true);
-    let mut options = desktop_options(&world);
+    let mut options = opts_in(&world, &["happy_sell"]);
     options.stack = Some(
         serde_json::from_value(serde_json::json!({
             "daemon_pubkey": nostr_sdk::prelude::Keys::generate().public_key().to_hex(),
@@ -80,7 +66,7 @@ async fn a_different_stack_identity_is_rejected_before_network_or_client_startup
 #[test]
 fn initial_environment_retains_public_bundle_and_stack_facts_before_clients_start() {
     let world = world(true);
-    let mut options = desktop_options(&world);
+    let mut options = opts_in(&world, &["happy_sell"]);
     options.stack = Some(
         serde_json::from_value(serde_json::json!({
             "daemon_pubkey": nostr_sdk::prelude::Keys::generate().public_key().to_hex(),

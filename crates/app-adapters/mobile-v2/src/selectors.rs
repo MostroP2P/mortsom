@@ -1,5 +1,5 @@
-//! Semantic identifiers of the v2 app (`Semantics.identifier`, Android
-//! `resource-id`), as specified in `docs/mobile-v2-inventory.md`. Where a
+//! Semantic identifiers of the v2 app (`Semantics.identifier`), as
+//! specified in `docs/history/mobile-v2-inventory.md`. Where a
 //! screen exists in both applications the identifier is the same so the
 //! contract stays one vocabulary; v2-only widgets have v2-only ids. The
 //! contract test `selectors_match_the_v2_app_contract` proves the mirror
@@ -308,12 +308,12 @@ mod tests {
         assert_eq!(Ids::currency_option("USD"), "order.create.currency.USD");
         assert_eq!(Ids::rate_star(5), "trade.rate.star.5");
         assert_eq!(
-            Ids::relay_item("ws://10.0.2.2:7000"),
-            "settings.relays.item.ws://10.0.2.2:7000"
+            Ids::relay_item("ws://127.0.0.1:7000"),
+            "settings.relays.item.ws://127.0.0.1:7000"
         );
         assert_eq!(
-            Ids::relay_delete("ws://10.0.2.2:7000"),
-            "settings.relays.item.ws://10.0.2.2:7000.delete"
+            Ids::relay_delete("ws://127.0.0.1:7000"),
+            "settings.relays.item.ws://127.0.0.1:7000.delete"
         );
     }
 
@@ -321,12 +321,12 @@ mod tests {
     /// did not would look for a row that is never rendered.
     #[test]
     fn a_relay_keeps_one_identifier_however_its_url_is_written() {
-        let canonical = "settings.relays.item.ws://10.0.2.2:7000";
+        let canonical = "settings.relays.item.ws://127.0.0.1:7000";
         for written in [
-            "ws://10.0.2.2:7000",
-            "ws://10.0.2.2:7000/",
-            "ws://10.0.2.2:7000//",
-            "  ws://10.0.2.2:7000/  ",
+            "ws://127.0.0.1:7000",
+            "ws://127.0.0.1:7000/",
+            "ws://127.0.0.1:7000//",
+            "  ws://127.0.0.1:7000/  ",
         ] {
             assert_eq!(Ids::relay_item(written), canonical, "{written}");
         }

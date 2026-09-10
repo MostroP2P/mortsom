@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use super::*;
-use mortsom_android_driver::process::tests_support::FakeRunner;
+use mortsom_ui_driver::process::tests_support::FakeRunner;
 
 fn expected() -> ExpectedImage {
     ExpectedImage {

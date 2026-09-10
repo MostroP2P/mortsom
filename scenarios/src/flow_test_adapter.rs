@@ -1,5 +1,4 @@
 use super::*;
-use mortsom_android_driver::process::CommandRunner;
 use mortsom_app_contract::*;
 
 /// How long the fixture daemon takes to reap an abandoned take or to
@@ -142,14 +141,10 @@ impl AppAdapter for Adapter {
     fn profile(&self) -> AppProfile {
         AppProfile {
             name: "fixture".into(),
-            package: "fixture".into(),
         }
     }
     fn capabilities(&self) -> CapabilitySet {
         CapabilitySet::default()
-    }
-    async fn build(&self, _: &BuildContext, _: &dyn CommandRunner) -> Result<Apk, AdapterError> {
-        unreachable!()
     }
     async fn onboard(
         &self,

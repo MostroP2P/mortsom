@@ -1,7 +1,5 @@
 //! Offline artifact inspection, publication and recorded-resource cleanup.
 use crate::doctor::{HostProbe, RealHost};
-use mortsom_android_driver::process::TokioRunner;
-use mortsom_environment::docker::DockerCli;
 use std::process::ExitCode;
 
 pub(super) fn publish_command(
@@ -161,13 +159,9 @@ pub(super) async fn cleanup_command(
         eprintln!("{hint}");
         return ExitCode::from(2);
     }
-    let env = |name: &str| std::env::var(name).ok();
-    let deps = crate::cleanup_run::CleanupDeps {
-        runner: &TokioRunner,
-        docker: &DockerCli::default(),
-        env: &env,
-    };
-    let summary = crate::cleanup_run::cleanup_run(&config, &run_id, &deps).await;
+    let summary = crate::cleanup_run::cleanup_run(&config, &run_id);
+    // Nothing async remains in this path; the command signature stays async
+    // for the recovery branch above.
     print!("{}", summary.render());
     if summary.clean {
         ExitCode::SUCCESS

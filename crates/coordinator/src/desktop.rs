@@ -1,7 +1,7 @@
 //! Preparation of v2 clients attached to the regtest stack.
 use crate::{Config, run::DesktopOptions, stack::StackContext};
-use mortsom_android_driver::process::{Command, CommandRunner, run_ok};
 use mortsom_desktop_driver::Platform;
+use mortsom_ui_driver::process::{Command, CommandRunner, run_ok};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -39,9 +39,6 @@ pub async fn prepare(
     runner: &dyn CommandRunner,
     host: &dyn crate::doctor::HostProbe,
 ) -> Result<DesktopOptions, String> {
-    if platform == Platform::Android {
-        return Err("Android uses the APK builder".into());
-    }
     let (artifact, provenance) = match artifact {
         Some(path) => (
             path.canonicalize().map_err(|e| e.to_string())?,
@@ -124,7 +121,6 @@ async fn build_artifact(
     let artifact = source.join(match platform {
         Platform::Linux => "build/linux/x64/release/bundle/mostro",
         Platform::Web => "build/web",
-        Platform::Android => return Err("Android uses the APK builder".into()),
     });
     Ok((artifact, provenance))
 }
@@ -201,11 +197,10 @@ pub fn validate_artifact(
             Ok(())
         }
         Platform::Linux => Err("Linux artifact must be an executable regular file".into()),
-        Platform::Android => Err("Android uses the APK builder".into()),
     }
 }
 
-fn build_error(error: mortsom_android_driver::process::ProcessError) -> String {
+fn build_error(error: mortsom_ui_driver::process::ProcessError) -> String {
     mortsom_common::Redactor::default().redact(&error.to_string())
 }
 
@@ -269,7 +264,6 @@ mod tests {
             cmd.args
                 .contains(&"--dart-define=MORTSOM_RELAYS=ws://127.0.0.1:7001".into())
         );
-        assert!(!cmd.display().contains("10.0.2.2"));
     }
 }
 

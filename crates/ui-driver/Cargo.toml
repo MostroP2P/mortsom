@@ -1,6 +1,6 @@
 [package]
-name = "mortsom-android-driver"
-description = "Mortsom Android driver: W3C WebDriver client for Appium/UiAutomator2 plus AVD, emulator and adb primitives."
+name = "mortsom-ui-driver"
+description = "Mortsom UI driver foundation: the UiSession boundary, the process runner and the W3C WebDriver client."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -29,6 +29,5 @@ testing = []
 workspace = true
 
 [dev-dependencies]
-toml = { workspace = true }
 tempfile = { workspace = true }
 wiremock = { workspace = true }

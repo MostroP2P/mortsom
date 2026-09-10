@@ -4,8 +4,8 @@ End-to-end test harness for the Mostro app v2. It drives two real copies of the 
 complete Lightning trade against a local regtest stack, and proves the trade from the outside: what each
 user saw, what the daemon published and what each wallet actually paid or received.
 
-Clients run on **Linux** (default) or **Web**, both built from the same Flutter source. Android emulators are a
-frozen, selectable option. [spec.md](spec.md) is normative; this file is the operator guide.
+Clients run on **Linux** (default) or **Web**, both built from the same Flutter source. [spec.md](spec.md) is
+normative; this file is the operator guide.
 
 ## Status
 
@@ -214,9 +214,6 @@ export MORTSOM_CHROMEDRIVER=/path/to/chromedriver
 export MORTSOM_WEBDRIVER_VERBOSE=1   # keep ChromeDriver's full log (DevTools events) as <actor>/driver.log
 ```
 
-Android: `--platform android` with an explicit legacy configuration. Instructions are archived in
-[docs/history/legacy-android.md](docs/history/legacy-android.md).
-
 ## Reading results
 
 | Artifact | Contents |
@@ -255,7 +252,7 @@ run is refused while a journal is unresolved. Details and failure categories are
 |---|---|
 | `stack up`, `stack status`, `stack logs [service]`, `stack down` | Regtest environment lifecycle and service logs |
 | `doctor --platform linux\|web` | Read-only prerequisite and readiness checks |
-| `run <scenario>... [--tag <family>] [--platform linux\|web\|android]` | Scenarios with isolated clients, caps and cleanup; on Linux and Web one run per scenario |
+| `run <scenario>... [--tag <family>] [--platform linux\|web]` | Scenarios with isolated clients, caps and cleanup; one run per scenario |
 | `cleanup <run-id>` | Recover a run's identities and orders |
 | `list` | Registered scenarios |
 | `publish <run-id> --out <dir>` | Redacted evidence bundle |

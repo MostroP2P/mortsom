@@ -330,13 +330,6 @@ mod form_left_open {
         fn capabilities(&self) -> mortsom_app_contract::CapabilitySet {
             self.detail.capabilities()
         }
-        async fn build(
-            &self,
-            c: &mortsom_app_contract::BuildContext,
-            r: &dyn mortsom_android_driver::process::CommandRunner,
-        ) -> Result<mortsom_app_contract::Apk, AdapterError> {
-            self.detail.build(c, r).await
-        }
         async fn onboard(
             &self,
             d: &DeviceContext<'_>,
@@ -509,13 +502,6 @@ mod dead_session {
         }
         fn capabilities(&self) -> mortsom_app_contract::CapabilitySet {
             self.0.capabilities()
-        }
-        async fn build(
-            &self,
-            c: &mortsom_app_contract::BuildContext,
-            r: &dyn mortsom_android_driver::process::CommandRunner,
-        ) -> Result<mortsom_app_contract::Apk, AdapterError> {
-            self.0.build(c, r).await
         }
         async fn onboard(
             &self,

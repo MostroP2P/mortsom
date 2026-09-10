@@ -113,7 +113,6 @@ mod tests {
             artifacts_dir: "a".into(),
             cleanup: true,
             allow_mainnet,
-            infra_retries: 0,
             fiat_code: "USD".into(),
             fiat_amount: 1,
             payment_method: "cash".into(),

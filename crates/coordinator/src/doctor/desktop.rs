@@ -1,8 +1,8 @@
 //! Read-only prerequisites for clients attached to the regtest stack.
 use std::path::{Path, PathBuf};
 
-use mortsom_android_driver::process::CommandRunner;
 use mortsom_desktop_driver::Platform;
+use mortsom_ui_driver::process::CommandRunner;
 
 use super::{CheckStatus, DoctorReport, HostProbe, NetProbes, net, report_config};
 use crate::{Config, stack::StackContext};

@@ -6,8 +6,8 @@
 //! daemon's published dispute event and, at the end, where the escrow
 //! went.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{Capability, OrderReference, OrderState};
+use mortsom_common::Actor;
 use mortsom_scenario_kit::actions::{self, Dispute, dispute_status};
 use mortsom_scenario_kit::context::{Context, ScenarioError};
 

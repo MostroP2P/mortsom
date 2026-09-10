@@ -4,8 +4,8 @@
 //! expired and failed-payout invoices need a controllable wallet provider
 //! (spec §6) and are not modelled against real NWC wallets.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{Capability, OrderState};
+use mortsom_common::Actor;
 use mortsom_scenario_kit::cancel::cancel_payment;
 use mortsom_scenario_kit::context::{Context, ScenarioError};
 use mortsom_scenario_kit::recovery::payment_fails_while_offline;

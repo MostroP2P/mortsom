@@ -11,14 +11,14 @@ async fn session(server: &MockServer) -> Session {
     Mock::given(method("POST"))
         .and(path("/session"))
         .and(body_partial_json(
-            json!({"capabilities": {"alwaysMatch": {"platformName": "Android"}}}),
+            json!({"capabilities": {"alwaysMatch": {"browserName": "chrome"}}}),
         ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "value": {"sessionId": "s1", "capabilities": {}}
         })))
         .mount(server)
         .await;
-    Session::create(&server.uri(), json!({"platformName": "Android"}), T)
+    Session::create(&server.uri(), json!({"browserName": "chrome"}), T)
         .await
         .unwrap()
 }
@@ -114,7 +114,9 @@ async fn source_screenshot_execute_and_timeouts() {
         .await;
     Mock::given(method("POST"))
         .and(path("/session/s1/execute/sync"))
-        .and(body_partial_json(json!({"script": "mobile: activateApp"})))
+        .and(body_partial_json(
+            json!({"script": "return document.title"}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": {"ok": true}})))
         .mount(&server)
         .await;
@@ -135,7 +137,7 @@ async fn source_screenshot_execute_and_timeouts() {
     assert_eq!(s.source().await.unwrap(), "<hierarchy/>");
     assert_eq!(s.screenshot_png().await.unwrap(), b"\x89PNG\r\n\x1a\n");
     let out = s
-        .execute("mobile: activateApp", vec![json!({"appId": "x"})])
+        .execute("return document.title", vec![json!({"page": "x"})])
         .await
         .unwrap();
     assert_eq!(out["ok"], true);
@@ -146,16 +148,8 @@ async fn source_screenshot_execute_and_timeouts() {
 }
 
 #[tokio::test]
-async fn malformed_responses_and_status_endpoint() {
+async fn malformed_responses() {
     let server = MockServer::start().await;
-    Mock::given(method("GET"))
-        .and(path("/status"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value": {"ready": true}})))
-        .mount(&server)
-        .await;
-    assert!(server_ready(&server.uri(), T).await);
-    assert!(!server_ready("http://127.0.0.1:1", Duration::from_millis(200)).await);
-
     let s = Session::attach(&server.uri(), "zz", T).unwrap();
     Mock::given(method("GET"))
         .and(path("/session/zz/source"))
@@ -183,7 +177,7 @@ async fn malformed_responses_and_status_endpoint() {
     ));
     let err = s.text(&Element { id: "e".into() }).await.unwrap_err();
     assert!(matches!(err, WebDriverError::Server { .. }));
-    assert_eq!(Locator::UiAutomator.using(), "-android uiautomator");
+    assert_eq!(Locator::XPath.using(), "xpath");
     let decoded: serde_json::Map<String, Value> = decode(json!({"a": 1})).unwrap();
     assert_eq!(decoded["a"], 1);
 }

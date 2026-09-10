@@ -10,10 +10,10 @@ use mortsom_environment::wallet::{WalletProbe, WalletProbeError};
 use nostr_sdk::prelude::PublicKey;
 
 use super::*;
+use crate::Config;
 use mortsom_environment::WalletConfig;
 
 /// Daemon test identity: nsec and its hex pubkey.
-const NSEC: &str = "nsec13as48eum93hkg7plv526r9gjpa0uc52zysqm93pmnkca9e69x6tsdjmdxd";
 const HEX: &str = "8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51";
 const ALICE: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=71a8c14c1407c113601079c4302dab36460f0ccd0ad506f1f2dc73b5100e4f3c";
 const BOB: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=0000000000000000000000000000000000000000000000000000000000000001";
@@ -31,7 +31,6 @@ struct FakeHost {
 impl FakeHost {
     fn full() -> Self {
         let mut host = Self::default();
-        host.env.insert("ANDROID_HOME".into(), "/sdk".into());
         host.env.insert("MORTSOM_MOSTRO_PUBKEY".into(), HEX.into());
         host.env.insert(
             "MORTSOM_MOSTRO_SETTINGS_FILE".into(),
@@ -39,36 +38,19 @@ impl FakeHost {
         );
         host.env.insert("MORTSOM_ALICE_NWC".into(), ALICE.into());
         host.env.insert("MORTSOM_BOB_NWC".into(), BOB.into());
-        for tool in ["docker", "appium", "java", "flutter"] {
+        for tool in ["docker", "flutter", "cargo", "git", "Xvfb"] {
             host.tools
                 .insert(tool.into(), PathBuf::from(format!("/bin/{tool}")));
         }
         for path in [
-            "/sdk",
-            "/sdk/emulator/emulator",
-            "/sdk/platform-tools/adb",
-            "/sdk/cmdline-tools/latest/bin/avdmanager",
-            "/sdk/system-images/android-35/google_apis/x86_64",
-            "../mobile/pubspec.yaml",
+            "../mobilev2/pubspec.yaml",
+            "../mobilev2/lib/main_mortsom.dart",
+            "../mobilev2/scripts/frb-generate.sh",
         ] {
             host.existing.insert(PathBuf::from(path));
         }
         host.outputs
             .insert("docker info --format".into(), ok("29.7.2\n"));
-        host.outputs
-            .insert("appium --version".into(), ok("2.11.0\n"));
-        host.outputs.insert(
-            "appium driver list".into(),
-            ok("{\"uiautomator2\":{\"version\":\"3.0.0\"}}"),
-        );
-        host.outputs.insert(
-            "java -version".into(),
-            CommandOutput {
-                success: true,
-                stdout: String::new(),
-                stderr: "openjdk version \"17.0.19\"\n".into(),
-            },
-        );
         host.outputs.insert(
             "flutter --version".into(),
             ok("Flutter 3.41.9 • channel stable\n"),
@@ -106,7 +88,7 @@ impl HostProbe for FakeHost {
         let name = program.file_name().unwrap().to_string_lossy().into_owned();
         // Key by program plus the first two bare-word arguments, so
         // `docker info --format ...` keys as `docker info` and
-        // `appium --version` keys as `appium --version`.
+        // `flutter --version` keys as `flutter --version`.
         let words: Vec<&str> = args
             .iter()
             .copied()
@@ -217,22 +199,6 @@ fn example_config() -> tempfile::TempDir {
     dir
 }
 
-/// Writes a healthy daemon settings file into `dir` and points the fake
-/// host's env and filesystem at it.
-fn with_settings(host: &mut FakeHost, dir: &tempfile::TempDir) {
-    let path = dir.path().join("settings.toml");
-    std::fs::write(
-        &path,
-        format!(
-            "[nostr]\nnsec_privkey = '{NSEC}'\nrelays = ['ws://host.docker.internal:7000']\n[mostro]\nexpiration_seconds = 900\nexpiration_hours = 24\n[lightning]\nhold_invoice_expiration_window = 300\ninvoice_expiration_window = 3600\n"
-        ),
-    )
-    .unwrap();
-    let text = path.to_string_lossy().into_owned();
-    host.env.insert("MORTSOM_MOSTRO_SETTINGS_FILE".into(), text);
-    host.existing.insert(path);
-}
-
 fn status_of<'a>(report: &'a DoctorReport, name: &str) -> &'a CheckResult {
     report
         .checks
@@ -241,63 +207,26 @@ fn status_of<'a>(report: &'a DoctorReport, name: &str) -> &'a CheckResult {
         .unwrap_or_else(|| panic!("missing check {name}: {:#?}", report.checks))
 }
 
+/// The offline doctor names every missing secret and tool, and never
+/// touches the stack directory or the network.
 #[tokio::test]
-async fn healthy_host_and_network_produce_a_healthy_report() {
-    let dir = example_config();
-    let mut host = FakeHost::full();
-    with_settings(&mut host, &dir);
-
-    let report = run_doctor(
-        &dir.path().join("mortsom.toml"),
-        &DoctorOptions::default(),
-        &host,
-        &FakeNet::healthy(),
-    )
-    .await;
-
-    assert!(report.is_healthy(), "{}", report.render());
-    for name in [
-        "config",
-        "docker",
-        "android-sdk",
-        "emulator",
-        "adb",
-        "avdmanager",
-        "system-image",
-        "appium",
-        "uiautomator2",
-        "java",
-        "flutter",
-        "mobile-app",
-        "daemon-settings",
-        "daemon-pubkey",
-        "daemon-relays",
-        "daemon-transport",
-        "relay-port",
-        "mostro-daemon",
-        "mostro-relay-list",
-        "mostro-protocol",
-        "mostro-lightning",
-        "wallet alice",
-        "wallet bob",
-    ] {
-        assert_eq!(status_of(&report, name).status, CheckStatus::Pass, "{name}");
-    }
-    let text = report.render();
-    assert!(!text.contains("secret="), "report leaked an NWC secret");
-    assert!(text.contains("healthy"));
-}
-
-#[tokio::test]
-async fn every_missing_secret_and_tool_is_reported() {
+async fn offline_doctor_reports_every_missing_secret_and_tool() {
+    use mortsom_ui_driver::process::tests_support::FakeRunner;
     let dir = example_config();
     let host = FakeHost::default();
+    let runner = FakeRunner::default();
 
-    let report = run_doctor(
+    let report = run_desktop_doctor(
         &dir.path().join("mortsom.toml"),
-        &DoctorOptions::default(),
+        Path::new("/nonexistent/stack"),
+        &DesktopDoctorOptions {
+            platform: mortsom_desktop_driver::Platform::Linux,
+            artifact: None,
+            no_network: true,
+        },
         &host,
         &FakeNet::healthy(),
+        &runner,
     )
     .await;
 
@@ -313,123 +242,110 @@ async fn every_missing_secret_and_tool_is_reported() {
             CheckStatus::Fail
         );
     }
-    for tool in [
-        "docker",
-        "android-sdk",
-        "emulator",
-        "adb",
-        "avdmanager",
-        "appium",
-        "java",
-        "flutter",
-    ] {
+    for tool in ["docker", "flutter", "cargo", "git", "Xvfb"] {
         assert_eq!(status_of(&report, tool).status, CheckStatus::Fail, "{tool}");
     }
-    assert_eq!(status_of(&report, "system-image").status, CheckStatus::Skip);
-    assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Skip);
-    assert_eq!(
-        status_of(&report, "mostro-daemon").status,
-        CheckStatus::Skip
+    assert_eq!(status_of(&report, "network").status, CheckStatus::Skip);
+    assert!(
+        runner.calls().is_empty(),
+        "offline doctor never resolves the stack"
     );
+    let names: Vec<_> = report.checks.iter().map(|c| c.name.as_str()).collect();
+    assert!(!names.contains(&"stack"));
+    assert!(!report.render().contains("secret="));
 }
 
+/// A configured host passes every offline check the doctor can make
+/// without the stack.
 #[tokio::test]
-async fn missing_settings_file_and_wrong_identity_are_reported() {
-    let dir = example_config();
-    let mut host = FakeHost::full();
-    // A settings path that the host reports as existing but that was never
-    // created, so the read fails; a real /tmp/settings.toml on the machine
-    // running the tests must not change the outcome.
-    let unreadable = dir.path().join("never-created-settings.toml");
-    host.env.insert(
-        "MORTSOM_MOSTRO_SETTINGS_FILE".into(),
-        unreadable.to_string_lossy().into_owned(),
-    );
-    host.existing.insert(unreadable);
-    let report = run_doctor(
-        &dir.path().join("mortsom.toml"),
-        &DoctorOptions { no_network: true },
-        &host,
-        &FakeNet::healthy(),
-    )
-    .await;
-    assert_eq!(
-        status_of(&report, "daemon-settings").status,
-        CheckStatus::Fail
-    );
-
-    let mut host = FakeHost::full();
-    with_settings(&mut host, &dir);
-    host.env.insert(
-        "MORTSOM_MOSTRO_PUBKEY".into(),
-        "b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4".into(),
-    );
-    let report = run_doctor(
-        &dir.path().join("mortsom.toml"),
-        &DoctorOptions { no_network: true },
-        &host,
-        &FakeNet::healthy(),
-    )
-    .await;
-    assert_eq!(
-        status_of(&report, "daemon-pubkey").status,
-        CheckStatus::Fail
-    );
-}
-
-#[tokio::test]
-async fn no_network_skips_every_network_check() {
+async fn offline_doctor_passes_on_a_configured_host() {
+    use mortsom_ui_driver::process::tests_support::FakeRunner;
     let dir = example_config();
     let host = FakeHost::full();
 
-    let report = run_doctor(
+    let report = run_desktop_doctor(
         &dir.path().join("mortsom.toml"),
-        &DoctorOptions { no_network: true },
+        Path::new("/nonexistent/stack"),
+        &DesktopDoctorOptions {
+            platform: mortsom_desktop_driver::Platform::Web,
+            artifact: Some(PathBuf::from("/prebuilt/web")),
+            no_network: true,
+        },
         &host,
         &FakeNet::healthy(),
+        &FakeRunner::default(),
     )
     .await;
 
-    assert_eq!(status_of(&report, "network").status, CheckStatus::Skip);
-    assert!(report.checks.iter().all(|c| !c.name.starts_with("wallet")));
-    assert!(
-        host.invocations
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|i| i.starts_with("docker"))
+    for name in ["config", "docker"] {
+        assert_eq!(status_of(&report, name).status, CheckStatus::Pass, "{name}");
+    }
+    assert_eq!(
+        status_of(&report, "app-artifact").status,
+        CheckStatus::Fail,
+        "a prebuilt Web bundle that does not exist is named, not assumed"
     );
+    let names: Vec<_> = report.checks.iter().map(|c| c.name.as_str()).collect();
+    assert!(
+        !names.contains(&"flutter"),
+        "a prebuilt artifact needs no build tools"
+    );
+    assert!(!names.contains(&"Xvfb"), "Web needs no virtual display");
 }
 
+#[tokio::test]
+async fn missing_config_file_fails_config_and_skips_network() {
+    use mortsom_ui_driver::process::tests_support::FakeRunner;
+    let report = run_desktop_doctor(
+        Path::new("/nonexistent/mortsom.toml"),
+        Path::new("/nonexistent/stack"),
+        &DesktopDoctorOptions {
+            platform: mortsom_desktop_driver::Platform::Linux,
+            artifact: None,
+            no_network: false,
+        },
+        &FakeHost::full(),
+        &FakeNet::healthy(),
+        &FakeRunner::default(),
+    )
+    .await;
+
+    assert_eq!(status_of(&report, "config").status, CheckStatus::Fail);
+    assert_eq!(status_of(&report, "stack").status, CheckStatus::Fail);
+    assert_eq!(status_of(&report, "network").status, CheckStatus::Skip);
+    assert!(!report.is_healthy());
+}
+
+fn preflight_config() -> (tempfile::TempDir, Config) {
+    let dir = example_config();
+    let host = FakeHost::full();
+    let config =
+        Config::load_with(&dir.path().join("mortsom.toml"), |name| host.env(name)).unwrap();
+    (dir, config)
+}
+
+/// An unreachable relay and a silent wallet are named as such: the daemon
+/// was never observed, which the preflight turns into a failure rather
+/// than a guess.
 #[tokio::test]
 async fn daemon_and_wallet_failures_are_explicit() {
-    let dir = example_config();
-    let host = FakeHost::full();
+    let (_dir, config) = preflight_config();
     let mut net = FakeNet::healthy();
     net.port = PortState::InUse;
     net.wallets_ok = false;
     net.daemon.relays[0].error = Some("connection refused".into());
     net.daemon.info = None;
 
-    let report = run_doctor(
-        &dir.path().join("mortsom.toml"),
-        &DoctorOptions::default(),
-        &host,
-        &net,
-    )
-    .await;
+    let report = desktop_preflight(&config, &net).await.checks;
 
-    assert_eq!(status_of(&report, "relay-port").status, CheckStatus::Warn);
+    assert_eq!(status_of(&report, "relay-port").status, CheckStatus::Pass);
     assert_eq!(
         status_of(&report, "relay ws://host.docker.internal:7000").status,
         CheckStatus::Fail
     );
-    // The relay is unreachable and something else holds the port, so it is
-    // a real relay failure; the daemon itself was never observed, which is
-    // a missing verdict rather than a bad one.
     assert_eq!(
         status_of(&report, "mostro-daemon").status,
-        CheckStatus::Skip
+        CheckStatus::Fail
     );
     assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Fail);
     assert!(
@@ -441,20 +357,13 @@ async fn daemon_and_wallet_failures_are_explicit() {
 
 #[tokio::test]
 async fn protocol_v1_and_missing_lightning_fail() {
-    let dir = example_config();
-    let host = FakeHost::full();
+    let (_dir, config) = preflight_config();
     let mut net = FakeNet::healthy();
     let info = net.daemon.info.as_mut().unwrap();
     info.tags.insert("protocol_version".into(), "1".into());
     info.tags.remove("lnd_node_pubkey");
 
-    let report = run_doctor(
-        &dir.path().join("mortsom.toml"),
-        &DoctorOptions::default(),
-        &host,
-        &net,
-    )
-    .await;
+    let report = desktop_preflight(&config, &net).await.checks;
 
     assert_eq!(
         status_of(&report, "mostro-protocol").status,
@@ -468,21 +377,14 @@ async fn protocol_v1_and_missing_lightning_fail() {
 
 #[tokio::test]
 async fn relay_list_without_the_mortsom_relay_fails() {
-    let dir = example_config();
-    let host = FakeHost::full();
+    let (_dir, config) = preflight_config();
     let mut net = FakeNet::healthy();
     net.daemon.relay_list = Some(RelayList {
         created_at: 1,
         relays: vec!["wss://relay.mostro.network".into()],
     });
 
-    let report = run_doctor(
-        &dir.path().join("mortsom.toml"),
-        &DoctorOptions::default(),
-        &host,
-        &net,
-    )
-    .await;
+    let report = desktop_preflight(&config, &net).await.checks;
 
     assert_eq!(
         status_of(&report, "mostro-relay-list").status,
@@ -490,24 +392,19 @@ async fn relay_list_without_the_mortsom_relay_fails() {
     );
 }
 
+/// A stale info event is only a warning to the standalone doctor, and a
+/// warning is not good enough for a preflight that is about to move sats.
 #[tokio::test]
-async fn stale_info_event_warns() {
-    let dir = example_config();
-    let host = FakeHost::full();
+async fn stale_info_event_fails_the_preflight() {
+    let (_dir, config) = preflight_config();
     let mut net = FakeNet::healthy();
     net.daemon.info.as_mut().unwrap().created_at = 1;
 
-    let report = run_doctor(
-        &dir.path().join("mortsom.toml"),
-        &DoctorOptions::default(),
-        &host,
-        &net,
-    )
-    .await;
+    let report = desktop_preflight(&config, &net).await.checks;
 
     assert_eq!(
         status_of(&report, "mostro-daemon").status,
-        CheckStatus::Warn
+        CheckStatus::Fail
     );
     assert!(
         status_of(&report, "mostro-daemon")
@@ -517,89 +414,13 @@ async fn stale_info_event_warns() {
 }
 
 #[tokio::test]
-async fn prebuilt_apk_skips_flutter_and_checks_the_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let text = std::fs::read_to_string(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../mortsom.toml.example"
-    ))
-    .unwrap()
-    .replace("apk_path = \"\"", "apk_path = \"/tmp/app.apk\"");
-    std::fs::write(dir.path().join("mortsom.toml"), text).unwrap();
-    let mut host = FakeHost::full();
-    host.tools.remove("flutter");
-
-    let report = run_doctor(
-        &dir.path().join("mortsom.toml"),
-        &DoctorOptions { no_network: true },
-        &host,
-        &FakeNet::healthy(),
-    )
-    .await;
-
-    assert_eq!(status_of(&report, "flutter").status, CheckStatus::Skip);
-    assert_eq!(status_of(&report, "mobile-app").status, CheckStatus::Fail);
-}
-
-#[tokio::test]
-async fn missing_config_file_fails_config_and_skips_network() {
-    let host = FakeHost::full();
-
-    let report = run_doctor(
-        Path::new("/nonexistent/mortsom.toml"),
-        &DoctorOptions::default(),
-        &host,
-        &FakeNet::healthy(),
-    )
-    .await;
-
-    assert_eq!(status_of(&report, "config").status, CheckStatus::Fail);
-    assert_eq!(status_of(&report, "network").status, CheckStatus::Skip);
-    assert_eq!(status_of(&report, "system-image").status, CheckStatus::Skip);
-}
-
-#[tokio::test]
-async fn docker_daemon_down_and_missing_driver_are_reported() {
-    let dir = example_config();
-    let mut host = FakeHost::full();
-    host.outputs.insert(
-        "docker info --format".into(),
-        CommandOutput {
-            success: false,
-            stdout: String::new(),
-            stderr: "Cannot connect to the Docker daemon\n".into(),
-        },
-    );
-    host.outputs.insert("appium driver list".into(), ok("{}"));
-
-    let report = run_doctor(
-        &dir.path().join("mortsom.toml"),
-        &DoctorOptions { no_network: true },
-        &host,
-        &FakeNet::healthy(),
-    )
-    .await;
-
-    assert_eq!(status_of(&report, "docker").status, CheckStatus::Fail);
-    assert!(
-        status_of(&report, "docker")
-            .detail
-            .contains("Cannot connect")
-    );
-    assert_eq!(status_of(&report, "uiautomator2").status, CheckStatus::Fail);
-}
-
-#[tokio::test]
 async fn wallet_liquidity_below_the_run_cap_fails_the_preflight() {
-    let dir = example_config();
-    let mut host = FakeHost::full();
-    with_settings(&mut host, &dir);
-    let path = dir.path().join("mortsom.toml");
+    let (_dir, config) = preflight_config();
 
     // Example caps: max_order_sats = 5000, max_run_spend_sats = 20000.
     let mut net = FakeNet::healthy();
     net.balance_sats = 7_000;
-    let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
+    let report = desktop_preflight(&config, &net).await.checks;
     assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Fail);
     assert!(
         status_of(&report, "wallet alice")
@@ -608,25 +429,22 @@ async fn wallet_liquidity_below_the_run_cap_fails_the_preflight() {
     );
 
     net.balance_sats = 100;
-    let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
+    let report = desktop_preflight(&config, &net).await.checks;
     assert_eq!(status_of(&report, "wallet bob").status, CheckStatus::Fail);
     assert!(!report.is_healthy());
 }
 
 /// An LND node with ample outbound but too little inbound passes every
-/// balance check and then cannot receive the buyer payout: the doctor must
-/// fail it before any sats move.
+/// balance check and then cannot receive the buyer payout: the preflight
+/// must fail it before any sats move.
 #[tokio::test]
 async fn wallet_inbound_liquidity_below_the_run_cap_fails_the_preflight() {
-    let dir = example_config();
-    let mut host = FakeHost::full();
-    with_settings(&mut host, &dir);
-    let path = dir.path().join("mortsom.toml");
+    let (_dir, config) = preflight_config();
 
     // Example caps: max_order_sats = 5000, max_run_spend_sats = 20000.
     let mut net = FakeNet::healthy();
     net.inbound_sats = Some(1_000);
-    let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
+    let report = desktop_preflight(&config, &net).await.checks;
     assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Fail);
     assert!(
         status_of(&report, "wallet alice")
@@ -635,7 +453,7 @@ async fn wallet_inbound_liquidity_below_the_run_cap_fails_the_preflight() {
     );
 
     net.inbound_sats = Some(25_000);
-    let report = run_doctor(&path, &DoctorOptions::default(), &host, &net).await;
+    let report = desktop_preflight(&config, &net).await.checks;
     assert_eq!(status_of(&report, "wallet alice").status, CheckStatus::Pass);
 }
 
@@ -759,8 +577,8 @@ fn the_daemon_check_skips_when_no_relay_is_reachable() {
 
 #[tokio::test]
 async fn desktop_offline_doctor_checks_only_its_platform_and_never_calls_stack() {
-    use mortsom_android_driver::process::tests_support::FakeRunner;
     use mortsom_desktop_driver::Platform;
+    use mortsom_ui_driver::process::tests_support::FakeRunner;
     let host = FakeHost::default();
     let net = FakeNet::healthy();
     let runner = FakeRunner::default();
@@ -779,8 +597,6 @@ async fn desktop_offline_doctor_checks_only_its_platform_and_never_calls_stack()
         )
         .await;
         let names: Vec<_> = report.checks.iter().map(|c| c.name.as_str()).collect();
-        assert!(!names.contains(&"android-sdk"));
-        assert!(!names.contains(&"appium"));
         assert!(names.contains(&"docker"));
         assert_eq!(names.contains(&"Xvfb"), platform == Platform::Linux);
         assert_eq!(names.contains(&"chromedriver"), platform == Platform::Web);

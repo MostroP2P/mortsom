@@ -3,8 +3,8 @@
 //! names the remainder's trade key when reporting fiat sent, so after the
 //! trade settles the remainder is a new pending order of Bob's.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{Capability, OrderDraft, OrderKind};
+use mortsom_common::Actor;
 use mortsom_scenario_kit::context::{Context, ScenarioError};
 
 use super::range;

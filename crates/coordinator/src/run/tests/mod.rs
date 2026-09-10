@@ -4,67 +4,69 @@ use std::collections::BTreeMap;
 use std::sync::Mutex;
 
 use async_trait::async_trait;
-use mortsom_android_driver::appium::{AppiumError, SessionSpec};
-use mortsom_android_driver::process::tests_support::FakeRunner;
-use mortsom_android_driver::ui::{UiServer, UiSession};
 use mortsom_app_contract::{
-    AdapterError, Apk, AppOrderState, AppProfile, BuildContext, CancelOutcome, Capability,
-    CapabilitySet, DeviceContext, Identity, OrderDraft, OrderReference, OrderState, PaymentHandoff,
-    PaymentPath, VisibleOrder, WalletConnection,
+    AdapterError, AppOrderState, AppProfile, CancelOutcome, Capability, CapabilitySet,
+    DeviceContext, Identity, OrderDraft, OrderReference, OrderState, PaymentHandoff, PaymentPath,
+    VisibleOrder, WalletConnection,
 };
+use mortsom_environment::WalletConfig;
+use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, RelayList, RelayProbe};
 use mortsom_environment::docker::{ContainerRuntime, ContainerSpec, DockerError};
+use mortsom_environment::wallet::{WalletProbe, WalletProbeError};
 use mortsom_observers::wallet::PaymentState;
 use mortsom_scenario_kit::registry::{ManualPayments, ScenarioFuture};
+use mortsom_ui_driver::error::UiError;
+use mortsom_ui_driver::ui::UiSession;
 use nostr_sdk::prelude::{EventBuilder, FinalizeEvent, Keys, Kind, PublicKey, Tag};
 
 use super::*;
+use crate::doctor::{NetProbes, PortState};
 use crate::safety::{MAINNET_CONFIRM_ENV, MAINNET_CONFIRM_VALUE};
+use mortsom_common::Actor;
 use mortsom_common::Secret;
 use mortsom_observers::relay::ObserverScope;
 
 const HEX: &str = "8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51";
 const NSEC: &str = "nsec13as48eum93hkg7plv526r9gjpa0uc52zysqm93pmnkca9e69x6tsdjmdxd";
-const ALICE: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=71a8c14c1407c113601079c4302dab36460f0ccd0ad506f1f2dc73b5100e4f3c";
-const BOB: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=0000000000000000000000000000000000000000000000000000000000000001";
 /// BOLT 11 reference invoice (payment hash 0001..0102).
 const INVOICE: &str = "lnbc2500u1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpu9qrsgquk0rl77nj30yxdy8j9vdx85fkpmdla2087ne0xh8nhedh8w27kyke0lp53ut353s06fv3qfegext0eh0ymjpf39tuven09sam30g4vgpfna3rh";
+const RELAY_URL: &str = "ws://127.0.0.1:7000";
+const ALICE_LND: &str = "127.0.0.1:10001";
+const BOB_LND: &str = "127.0.0.1:10002";
 
 struct World {
     dir: tempfile::TempDir,
     config: Config,
 }
 
+/// A run against the stack: LND wallets Mortsom holds, the stack relay,
+/// clients built from a captured Linux bundle. `allow_mainnet` opts the
+/// configuration into the mainnet double opt-in; a run of nodes that report
+/// regtest never needs it.
 fn world(allow_mainnet: bool) -> World {
     let dir = tempfile::tempdir().unwrap();
-    let apk = dir.path().join("app.apk");
-    std::fs::write(&apk, b"apk").unwrap();
-    std::fs::create_dir_all(
-        dir.path()
-            .join("sdk/system-images/android-35/google_apis/x86_64"),
-    )
-    .unwrap();
+    std::fs::create_dir_all(dir.path().join("home")).unwrap();
+    for actor in ["alice", "bob"] {
+        let creds = dir.path().join("creds").join(actor);
+        std::fs::create_dir_all(&creds).unwrap();
+        std::fs::write(creds.join("tls.cert"), b"cert").unwrap();
+        std::fs::write(creds.join("admin.macaroon"), b"macaroon").unwrap();
+    }
     let text = std::fs::read_to_string(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../mortsom.toml.example"
+        "/../../config/desktop.example.toml"
     ))
     .unwrap()
+    .replace("timeout_secs = 30", "timeout_secs = 1")
+    .replace("state_timeout_secs = 90", "state_timeout_secs = 5")
+    .replace("settle_timeout_secs = 120", "settle_timeout_secs = 5")
     .replace(
-        "apk_path = \"\"",
-        &format!("apk_path = \"{}\"", apk.display()),
-    )
-    .replace("boot_timeout_secs = 180", "boot_timeout_secs = 3")
-    .replace("ui_timeout_secs = 30", "ui_timeout_secs = 1")
-    .replace("health_timeout_secs = 120", "health_timeout_secs = 1")
-    .replace("state_timeout_secs = 180", "state_timeout_secs = 5")
-    .replace("settle_timeout_secs = 600", "settle_timeout_secs = 5")
-    .replace(
-        "expiration_timeout_secs = 1200",
+        "expiration_timeout_secs = 900",
         "expiration_timeout_secs = 5",
     )
-    .replace("quiet_window_secs = 20", "quiet_window_secs = 1")
-    .replace("background_secs = 15", "background_secs = 1")
-    .replace("outage_secs = 20", "outage_secs = 1")
-    .replace("host_port = 7000", "host_port = 47500")
+    .replace("quiet_window_secs = 10", "quiet_window_secs = 1")
+    .replace("background_secs = 5", "background_secs = 1")
+    .replace("outage_secs = 10", "outage_secs = 1")
     .replace(
         "allow_mainnet = false",
         &format!("allow_mainnet = {allow_mainnet}"),
@@ -76,48 +78,80 @@ fn world(allow_mainnet: bool) -> World {
             dir.path().join("artifacts").display()
         ),
     );
+    let creds = dir.path().join("creds");
     let config = Config::from_toml_str(&text, |name| match name {
         "MORTSOM_MOSTRO_PUBKEY" => Some(HEX.into()),
         "MORTSOM_MOSTRO_SETTINGS_FILE" => Some("/tmp/settings.toml".into()),
-        "MORTSOM_ALICE_NWC" => Some(ALICE.into()),
-        "MORTSOM_BOB_NWC" => Some(BOB.into()),
+        "MORTSOM_ALICE_LND_HOST" => Some(ALICE_LND.into()),
+        "MORTSOM_BOB_LND_HOST" => Some(BOB_LND.into()),
+        "MORTSOM_ALICE_LND_CERT" => Some(creds.join("alice/tls.cert").display().to_string()),
+        "MORTSOM_BOB_LND_CERT" => Some(creds.join("bob/tls.cert").display().to_string()),
+        "MORTSOM_ALICE_LND_MACAROON" => {
+            Some(creds.join("alice/admin.macaroon").display().to_string())
+        }
+        "MORTSOM_BOB_LND_MACAROON" => Some(creds.join("bob/admin.macaroon").display().to_string()),
         _ => None,
     })
     .unwrap();
     World { dir, config }
 }
 
-fn env_for(world: &World, confirm: bool) -> impl Fn(&str) -> Option<String> + '_ {
-    move |name: &str| match name {
-        "ANDROID_HOME" => Some(world.dir.path().join("sdk").display().to_string()),
-        "ANDROID_AVD_HOME" => Some(world.dir.path().join("avd").display().to_string()),
-        MAINNET_CONFIRM_ENV if confirm => Some(MAINNET_CONFIRM_VALUE.into()),
-        _ => None,
+/// The public facts of the stack the fixture configuration is bound to.
+fn stack() -> crate::stack::StackSnapshot {
+    serde_json::from_value(serde_json::json!({
+        "daemon_pubkey": HEX, "relay_url": RELAY_URL,
+        "wallet_endpoints": {"alice": ALICE_LND, "bob": BOB_LND},
+        "daemon_image": {"image_id": format!("sha256:{}", "a".repeat(64)),
+            "reference": "mostrop2p/mostro:latest", "repository_digest": null},
+        "declared_limits": {"order_expiration_secs": 300, "hold_invoice_expiry_secs": 120,
+            "buyer_invoice_deadline_secs": 120, "payout_invoice_min_expiry_secs": 300}
+    }))
+    .unwrap()
+}
+
+/// A Linux bundle with every file the artifact check requires, captured
+/// the way `desktop::prepare` captures a real build.
+fn desktop_options(world: &World) -> DesktopOptions {
+    let source = world.dir.path().join("bundle");
+    for file in [
+        "lib/libapp.so",
+        "lib/libflutter_linux_gtk.so",
+        "lib/librust.so",
+        "lib/libflutter_secure_storage_linux_plugin.so",
+        "lib/liburl_launcher_linux_plugin.so",
+        "data/icudtl.dat",
+        "data/flutter_assets/AssetManifest.bin",
+    ] {
+        let path = source.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"fixture").unwrap();
+    }
+    let executable = source.join("mostro");
+    std::fs::write(&executable, b"#!/bin/sh\nexit 0\n").unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let bundle = crate::fingerprint::CapturedBundle::capture(&source).unwrap();
+    DesktopOptions {
+        recovery: None,
+        resume: false,
+        provenance: crate::provenance::BuildProvenance::prebuilt(),
+        platform: mortsom_desktop_driver::Platform::Linux,
+        artifact: bundle.root().join("mostro"),
+        bundle: Arc::new(bundle),
+        xvfb: "unused-Xvfb".into(),
+        browser: "unused-browser".into(),
+        chromedriver: "unused-driver".into(),
     }
 }
 
-fn runner() -> FakeRunner {
-    let runner = FakeRunner::default();
-    runner.script("avdmanager list avd -c", "mortsom-alice\nmortsom-bob\n");
-    for serial in ["emulator-5554", "emulator-5556"] {
-        runner.script(
-            &format!("adb -s {serial} shell getprop sys.boot_completed"),
-            "1\n",
-        );
-        runner.script(
-            &format!("adb -s {serial} shell getprop dev.bootcomplete"),
-            "1\n",
-        );
-        runner.script(
-            &format!("adb -s {serial} shell getprop init.svc.bootanim"),
-            "stopped\n",
-        );
-        runner.script(
-            &format!("adb -s {serial} shell dumpsys package network.mostro.app"),
-            "versionName=1.3.2\nversionCode=1077\n",
-        );
+fn env_for(world: &World, confirm: bool) -> impl Fn(&str) -> Option<String> + '_ {
+    move |name: &str| match name {
+        "HOME" => Some(world.dir.path().join("home").display().to_string()),
+        MAINNET_CONFIRM_ENV if confirm => Some(MAINNET_CONFIRM_VALUE.into()),
+        _ => None,
     }
-    runner
 }
 
 #[derive(Default)]
@@ -158,9 +192,60 @@ impl ReadinessProbe for AlwaysReady {
     }
 }
 
+/// A stack whose daemon, relay and nodes answer every preflight question.
+struct ReadyNet;
+#[async_trait]
+impl NetProbes for ReadyNet {
+    async fn local_port(&self, _: u16) -> PortState {
+        PortState::InUse
+    }
+    async fn daemon(&self, _: &[String], _: PublicKey) -> DaemonProbe {
+        DaemonProbe {
+            relays: vec![RelayProbe {
+                configured: RELAY_URL.into(),
+                dialled: RELAY_URL.into(),
+                error: None,
+            }],
+            info: Some(DaemonInfo {
+                pubkey: HEX.into(),
+                created_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+                tags: [
+                    ("mostro_version", "0.18.7"),
+                    ("protocol_version", "2"),
+                    ("lnd_node_pubkey", "02abc"),
+                    ("lnd_version", "0.19"),
+                    ("lnd_node_alias", "stack"),
+                ]
+                .into_iter()
+                .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                .collect(),
+            }),
+            relay_list: Some(RelayList {
+                created_at: 1,
+                relays: vec![RELAY_URL.into()],
+            }),
+        }
+    }
+    async fn wallet(&self, label: &str, _: &WalletConfig) -> Result<WalletProbe, WalletProbeError> {
+        Ok(WalletProbe {
+            label: label.into(),
+            alias: Some(label.into()),
+            network: Some("regtest".into()),
+            methods: ["pay_invoice", "make_invoice", "lookup_invoice"]
+                .map(str::to_owned)
+                .to_vec(),
+            balance_sats: 100_000,
+            inbound_sats: Some(100_000),
+        })
+    }
+}
+
 /// UI stack that always answers; the fake adapter ignores it.
 /// The fakes share one connectivity flag with the adapter: an app whose
-/// device has no network cannot reach its wallet, and a double that ignores
+/// client has no network cannot reach its wallet, and a double that ignores
 /// that cannot exercise the scenarios which cut it. The second flag is the
 /// driver itself going silent: every request then sits on its own HTTP
 /// timeout, which is how a screenshot can cost a minute.
@@ -169,28 +254,21 @@ struct Flags {
     online: Arc<std::sync::atomic::AtomicBool>,
     silent_driver: Arc<std::sync::atomic::AtomicBool>,
 }
-struct FakeUi(Flags);
-struct FakeServer(Flags);
+/// Hands out fake sessions in place of Linux and Web clients.
+struct FakeClients(Flags);
 struct FakeSession(Flags);
 #[async_trait]
-impl UiDriver for FakeUi {
-    async fn start_server(
+impl DesktopFactory for FakeClients {
+    async fn server(&self, _: &DesktopOptions) -> Result<Box<dyn DesktopServer>, String> {
+        Err("the fixture drives Linux clients, which need no server".into())
+    }
+    fn session(
         &self,
-        _: &dyn CommandRunner,
-        _: u16,
-        _: &Path,
-        _: Duration,
-    ) -> Result<Box<dyn UiServer>, AppiumError> {
-        Ok(Box::new(FakeServer(self.0.clone())))
-    }
-}
-#[async_trait]
-impl UiServer for FakeServer {
-    async fn create_session(&self, _: &SessionSpec) -> Result<Box<dyn UiSession>, AppiumError> {
-        Ok(Box::new(FakeSession(self.0.clone())))
-    }
-    async fn stop(&self) -> Result<(), AppiumError> {
-        Ok(())
+        _: Actor,
+        _: &DesktopOptions,
+        _: Option<&str>,
+    ) -> Result<Arc<dyn UiSession>, String> {
+        Ok(Arc::new(FakeSession(self.0.clone())))
     }
 }
 impl FakeSession {
@@ -209,63 +287,63 @@ impl FakeSession {
 
 #[async_trait]
 impl UiSession for FakeSession {
-    async fn exists(&self, _: &str) -> Result<bool, AppiumError> {
+    async fn exists(&self, _: &str) -> Result<bool, UiError> {
         Ok(true)
     }
-    async fn wait_for(&self, _: &str, _: Duration) -> Result<(), AppiumError> {
+    async fn wait_for(&self, _: &str, _: Duration) -> Result<(), UiError> {
         Ok(())
     }
-    async fn wait_gone(&self, _: &str, _: Duration) -> Result<(), AppiumError> {
+    async fn wait_gone(&self, _: &str, _: Duration) -> Result<(), UiError> {
         Ok(())
     }
-    async fn tap(&self, _: &str) -> Result<(), AppiumError> {
+    async fn tap(&self, _: &str) -> Result<(), UiError> {
         Ok(())
     }
-    async fn type_text(&self, _: &str, _: &str) -> Result<(), AppiumError> {
+    async fn type_text(&self, _: &str, _: &str) -> Result<(), UiError> {
         Ok(())
     }
-    async fn text_of(&self, _: &str) -> Result<String, AppiumError> {
+    async fn text_of(&self, _: &str) -> Result<String, UiError> {
         Ok(String::new())
     }
-    async fn is_enabled(&self, _: &str) -> Result<bool, AppiumError> {
+    async fn is_enabled(&self, _: &str) -> Result<bool, UiError> {
         Ok(true)
     }
-    async fn label_of(&self, _: &str) -> Result<String, AppiumError> {
+    async fn label_of(&self, _: &str) -> Result<String, UiError> {
         Ok(String::new())
     }
-    async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
+    async fn screenshot_png(&self) -> Result<Vec<u8>, UiError> {
         self.wait_out_the_http_timeout().await;
         Ok(b"\x89PNG".to_vec())
     }
-    async fn page_source(&self) -> Result<String, AppiumError> {
+    async fn page_source(&self) -> Result<String, UiError> {
         self.wait_out_the_http_timeout().await;
         Ok(format!("<hierarchy>{INVOICE}</hierarchy>"))
     }
-    async fn background(&self, _: u64) -> Result<(), AppiumError> {
+    async fn background(&self, _: u64) -> Result<(), UiError> {
         Ok(())
     }
-    async fn terminate_app(&self) -> Result<(), AppiumError> {
+    async fn terminate_app(&self) -> Result<(), UiError> {
         Ok(())
     }
-    async fn activate_app(&self) -> Result<(), AppiumError> {
+    async fn activate_app(&self) -> Result<(), UiError> {
         Ok(())
     }
-    async fn clear_app(&self) -> Result<(), AppiumError> {
+    async fn clear_app(&self) -> Result<(), UiError> {
         Ok(())
     }
-    async fn set_connectivity(&self, enabled: bool) -> Result<(), AppiumError> {
+    async fn set_connectivity(&self, enabled: bool) -> Result<(), UiError> {
         self.0
             .online
             .store(enabled, std::sync::atomic::Ordering::SeqCst);
         Ok(())
     }
-    async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+    async fn hide_keyboard(&self) -> Result<(), UiError> {
         Ok(())
     }
-    async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
+    async fn set_orientation(&self, _: bool) -> Result<(), UiError> {
         Ok(())
     }
-    async fn end(&self) -> Result<(), AppiumError> {
+    async fn end(&self) -> Result<(), UiError> {
         Ok(())
     }
 }
@@ -273,12 +351,13 @@ impl UiSession for FakeSession {
 /// A fake app: order state advances with each business action.
 struct FakeAdapter {
     recovery_calls: Mutex<Vec<String>>,
-    observed_actors: Mutex<Vec<mortsom_android_driver::avd::Actor>>,
+    observed_actors: Mutex<Vec<Actor>>,
     complete_after_observations: Option<usize>,
     /// Shared with the fake UI: connectivity, and whether the driver has
     /// gone silent.
     flags: Flags,
-    orders: Mutex<BTreeMap<String, OrderState>>,
+    /// Order states and payment hashes, shared with the fake nodes.
+    ledger: Arc<Ledger>,
     capabilities: CapabilitySet,
     fail_release: bool,
     cancelled: Mutex<Vec<String>>,
@@ -313,7 +392,7 @@ impl FakeAdapter {
                 online: Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 silent_driver: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
-            orders: Mutex::new(BTreeMap::new()),
+            ledger: Arc::new(Ledger::default()),
             capabilities: CapabilitySet::new(Capability::ALL),
             fail_release: false,
             cancelled: Mutex::new(Vec::new()),
@@ -328,7 +407,10 @@ impl FakeAdapter {
         }
     }
     fn set(&self, id: &str, state: OrderState) {
-        self.orders.lock().unwrap().insert(id.into(), state);
+        self.ledger.orders.lock().unwrap().insert(id.into(), state);
+    }
+    fn orders(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, OrderState>> {
+        self.ledger.orders.lock().unwrap()
     }
 }
 
@@ -337,14 +419,10 @@ impl AppAdapter for FakeAdapter {
     fn profile(&self) -> AppProfile {
         AppProfile {
             name: "fake".into(),
-            package: "fake.app".into(),
         }
     }
     fn capabilities(&self) -> CapabilitySet {
         self.capabilities.clone()
-    }
-    async fn build(&self, _: &BuildContext, _: &dyn CommandRunner) -> Result<Apk, AdapterError> {
-        Err(AdapterError::infrastructure("no build in tests"))
     }
     async fn onboard(
         &self,
@@ -398,7 +476,7 @@ impl AppAdapter for FakeAdapter {
             .lock()
             .unwrap()
             .push(format!("owned:{}", device.actor));
-        Ok(self.orders.lock().unwrap().keys().cloned().collect())
+        Ok(self.orders().keys().cloned().collect())
     }
     async fn configure_nwc(
         &self,
@@ -446,18 +524,33 @@ impl AppAdapter for FakeAdapter {
             ));
         }
         self.set(&order.id, OrderState::Active);
+        let (invoice, hash) = invoice_for(1000);
+        self.ledger
+            .hashes
+            .lock()
+            .unwrap()
+            .insert(hash, order.id.clone());
         Ok(PaymentHandoff {
-            kind: PaymentPath::Nwc,
-            invoice: Some(Secret::new(INVOICE)),
+            kind: PaymentPath::ExternalWallet,
+            invoice: Some(invoice),
         })
+    }
+    async fn buyer_invoice_amount(
+        &self,
+        _: &DeviceContext<'_>,
+        _: &OrderReference,
+    ) -> Result<u64, AdapterError> {
+        Ok(1000)
     }
     async fn provide_buyer_invoice(
         &self,
         _: &DeviceContext<'_>,
         _: &OrderReference,
-        _: Option<&Secret>,
+        invoice: Option<&Secret>,
     ) -> Result<Option<Secret>, AdapterError> {
-        Ok(Some(Secret::new(INVOICE)))
+        Ok(Some(
+            invoice.cloned().unwrap_or_else(|| invoice_for(1000).0),
+        ))
     }
     async fn confirm_fiat_sent(
         &self,
@@ -478,7 +571,7 @@ impl AppAdapter for FakeAdapter {
                     .silent_driver
                     .store(true, std::sync::atomic::Ordering::SeqCst);
             }
-            return Err(AdapterError::infrastructure("appium session died"));
+            return Err(AdapterError::infrastructure("client session died"));
         }
         self.set(&order.id, OrderState::Completed);
         Ok(())
@@ -488,8 +581,8 @@ impl AppAdapter for FakeAdapter {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<CancelOutcome, AdapterError> {
-        let mut orders = self.orders.lock().unwrap();
-        let taker = device.actor == mortsom_android_driver::avd::Actor::Bob;
+        let mut orders = self.orders();
+        let taker = device.actor == Actor::Bob;
         if self.hides_trades {
             return Ok(CancelOutcome::NotFound);
         }
@@ -538,8 +631,8 @@ impl AppAdapter for FakeAdapter {
         order: &OrderReference,
     ) -> Result<Vec<String>, AdapterError> {
         // Alice is always the seller/maker in these fakes.
-        let state = self.orders.lock().unwrap().get(&order.id).copied();
-        let seller = device.actor == mortsom_android_driver::avd::Actor::Alice;
+        let state = self.orders().get(&order.id).copied();
+        let seller = device.actor == Actor::Alice;
         Ok(match (state, seller) {
             (Some(OrderState::Taken), true) => vec!["pay-invoice".into(), "cancel".into()],
             (Some(OrderState::Taken), false) => vec!["cancel".into()],
@@ -570,13 +663,11 @@ impl AppAdapter for FakeAdapter {
             self.set(&order.id, OrderState::Completed);
         }
         let mut state = self
-            .orders
-            .lock()
-            .unwrap()
+            .orders()
             .get(&order.id)
             .copied()
             .ok_or_else(|| AdapterError::contract("unknown order"))?;
-        if device.actor == mortsom_android_driver::avd::Actor::Alice
+        if device.actor == Actor::Alice
             && !state.is_terminal()
             && self.maker_lied_about.lock().unwrap().contains(&order.id)
         {
@@ -589,12 +680,105 @@ impl AppAdapter for FakeAdapter {
     }
 }
 
-/// Wallet reader that settles everything.
-struct SettledReader;
+/// A fresh regtest invoice for `sats`, signed by a fixed throwaway key.
+/// Every call carries a new payment hash, as every real invoice does.
+fn invoice_for(sats: u64) -> (Secret, String) {
+    use bitcoin::hashes::{Hash, sha256};
+    use bitcoin::secp256k1::{Secp256k1, SecretKey};
+    use lightning_invoice::{Currency, InvoiceBuilder, PaymentSecret};
+    static NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let nonce = NONCE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let secp = Secp256k1::new();
+    let key = SecretKey::from_slice(&[0x11; 32]).unwrap();
+    let preimage = [sats.to_be_bytes(), nonce.to_be_bytes()].concat();
+    let invoice = InvoiceBuilder::new(Currency::Regtest)
+        .description("mortsom fixture".into())
+        .payment_hash(sha256::Hash::hash(&preimage))
+        .payment_secret(PaymentSecret([0x22; 32]))
+        .amount_milli_satoshis(sats * 1000)
+        .current_timestamp()
+        .min_final_cltv_expiry_delta(18)
+        .build_signed(|hash| secp.sign_ecdsa_recoverable(hash, &key))
+        .unwrap();
+    let hash = invoice.payment_hash().to_string();
+    (Secret::new(invoice.to_string()), hash)
+}
+
+/// What the fake daemon and wallets agree on: the state of every order and
+/// which payment hash belongs to which order, so a wallet can answer for a
+/// payment the way a real node would once the daemon has settled or
+/// refunded it.
+#[derive(Default)]
+struct Ledger {
+    orders: Mutex<BTreeMap<String, OrderState>>,
+    hashes: Mutex<BTreeMap<String, String>>,
+}
+
+impl Ledger {
+    fn state_of_hash(&self, hash: &str) -> Option<OrderState> {
+        let order = self.hashes.lock().unwrap().get(hash).cloned()?;
+        self.orders.lock().unwrap().get(&order).copied()
+    }
+    fn refunded(&self, hash: &str) -> bool {
+        matches!(
+            self.state_of_hash(hash),
+            Some(OrderState::Cancelled | OrderState::Expired)
+        )
+    }
+}
+
+/// A node Mortsom holds: every payment settles at once, and one the daemon
+/// refunded (a cancelled or expired order) reads as failed with no
+/// settled record, as it would on a real node.
+struct SettledNode(Arc<Ledger>);
 #[async_trait]
-impl WalletReader for SettledReader {
-    async fn lookup(&self, _: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
-        Ok(Some((1000, 1, PaymentState::Settled)))
+impl WalletReader for SettledNode {
+    async fn lookup(&self, hash: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
+        let state = if self.0.refunded(hash) {
+            PaymentState::Failed
+        } else {
+            PaymentState::Settled
+        };
+        Ok(Some((1000, 0, state)))
+    }
+}
+#[async_trait]
+impl NodeWallet for SettledNode {
+    async fn cancel_invoice(&self, _: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn settled_record_count(&self, hash: &str, _: bool) -> Result<usize, String> {
+        Ok(usize::from(!self.0.refunded(hash)))
+    }
+    async fn make_invoice(&self, sats: u64, memo: &str) -> Result<Secret, String> {
+        let (invoice, hash) = invoice_for(sats);
+        if let Some(order) = memo.strip_prefix("mortsom ") {
+            self.0.hashes.lock().unwrap().insert(hash, order.to_owned());
+        }
+        Ok(invoice)
+    }
+    async fn start_payment(&self, _: &Secret) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+/// Wallet handles for nodes on `network` sharing `ledger` with the app.
+fn nodes_on(
+    ledger: Arc<Ledger>,
+    network: &'static str,
+) -> impl for<'b> Fn(
+    &'b str,
+    &'b WalletConfig,
+) -> futures::future::BoxFuture<'b, Result<WalletHandles, String>> {
+    move |_, _| {
+        let ledger = Arc::clone(&ledger);
+        Box::pin(async move {
+            Ok(WalletHandles {
+                reader: Arc::new(SettledNode(Arc::clone(&ledger))),
+                node: Some(Arc::new(SettledNode(ledger))),
+                network: Some(network.to_owned()),
+            })
+        })
     }
 }
 
@@ -678,27 +862,24 @@ async fn run_with_observer(
     confirm: bool,
     observer: &dyn ObserverFactory,
 ) -> Result<RunSummary, String> {
-    let ui = FakeUi(adapter.flags.clone());
+    run_on_nodes(world, adapter, options, confirm, observer, "regtest").await
+}
+
+async fn run_on_nodes(
+    world: &World,
+    adapter: Arc<FakeAdapter>,
+    options: RunOptions,
+    confirm: bool,
+    observer: &dyn ObserverFactory,
+    network: &'static str,
+) -> Result<RunSummary, String> {
+    let clients = FakeClients(adapter.flags.clone());
     let docker = Arc::new(FakeDocker::default());
-    let runner = runner();
     let env = env_for(world, confirm);
-    fn wallets<'b>(
-        _: &'b str,
-        _: &'b mortsom_environment::WalletConfig,
-    ) -> futures::future::BoxFuture<'b, Result<crate::run::WalletHandles, String>> {
-        Box::pin(async {
-            Ok(crate::run::WalletHandles {
-                reader: Arc::new(SettledReader),
-                node: None,
-                network: None,
-            })
-        })
-    }
+    let wallets = nodes_on(Arc::clone(&adapter.ledger), network);
     let deps = RunDeps {
-        desktop_factory: &crate::run::RealDesktopFactory,
-        net: None,
-        runner: &runner,
-        ui: &ui,
+        desktop_factory: &clients,
+        net: Some(&ReadyNet),
         docker: Arc::clone(&docker) as Arc<dyn ContainerRuntime>,
         probe: Arc::new(AlwaysReady),
         adapter: adapter as Arc<dyn AppAdapter>,
@@ -707,17 +888,19 @@ async fn run_with_observer(
         observer,
     };
     let result = run_scenarios(&world.config, &options, &deps).await;
-    assert!(docker.running.lock().unwrap().is_empty(), "relay torn down");
+    assert!(
+        docker.running.lock().unwrap().is_empty(),
+        "a run never starts containers of its own"
+    );
     result
 }
 
-fn opts(names: &[&str]) -> RunOptions {
+fn opts_in(world: &World, names: &[&str]) -> RunOptions {
     RunOptions {
-        desktop: None,
-        stack: None,
+        desktop: desktop_options(world),
+        stack: Some(stack()),
         scenarios: names.iter().map(|s| (*s).to_owned()).collect(),
         tag: None,
-        shutdown_grace: Some(Duration::from_millis(10)),
     }
 }
 

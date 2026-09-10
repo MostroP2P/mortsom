@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use super::*;
-use mortsom_android_driver::process::tests_support::FakeRunner;
+use mortsom_ui_driver::process::tests_support::FakeRunner;
 
 fn config(root: &Path) -> Config {
     Config::from_toml_str(
@@ -108,27 +108,6 @@ async fn existing_artifact_does_not_require_source_or_invoke_a_build() {
         assert!(validate_artifact(Platform::Linux, &artifact, &crate::doctor::RealHost).is_err());
         std::fs::write(path, b"fixture").unwrap();
     }
-}
-
-#[tokio::test]
-async fn android_cannot_be_prepared_as_a_desktop_artifact() {
-    let root = tempfile::tempdir().unwrap();
-    let artifact = root.path().join("app.apk");
-    std::fs::write(&artifact, b"apk").unwrap();
-    let runner = FakeRunner::default();
-    assert!(
-        prepare(
-            &config(root.path()),
-            Platform::Android,
-            Some(artifact),
-            "Xvfb".into(),
-            &runner,
-            &crate::doctor::RealHost
-        )
-        .await
-        .is_err()
-    );
-    assert!(runner.calls().is_empty());
 }
 
 #[tokio::test]

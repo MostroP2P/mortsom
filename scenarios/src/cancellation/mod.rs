@@ -3,8 +3,8 @@
 //! got. A pending order is the maker's to close alone; a taken one comes
 //! back to the book when the taker walks away; a funded one needs both.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{CancelOutcome, Capability, OrderState};
+use mortsom_common::Actor;
 use mortsom_scenario_kit::actions;
 use mortsom_scenario_kit::cancel::cancel_order;
 use mortsom_scenario_kit::context::{Context, ScenarioError};

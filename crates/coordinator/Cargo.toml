@@ -16,13 +16,12 @@ tempfile.workspace = true
 sha2.workspace = true
 mortsom-common = { workspace = true }
 mortsom-app-contract = { workspace = true }
-mortsom-android-driver = { workspace = true }
+mortsom-ui-driver = { workspace = true }
 mortsom-desktop-driver.workspace = true
 mortsom-environment = { workspace = true }
 mortsom-observers = { workspace = true }
 mortsom-scenario-kit = { workspace = true }
 mortsom-solver = { workspace = true }
-mortsom-adapter-mobile-legacy = { workspace = true }
 mortsom-adapter-mobile-v2 = { workspace = true }
 mortsom-scenarios = { workspace = true }
 tokio = { workspace = true }
@@ -46,7 +45,9 @@ nwc = { workspace = true }
 inventory = { workspace = true }
 
 [dev-dependencies]
-mortsom-android-driver = { workspace = true, features = ["testing"] }
+lightning-invoice = { workspace = true, features = ["std"] }
+bitcoin = { workspace = true }
+mortsom-ui-driver = { workspace = true, features = ["testing"] }
 # `start_paused`: a test may assert a deadline without waiting for it.
 tokio = { workspace = true, features = ["test-util"] }
 assert_cmd = { workspace = true }

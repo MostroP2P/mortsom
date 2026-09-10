@@ -6,9 +6,14 @@ async fn happy_sell_passes_end_to_end_with_evidence_and_no_open_orders() {
     let world = world(true);
     let adapter = Arc::new(FakeAdapter::full());
 
-    let summary = run(&world, adapter.clone(), opts(&["happy_sell"]), true)
-        .await
-        .unwrap();
+    let summary = run(
+        &world,
+        adapter.clone(),
+        opts_in(&world, &["happy_sell"]),
+        true,
+    )
+    .await
+    .unwrap();
 
     assert!(
         summary.passed,
@@ -55,25 +60,40 @@ async fn happy_sell_passes_end_to_end_with_evidence_and_no_open_orders() {
     assert!(!everything.contains("secret=71a8"));
 }
 
+/// Value moves only with clearance: on mainnet the double opt-in, on nodes
+/// Mortsom holds a network every node reports as regtest. A node on any
+/// other network stops the run before a client starts.
 #[tokio::test]
 async fn value_moving_scenario_is_refused_without_mainnet_clearance() {
     mortsom_scenarios::link();
     let no_opt_in = world(false);
-    let err = run(
+    let summary = run_on_nodes(
         &no_opt_in,
         Arc::new(FakeAdapter::full()),
-        opts(&["happy_sell"]),
+        opts_in(&no_opt_in, &["happy_sell"]),
         true,
+        &FakeObserver::default(),
+        "mainnet",
     )
     .await
-    .unwrap_err();
-    assert!(err.contains("mainnet refused"), "{err}");
+    .unwrap();
+    assert!(!summary.passed);
+    assert!(summary.actors.is_empty(), "no client started");
+    assert!(
+        summary
+            .checks
+            .checks
+            .iter()
+            .any(|check| check.name == "regtest-clearance" && check.status == CheckStatus::Fail),
+        "{}",
+        summary.checks.render()
+    );
 
     let opted_in = world(true);
     let err = run(
         &opted_in,
         Arc::new(FakeAdapter::full()),
-        opts(&["happy_sell"]),
+        opts_in(&opted_in, &["happy_sell"]),
         false,
     )
     .await
@@ -85,22 +105,32 @@ async fn value_moving_scenario_is_refused_without_mainnet_clearance() {
 async fn unknown_scenario_and_missing_capability_are_explicit() {
     mortsom_scenarios::link();
     let world = world(true);
-    let err = run(&world, Arc::new(FakeAdapter::full()), opts(&["nope"]), true)
-        .await
-        .unwrap_err();
+    let err = run(
+        &world,
+        Arc::new(FakeAdapter::full()),
+        opts_in(&world, &["nope"]),
+        true,
+    )
+    .await
+    .unwrap_err();
     assert!(err.contains("unknown scenario"));
 
     let mut limited = FakeAdapter::full();
     limited.capabilities = CapabilitySet::new([Capability::Onboarding]);
-    let summary = run(&world, Arc::new(limited), opts(&["happy_sell"]), true)
-        .await
-        .unwrap();
+    let summary = run(
+        &world,
+        Arc::new(limited),
+        opts_in(&world, &["happy_sell"]),
+        true,
+    )
+    .await
+    .unwrap();
     assert!(summary.passed, "skipped with reason still passes the run");
     assert!(
         matches!(&summary.results[0].outcome, Outcome::Skipped { reason } if reason.contains("lacks"))
     );
     assert!(
-        summary.relay.is_none(),
+        summary.actors.is_empty(),
         "nothing was started for a fully gated run"
     );
 }
@@ -241,9 +271,14 @@ async fn a_failed_scenario_leaves_the_screen_that_failed() {
     let mut adapter = FakeAdapter::full();
     adapter.fail_release = true;
 
-    let summary = run(&world, Arc::new(adapter), opts(&["happy_sell"]), true)
-        .await
-        .unwrap();
+    let summary = run(
+        &world,
+        Arc::new(adapter),
+        opts_in(&world, &["happy_sell"]),
+        true,
+    )
+    .await
+    .unwrap();
 
     assert!(!summary.passed);
     let run_dir = world
@@ -295,9 +330,14 @@ async fn a_silent_driver_cannot_hold_the_run_open_while_it_is_photographed() {
     adapter.silence_driver_on_failure = true;
 
     let started = tokio::time::Instant::now();
-    let summary = run(&world, Arc::new(adapter), opts(&["happy_sell"]), true)
-        .await
-        .unwrap();
+    let summary = run(
+        &world,
+        Arc::new(adapter),
+        opts_in(&world, &["happy_sell"]),
+        true,
+    )
+    .await
+    .unwrap();
     let spent = started.elapsed();
 
     assert!(!summary.passed);
@@ -311,23 +351,25 @@ async fn a_silent_driver_cannot_hold_the_run_open_while_it_is_photographed() {
 }
 
 #[tokio::test]
-async fn infrastructure_failure_after_payment_is_final_and_cleanup_cancels_open_orders() {
+async fn infrastructure_failure_after_payment_leaves_cleanup_to_cancel_the_open_order() {
     mortsom_scenarios::link();
     let world = world(true);
     let mut adapter = FakeAdapter::full();
     adapter.fail_release = true;
     let adapter = Arc::new(adapter);
 
-    let summary = run(&world, adapter.clone(), opts(&["happy_sell"]), true)
-        .await
-        .unwrap();
+    let summary = run(
+        &world,
+        adapter.clone(),
+        opts_in(&world, &["happy_sell"]),
+        true,
+    )
+    .await
+    .unwrap();
 
     assert!(!summary.passed);
     let result = &summary.results[0];
-    assert_eq!(
-        result.attempts, 1,
-        "no retry once the attempt paid the hold invoice"
-    );
+    assert_eq!(result.attempts, 1, "a scenario runs exactly once");
     assert!(matches!(
         &result.outcome,
         Outcome::Failed {
@@ -345,16 +387,6 @@ async fn infrastructure_failure_after_payment_is_final_and_cleanup_cancels_open_
         1000,
         "exactly one payment"
     );
-    let timeline = std::fs::read_to_string(
-        world
-            .dir
-            .path()
-            .join("artifacts")
-            .join(summary.run_id.as_str())
-            .join(files::TIMELINE),
-    )
-    .unwrap();
-    assert!(timeline.contains("retry refused"));
 }
 
 fn noop(_ctx: &Context) -> ScenarioFuture<'_> {
@@ -394,19 +426,22 @@ inventory::submit! {
     }
 }
 
+/// A client keeps its actor storage across attempts, so an infrastructure
+/// failure is never retried inside one run: a retry would reopen the trade
+/// the failed attempt started rather than begin a fresh one.
 #[tokio::test]
-async fn infrastructure_failure_without_payment_retries_once() {
+async fn infrastructure_failure_is_not_retried_inside_one_run() {
     let world = world(false);
     let summary = run(
         &world,
         Arc::new(FakeAdapter::full()),
-        opts(&["zz_runner_flaky_infra"]),
+        opts_in(&world, &["zz_runner_flaky_infra"]),
         false,
     )
     .await
     .unwrap();
-    assert!(summary.passed, "{:?}", summary.results);
-    assert_eq!(summary.results[0].attempts, 2);
+    assert!(!summary.passed, "{:?}", summary.results);
+    assert_eq!(summary.results[0].attempts, 1);
 }
 
 inventory::submit! {
@@ -428,7 +463,7 @@ async fn non_value_scenarios_run_without_clearance() {
     let summary = run(
         &world,
         Arc::new(FakeAdapter::full()),
-        opts(&["zz_runner_noop"]),
+        opts_in(&world, &["zz_runner_noop"]),
         false,
     )
     .await

@@ -2,8 +2,8 @@
 //! finishing only when the expected visible state and, where applicable,
 //! the relay agree. Scenarios differ in what they interrupt in between.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{Capability, OrderDraft, OrderKind, OrderReference, OrderState};
+use mortsom_common::Actor;
 use mortsom_scenario_kit::actions;
 use mortsom_scenario_kit::context::{Context, ScenarioError};
 

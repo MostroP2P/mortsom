@@ -5,8 +5,8 @@ use std::panic::AssertUnwindSafe;
 use std::time::{Duration, Instant};
 
 use futures::FutureExt;
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{CancelOutcome, OrderReference, OrderState};
+use mortsom_common::Actor;
 use mortsom_common::FailureCategory;
 use mortsom_scenario_kit::cleanup::CleanupResult;
 use mortsom_scenario_kit::context::Context;
@@ -28,76 +28,44 @@ const CLEANUP_POLL: Duration = Duration::from_millis(500);
 /// long after the moment it is supposed to show.
 const FAILURE_CAPTURE_DEADLINE: Duration = Duration::from_secs(15);
 
-/// Runs `def` against `ctx`, retrying once only for a classified
-/// infrastructure failure when `infra_retries` allows it.
+/// Runs `def` against `ctx` exactly once. A client keeps its actor storage
+/// for the whole run, so a second attempt would reopen the trade the first
+/// one started rather than begin a fresh one; an infrastructure failure is
+/// reported as such and the operator reruns the scenario (spec §10).
 pub async fn execute_scenario(
     def: &ScenarioDef,
     ctx: &Context,
-    infra_retries: u32,
     app_profile: &str,
     app_version: Option<String>,
 ) -> ScenarioResult {
-    let mut attempts = 0;
-    loop {
-        attempts += 1;
-        let started = Instant::now();
-        let ledger_before = ledger_len(ctx);
-        ctx.timeline.push(
-            TimelineKind::Step,
-            None,
-            format!("scenario {} attempt {attempts} started", def.name),
-            None,
-        );
-        let outcome = attempt(def, ctx).await;
-        let duration = started.elapsed();
-        ctx.timeline.push(
-            TimelineKind::Assertion,
-            None,
-            format!(
-                "scenario {} attempt {attempts}: {}",
-                def.name,
-                describe(&outcome)
-            ),
-            None,
-        );
-        let retryable =
-            matches!(&outcome, Outcome::Failed { category, .. } if category.is_retryable());
-        // A retry may never spend more: once the failed attempt reserved or
-        // moved sats, the failure is final (spec §5, §10).
-        let moved_value = ledger_len(ctx) > ledger_before;
-        if retryable && attempts <= infra_retries && !moved_value {
-            warn!(
-                scenario = def.name,
-                attempt = attempts,
-                "infrastructure failure; retrying once"
-            );
-            sweep_cleanup(ctx).await;
-            continue;
-        }
-        if retryable && moved_value {
-            warn!(
-                scenario = def.name,
-                "infrastructure failure after a payment; not retrying"
-            );
-            ctx.timeline.push(
-                TimelineKind::Assertion,
-                None,
-                format!(
-                    "scenario {}: retry refused, the attempt already moved sats",
-                    def.name
-                ),
-                None,
-            );
-        }
-        info!(scenario = def.name, attempts, outcome = %describe(&outcome), "scenario finished");
-        return ScenarioResult {
-            name: def.name.into(),
-            app_profile: app_profile.into(),
-            app_version,
-            outcome,
-            attempts,
-            duration,
-        };
+    let attempts = 1;
+    let started = Instant::now();
+    ctx.timeline.push(
+        TimelineKind::Step,
+        None,
+        format!("scenario {} attempt {attempts} started", def.name),
+        None,
+    );
+    let outcome = attempt(def, ctx).await;
+    let duration = started.elapsed();
+    ctx.timeline.push(
+        TimelineKind::Assertion,
+        None,
+        format!(
+            "scenario {} attempt {attempts}: {}",
+            def.name,
+            describe(&outcome)
+        ),
+        None,
+    );
+    info!(scenario = def.name, attempts, outcome = %describe(&outcome), "scenario finished");
+    ScenarioResult {
+        name: def.name.into(),
+        app_profile: app_profile.into(),
+        app_version,
+        outcome,
+        attempts,
+        duration,
     }
 }
 
@@ -172,14 +140,6 @@ async fn capture_failure(def: &ScenarioDef, ctx: &Context) {
             ),
         }
     }
-}
-
-fn ledger_len(ctx: &Context) -> usize {
-    ctx.budget
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .ledger()
-        .len()
 }
 
 fn describe(outcome: &Outcome) -> String {

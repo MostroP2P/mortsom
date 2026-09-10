@@ -63,7 +63,6 @@ pub(super) async fn check(
             .await;
         }
         Platform::Web => check_web(source, host, report).await,
-        Platform::Android => {}
     }
 }
 

@@ -6,8 +6,8 @@ Guidance for AI agents and human contributors working on Mortsom.
 
 Mortsom is a black-box, end-to-end test harness for Mostro app v2. It drives
 independent Alice/Bob clients on Linux (default) or Web against a local regtest
-stack that Mortsom itself owns. Android remains the selectable frozen path and
-is not being extended. Read `spec.md` before touching anything; it is
+stack that Mortsom itself owns. The Android emulator path was removed; do not
+reintroduce emulator, Appium or APK code. Read `spec.md` before touching anything; it is
 normative. When resuming interrupted work, also read `docs/HANDOFF.md`. The
 immediate acceptance target is happy_sell and happy_buy on both Linux and Web.
 
@@ -41,12 +41,12 @@ messages, error strings, and artifacts. No exceptions.
 
 ## Stack
 
-- **Rust only.** The coordinator, configuration, Docker and emulator
+- **Rust only.** The coordinator, configuration, Docker and client
   lifecycle, WebDriver client, observers, scenario kit, adapters, reporting
-  and CLI are Rust crates. Appium and UiAutomator2 run only as external
-  services reached through the W3C WebDriver protocol. No TypeScript or Node
+  and CLI are Rust crates. ChromeDriver runs only as an external service
+  reached through the W3C WebDriver protocol. No TypeScript or Node
   application code belongs in this repository.
-- The crate selection and its rationale live in `docs/stack.md`.
+- The crate selection and its rationale live in `docs/history/crates-rationale.md`.
 
 ## Dependencies
 
@@ -72,7 +72,7 @@ messages, error strings, and artifacts. No exceptions.
 - Push I/O to the edges. Configuration resolution, redaction, event matching,
   state normalization, budgeting and report rendering are pure and unit
   tested.
-- A trait boundary at every external dependency (Docker, adb/emulator,
+- A trait boundary at every external dependency (Docker, child processes,
   WebDriver, relay transport, wallet, clock, environment variables) so tests
   inject fakes.
 - Small focused files (200–400 lines typical, 800 max), functions under 50

@@ -3,8 +3,8 @@
 
 use std::sync::Mutex;
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{CancelOutcome, OrderReference};
+use mortsom_common::Actor;
 use serde::{Deserialize, Serialize};
 
 /// One registered order.

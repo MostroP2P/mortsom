@@ -1855,52 +1855,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "mortsom-adapter-mobile-legacy"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "mortsom-android-driver",
- "mortsom-app-contract",
- "mortsom-common",
- "serde",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "mortsom-adapter-mobile-v2"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "mortsom-android-driver",
  "mortsom-app-contract",
  "mortsom-common",
+ "mortsom-ui-driver",
  "serde",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "mortsom-android-driver"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "base64 0.22.1",
- "mortsom-common",
- "reqwest",
- "rustix",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.20",
- "tokio",
- "toml 1.1.4+spec-1.1.0",
- "tracing",
- "wiremock",
 ]
 
 [[package]]
@@ -1908,8 +1874,8 @@ name = "mortsom-app-contract"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "mortsom-android-driver",
  "mortsom-common",
+ "mortsom-ui-driver",
  "nostr",
  "serde",
  "serde_json",
@@ -1943,14 +1909,14 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "async-trait",
+ "bitcoin",
  "chrono",
  "clap",
  "figment",
  "futures",
  "inventory",
- "mortsom-adapter-mobile-legacy",
+ "lightning-invoice",
  "mortsom-adapter-mobile-v2",
- "mortsom-android-driver",
  "mortsom-app-contract",
  "mortsom-common",
  "mortsom-desktop-driver",
@@ -1959,6 +1925,7 @@ dependencies = [
  "mortsom-scenario-kit",
  "mortsom-scenarios",
  "mortsom-solver",
+ "mortsom-ui-driver",
  "mostro-core",
  "nostr-sdk",
  "nwc",
@@ -1982,8 +1949,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "atspi",
- "mortsom-android-driver",
  "mortsom-common",
+ "mortsom-ui-driver",
  "reqwest",
  "serde",
  "serde_json",
@@ -2041,10 +2008,10 @@ dependencies = [
  "async-trait",
  "futures",
  "inventory",
- "mortsom-android-driver",
  "mortsom-app-contract",
  "mortsom-common",
  "mortsom-observers",
+ "mortsom-ui-driver",
  "nostr-sdk",
  "serde",
  "serde_json",
@@ -2059,11 +2026,11 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "inventory",
- "mortsom-android-driver",
  "mortsom-app-contract",
  "mortsom-common",
  "mortsom-observers",
  "mortsom-scenario-kit",
+ "mortsom-ui-driver",
  "nostr-sdk",
  "tokio",
  "tracing",
@@ -2085,6 +2052,24 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+]
+
+[[package]]
+name = "mortsom-ui-driver"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "mortsom-common",
+ "reqwest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "wiremock",
 ]
 
 [[package]]

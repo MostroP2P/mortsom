@@ -3,7 +3,7 @@
 //! business (project prefix, replica suffix); the operator asks for
 //! `mostro` and the plan resolves it through the same project every other
 //! stack command uses, after the same ownership check.
-use mortsom_android_driver::process::{Command, CommandRunner};
+use mortsom_ui_driver::process::{Command, CommandRunner};
 
 use super::StackError;
 use super::compose::{BASE_SERVICES, Compose, DAEMON_SERVICE};

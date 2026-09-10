@@ -2,30 +2,26 @@
 
 use std::time::Duration;
 
-use mortsom_android_driver::avd::Actor;
-use mortsom_android_driver::ui::tests_support::ScriptedUi as FakeUi;
 use mortsom_app_contract::{OrderState, PaymentPath};
+use mortsom_common::Actor;
 use mortsom_common::Lane;
+use mortsom_ui_driver::ui::tests_support::ScriptedUi as FakeUi;
 
 use super::*;
 
 const PUBKEY: &str = "8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51";
-const RELAY_ROW: &str = "settings.relays.item.ws://10.0.2.2:7000";
+const RELAY_ROW: &str = "settings.relays.item.ws://127.0.0.1:7000";
 
 fn env() -> TestEnvironment {
     TestEnvironment {
         mostro_pubkey: PUBKEY.into(),
-        relay_url: "ws://10.0.2.2:7000".into(),
+        relay_url: "ws://127.0.0.1:7000".into(),
         lane: Lane::Local,
     }
 }
 
 fn adapter() -> MobileV2Adapter {
-    MobileV2Adapter::new(
-        DEFAULT_PACKAGE,
-        PathBuf::from("/bin/flutter"),
-        "ws://10.0.2.2:7000",
-    )
+    MobileV2Adapter::new()
 }
 
 fn device(ui: &FakeUi) -> DeviceContext<'_> {
@@ -304,7 +300,7 @@ async fn a_build_without_the_marker_is_refused_as_the_wrong_artifact() {
     ui.present(&[Ids::WALKTHROUGH_SKIP]);
     ui.on_tap(Ids::WALKTHROUGH_SKIP, &[Ids::ORDER_ADD_FAB]);
     let err = adapter().onboard(&device(&ui), &env()).await.unwrap_err();
-    // A missing marker means the installed APK is not the build under
+    // A missing marker means the client is not the build under
     // test; that is a prerequisite problem, not the app breaking a promise.
     assert_eq!(
         err.category,
@@ -394,7 +390,6 @@ async fn nwc_setup_types_the_uri_without_recording_it() {
 fn profile_and_capabilities_cover_the_happy_sell_requirements() {
     let a = adapter();
     assert_eq!(a.profile().name, PROFILE);
-    assert_eq!(a.profile().package, DEFAULT_PACKAGE);
     let required = [
         Capability::Onboarding,
         Capability::CustomNodeSelection,

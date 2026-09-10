@@ -9,7 +9,6 @@ async fn failed_teardown_evidence_retains_profiles_and_fails_acceptance() {
         files::WALLET_PAYMENTS,
         files::TIMELINE,
         files::TIMELINE_JSON,
-        "relay-container.log",
         "recovery.json",
     ] {
         let (summary, retained) = teardown_with_evidence_failure(Some(leaf)).await;
@@ -26,7 +25,6 @@ async fn failed_teardown_evidence_retains_profiles_and_fails_acceptance() {
         );
         assert_eq!(summary.farm_teardown.len(), 2);
         assert!(summary.farm_teardown.iter().all(|item| item.ok));
-        assert!(summary.relay_teardown.as_ref().unwrap().removed);
         assert!(summary.recovery.unwrap().retained);
     }
 }
@@ -56,14 +54,10 @@ async fn teardown_with_evidence_failure(leaf: Option<&str>) -> (RunSummary, bool
     if let Some(leaf) = leaf {
         std::fs::create_dir(artifacts.file(leaf).unwrap()).unwrap();
     }
-    let runner = FakeRunner::default();
-    let ui = FakeUi(Flags::default());
     let env = |_: &str| None;
     let deps = RunDeps {
         desktop_factory: &RealDesktopFactory,
         net: None,
-        runner: &runner,
-        ui: &ui,
         docker: Arc::new(FakeDocker::default()),
         probe: Arc::new(AlwaysReady),
         adapter: Arc::new(FakeAdapter::full()),
@@ -80,12 +74,8 @@ async fn teardown_with_evidence_failure(leaf: Option<&str>) -> (RunSummary, bool
         None,
         false,
     );
-    let _sessions = attach_runtime(
-        &mut world,
-        &journal,
-        options.desktop.as_ref().unwrap().bundle.clone(),
-    );
-    attach_evidence_sources(&mut world, &fixture);
+    let _sessions = attach_runtime(&mut world, &journal, options.desktop.bundle.clone());
+    attach_evidence_sources(&mut world);
     world.tear_down(&mut summary).await;
     let report = super::super::report::finish(&artifacts, &mut summary);
     if leaf == Some(files::SUMMARY) {
@@ -111,7 +101,7 @@ async fn teardown_with_evidence_failure(leaf: Option<&str>) -> (RunSummary, bool
     (summary, journal.root().join("actors").exists())
 }
 
-fn attach_evidence_sources(world: &mut super::super::World<'_>, fixture: &World) {
+fn attach_evidence_sources(world: &mut super::super::World<'_>) {
     let keys = Keys::parse(NSEC).unwrap();
     let mut scope = ObserverScope::daemon_only(keys.public_key());
     scope.add_order("old-order");
@@ -126,10 +116,4 @@ fn attach_evidence_sources(world: &mut super::super::World<'_>, fixture: &World)
     observer.ingest("ws://fake", &event);
     assert_eq!(observer.snapshot().len(), 1);
     world.observer = Some(observer);
-    world.relay = Some(RelayHandle {
-        container_name: "evidence-fixture-relay".into(),
-        host_port: 7000,
-        data_dir: fixture.dir.path().join("relay-data"),
-        image: "fixture".into(),
-    });
 }

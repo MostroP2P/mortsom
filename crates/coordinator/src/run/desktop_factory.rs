@@ -1,8 +1,9 @@
 //! Injectable construction of desktop actors and their shared Web server.
 use super::DesktopOptions;
 use async_trait::async_trait;
-use mortsom_android_driver::{avd::Actor, process::TokioRunner, ui::UiSession};
+use mortsom_common::Actor;
 use mortsom_desktop_driver::{Platform, linux::LinuxSession, server::WebServer, web::WebSession};
+use mortsom_ui_driver::{process::TokioRunner, ui::UiSession};
 use std::sync::Arc;
 
 /// Owns the Web origin and all request tasks used by a farm.
@@ -83,7 +84,6 @@ impl DesktopFactory for RealDesktopFactory {
                     None => session,
                 }))
             }
-            Platform::Android => Err("desktop factory cannot construct Android clients".into()),
         }
     }
 }

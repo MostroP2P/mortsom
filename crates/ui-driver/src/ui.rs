@@ -1,58 +1,55 @@
 //! UI automation boundary consumed by adapters and the coordinator. The
-//! real implementation is Appium/UiAutomator2; tests inject fakes.
+//! real implementations are the Linux and Web sessions; tests inject fakes.
 
-use std::path::Path;
 use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::appium::{AppiumError, AppiumServer, AppiumSession, SessionSpec};
-use crate::process::CommandRunner;
+use crate::error::UiError;
 
 /// A UI automation session bound to one device and one app.
 #[async_trait]
 pub trait UiSession: Send + Sync {
     /// Whether an element with this accessibility id exists now.
-    async fn exists(&self, accessibility_id: &str) -> Result<bool, AppiumError>;
+    async fn exists(&self, accessibility_id: &str) -> Result<bool, UiError>;
     /// Whether the element is on the screen or reachable by scrolling to
     /// it. Ask this about a list; it may swipe the screen to answer.
     /// Defaults to [`Self::exists`] for sessions with nothing to scroll.
-    async fn exists_anywhere(&self, accessibility_id: &str) -> Result<bool, AppiumError> {
+    async fn exists_anywhere(&self, accessibility_id: &str) -> Result<bool, UiError> {
         self.exists(accessibility_id).await
     }
     /// Waits for an element to appear.
-    async fn wait_for(&self, accessibility_id: &str, timeout: Duration) -> Result<(), AppiumError>;
+    async fn wait_for(&self, accessibility_id: &str, timeout: Duration) -> Result<(), UiError>;
     /// Waits for an element to disappear.
-    async fn wait_gone(&self, accessibility_id: &str, timeout: Duration)
-    -> Result<(), AppiumError>;
+    async fn wait_gone(&self, accessibility_id: &str, timeout: Duration) -> Result<(), UiError>;
     /// Taps an element.
-    async fn tap(&self, accessibility_id: &str) -> Result<(), AppiumError>;
+    async fn tap(&self, accessibility_id: &str) -> Result<(), UiError>;
     /// Clears and types into an element. Text is never logged.
-    async fn type_text(&self, accessibility_id: &str, text: &str) -> Result<(), AppiumError>;
+    async fn type_text(&self, accessibility_id: &str, text: &str) -> Result<(), UiError>;
     /// Visible text of an element.
-    async fn text_of(&self, accessibility_id: &str) -> Result<String, AppiumError>;
+    async fn text_of(&self, accessibility_id: &str) -> Result<String, UiError>;
     /// Whether an element is enabled.
-    async fn is_enabled(&self, accessibility_id: &str) -> Result<bool, AppiumError>;
+    async fn is_enabled(&self, accessibility_id: &str) -> Result<bool, UiError>;
     /// Accessibility label (state readout) of an element.
-    async fn label_of(&self, accessibility_id: &str) -> Result<String, AppiumError>;
+    async fn label_of(&self, accessibility_id: &str) -> Result<String, UiError>;
     /// PNG screenshot.
-    async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError>;
+    async fn screenshot_png(&self) -> Result<Vec<u8>, UiError>;
     /// Accessibility hierarchy XML.
-    async fn page_source(&self) -> Result<String, AppiumError>;
+    async fn page_source(&self) -> Result<String, UiError>;
     /// Background for `secs` seconds and return.
-    async fn background(&self, secs: u64) -> Result<(), AppiumError>;
+    async fn background(&self, secs: u64) -> Result<(), UiError>;
     /// Force-stop the app.
-    async fn terminate_app(&self) -> Result<(), AppiumError>;
+    async fn terminate_app(&self) -> Result<(), UiError>;
     /// Bring the app to the foreground, launching if needed.
-    async fn activate_app(&self) -> Result<(), AppiumError>;
+    async fn activate_app(&self) -> Result<(), UiError>;
     /// Clear app data.
-    async fn clear_app(&self) -> Result<(), AppiumError>;
+    async fn clear_app(&self) -> Result<(), UiError>;
     /// Enable or disable network connectivity (Wi-Fi and mobile data).
-    async fn set_connectivity(&self, enabled: bool) -> Result<(), AppiumError>;
+    async fn set_connectivity(&self, enabled: bool) -> Result<(), UiError>;
     /// Rotate the device to landscape or portrait.
-    async fn set_orientation(&self, landscape: bool) -> Result<(), AppiumError>;
+    async fn set_orientation(&self, landscape: bool) -> Result<(), UiError>;
     /// Dismiss the soft keyboard if one is up.
-    async fn hide_keyboard(&self) -> Result<(), AppiumError>;
+    async fn hide_keyboard(&self) -> Result<(), UiError>;
     /// Text logs the session's own processes wrote so far (the app's
     /// stdout, a driver log), as `(file name, contents)` pairs, for the run
     /// to keep as evidence before the session and its private directories
@@ -61,129 +58,7 @@ pub trait UiSession: Send + Sync {
         Vec::new()
     }
     /// End the session.
-    async fn end(&self) -> Result<(), AppiumError>;
-}
-
-#[async_trait]
-impl UiSession for AppiumSession {
-    async fn exists(&self, id: &str) -> Result<bool, AppiumError> {
-        AppiumSession::exists(self, id).await
-    }
-    async fn exists_anywhere(&self, id: &str) -> Result<bool, AppiumError> {
-        AppiumSession::exists_anywhere(self, id).await
-    }
-    async fn wait_for(&self, id: &str, timeout: Duration) -> Result<(), AppiumError> {
-        AppiumSession::wait_for(self, id, timeout).await.map(|_| ())
-    }
-    async fn wait_gone(&self, id: &str, timeout: Duration) -> Result<(), AppiumError> {
-        AppiumSession::wait_gone(self, id, timeout).await
-    }
-    async fn tap(&self, id: &str) -> Result<(), AppiumError> {
-        AppiumSession::tap(self, id).await
-    }
-    async fn type_text(&self, id: &str, text: &str) -> Result<(), AppiumError> {
-        AppiumSession::type_text(self, id, text).await
-    }
-    async fn text_of(&self, id: &str) -> Result<String, AppiumError> {
-        AppiumSession::text_of(self, id).await
-    }
-    async fn is_enabled(&self, id: &str) -> Result<bool, AppiumError> {
-        AppiumSession::is_enabled(self, id).await
-    }
-    async fn label_of(&self, id: &str) -> Result<String, AppiumError> {
-        AppiumSession::label_of(self, id).await
-    }
-    async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
-        AppiumSession::screenshot_png(self).await
-    }
-    async fn page_source(&self) -> Result<String, AppiumError> {
-        AppiumSession::page_source(self).await
-    }
-    async fn background(&self, secs: u64) -> Result<(), AppiumError> {
-        AppiumSession::background(self, secs).await
-    }
-    async fn terminate_app(&self) -> Result<(), AppiumError> {
-        AppiumSession::terminate_app(self).await
-    }
-    async fn activate_app(&self) -> Result<(), AppiumError> {
-        AppiumSession::activate_app(self).await
-    }
-    async fn clear_app(&self) -> Result<(), AppiumError> {
-        AppiumSession::clear_app(self).await
-    }
-    async fn set_connectivity(&self, enabled: bool) -> Result<(), AppiumError> {
-        AppiumSession::set_connectivity(self, enabled).await
-    }
-    async fn hide_keyboard(&self) -> Result<(), AppiumError> {
-        AppiumSession::hide_keyboard(self).await
-    }
-    async fn set_orientation(&self, landscape: bool) -> Result<(), AppiumError> {
-        AppiumSession::set_orientation(self, landscape).await
-    }
-    async fn end(&self) -> Result<(), AppiumError> {
-        AppiumSession::end(self).await
-    }
-}
-
-/// A running automation server that hands out sessions.
-#[async_trait]
-pub trait UiServer: Send + Sync {
-    /// Creates a session for one device.
-    async fn create_session(&self, spec: &SessionSpec) -> Result<Box<dyn UiSession>, AppiumError>;
-    /// Stops the server.
-    async fn stop(&self) -> Result<(), AppiumError>;
-}
-
-/// Starts automation servers.
-#[async_trait]
-pub trait UiDriver: Send + Sync {
-    /// Starts a server on `port`, logging into `log_dir`.
-    async fn start_server(
-        &self,
-        runner: &dyn CommandRunner,
-        port: u16,
-        log_dir: &Path,
-        ready_timeout: Duration,
-    ) -> Result<Box<dyn UiServer>, AppiumError>;
-}
-
-/// The real Appium driver: locates the `appium` executable at construction.
-#[derive(Debug, Clone)]
-pub struct AppiumDriver {
-    appium: std::path::PathBuf,
-}
-
-impl AppiumDriver {
-    /// Uses this `appium` executable.
-    pub fn new(appium: std::path::PathBuf) -> Self {
-        Self { appium }
-    }
-}
-
-#[async_trait]
-impl UiDriver for AppiumDriver {
-    async fn start_server(
-        &self,
-        runner: &dyn CommandRunner,
-        port: u16,
-        log_dir: &Path,
-        ready_timeout: Duration,
-    ) -> Result<Box<dyn UiServer>, AppiumError> {
-        let server =
-            AppiumServer::start(runner, &self.appium, port, log_dir, ready_timeout).await?;
-        Ok(Box::new(server))
-    }
-}
-
-#[async_trait]
-impl UiServer for AppiumServer {
-    async fn create_session(&self, spec: &SessionSpec) -> Result<Box<dyn UiSession>, AppiumError> {
-        let session = AppiumSession::create(&self.base_url(), spec).await?;
-        Ok(Box::new(session))
-    }
-    async fn stop(&self) -> Result<(), AppiumError> {
-        AppiumServer::stop(self).await
-    }
+    async fn end(&self) -> Result<(), UiError>;
 }
 
 /// Scripted UI session for adapter tests in this and other crates.
@@ -197,7 +72,7 @@ pub mod tests_support {
     use async_trait::async_trait;
 
     use super::UiSession;
-    use crate::appium::AppiumError;
+    use crate::error::UiError;
 
     /// Scripted UI: elements exist when listed (dynamic changes via `on_tap`),
     /// labels answer from a map, and every action is recorded.
@@ -399,30 +274,30 @@ pub mod tests_support {
 
     #[async_trait]
     impl UiSession for ScriptedUi {
-        async fn exists(&self, id: &str) -> Result<bool, AppiumError> {
+        async fn exists(&self, id: &str) -> Result<bool, UiError> {
             Ok(self.drawn(id) && self.has(id) && !self.covered(id))
         }
-        async fn exists_anywhere(&self, id: &str) -> Result<bool, AppiumError> {
+        async fn exists_anywhere(&self, id: &str) -> Result<bool, UiError> {
             // An element the screen has not drawn yet is absent below the
             // fold as much as above it: scrolling cannot find it either.
             Ok(self.drawn(id) && self.has_anywhere(id) && !self.covered(id))
         }
-        async fn wait_for(&self, id: &str, _: Duration) -> Result<(), AppiumError> {
+        async fn wait_for(&self, id: &str, _: Duration) -> Result<(), UiError> {
             // A wait scrolls before it gives up, so it sees below the fold --
             // but not under the keyboard, which is not a scrolling problem.
             if self.has_anywhere(id) && !self.covered(id) {
                 Ok(())
             } else {
-                Err(AppiumError::WaitTimeout {
+                Err(UiError::WaitTimeout {
                     accessibility_id: id.into(),
                     condition: "not found",
                     timeout: Duration::ZERO,
                 })
             }
         }
-        async fn wait_gone(&self, id: &str, _: Duration) -> Result<(), AppiumError> {
+        async fn wait_gone(&self, id: &str, _: Duration) -> Result<(), UiError> {
             if self.has(id) {
-                Err(AppiumError::WaitTimeout {
+                Err(UiError::WaitTimeout {
                     accessibility_id: id.into(),
                     condition: "still present",
                     timeout: Duration::ZERO,
@@ -431,12 +306,12 @@ pub mod tests_support {
                 Ok(())
             }
         }
-        async fn tap(&self, id: &str) -> Result<(), AppiumError> {
+        async fn tap(&self, id: &str) -> Result<(), UiError> {
             // A control the keyboard covers cannot be tapped: it is not on
             // the screen to be hit. A double that let it through would pass
             // a flow the real driver cannot perform.
             if self.covered(id) {
-                return Err(AppiumError::WaitTimeout {
+                return Err(UiError::WaitTimeout {
                     accessibility_id: id.into(),
                     condition: "under the keyboard",
                     timeout: Duration::ZERO,
@@ -457,12 +332,12 @@ pub mod tests_support {
             }
             Ok(())
         }
-        async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+        async fn hide_keyboard(&self) -> Result<(), UiError> {
             self.calls.lock().unwrap().push("hide keyboard".into());
             *self.keyboard_up.lock().unwrap() = false;
             Ok(())
         }
-        async fn type_text(&self, id: &str, text: &str) -> Result<(), AppiumError> {
+        async fn type_text(&self, id: &str, text: &str) -> Result<(), UiError> {
             *self.keyboard_up.lock().unwrap() = true;
             // Record the length only: secrets never reach logs, not even fakes'.
             self.calls
@@ -495,7 +370,7 @@ pub mod tests_support {
             }
             Ok(())
         }
-        async fn text_of(&self, id: &str) -> Result<String, AppiumError> {
+        async fn text_of(&self, id: &str) -> Result<String, UiError> {
             Ok(self
                 .text
                 .lock()
@@ -504,10 +379,10 @@ pub mod tests_support {
                 .map(|value| value.expose().to_owned())
                 .unwrap_or_default())
         }
-        async fn is_enabled(&self, id: &str) -> Result<bool, AppiumError> {
+        async fn is_enabled(&self, id: &str) -> Result<bool, UiError> {
             Ok(!self.disabled.lock().unwrap().iter().any(|d| d == id))
         }
-        async fn label_of(&self, id: &str) -> Result<String, AppiumError> {
+        async fn label_of(&self, id: &str) -> Result<String, UiError> {
             {
                 let mut pending = self.label_pending.lock().unwrap();
                 if let Some((interim, left)) = pending.get_mut(id) {
@@ -526,10 +401,10 @@ pub mod tests_support {
                 .cloned()
                 .unwrap_or_default())
         }
-        async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
+        async fn screenshot_png(&self) -> Result<Vec<u8>, UiError> {
             Ok(vec![])
         }
-        async fn page_source(&self) -> Result<String, AppiumError> {
+        async fn page_source(&self) -> Result<String, UiError> {
             // Hierarchy dump listing every present id as a resource-id.
             Ok(self
                 .present
@@ -539,30 +414,30 @@ pub mod tests_support {
                 .map(|id| format!("<node resource-id=\"{id}\"/>"))
                 .collect())
         }
-        async fn background(&self, _: u64) -> Result<(), AppiumError> {
+        async fn background(&self, _: u64) -> Result<(), UiError> {
             Ok(())
         }
-        async fn terminate_app(&self) -> Result<(), AppiumError> {
+        async fn terminate_app(&self) -> Result<(), UiError> {
             Ok(())
         }
-        async fn activate_app(&self) -> Result<(), AppiumError> {
+        async fn activate_app(&self) -> Result<(), UiError> {
             Ok(())
         }
-        async fn clear_app(&self) -> Result<(), AppiumError> {
+        async fn clear_app(&self) -> Result<(), UiError> {
             Ok(())
         }
-        async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
+        async fn set_connectivity(&self, _: bool) -> Result<(), UiError> {
             Ok(())
         }
-        async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
+        async fn set_orientation(&self, _: bool) -> Result<(), UiError> {
             Ok(())
         }
-        async fn end(&self) -> Result<(), AppiumError> {
+        async fn end(&self) -> Result<(), UiError> {
             let mut failures = self.end_failures.lock().unwrap();
             if *failures > 0 {
                 *failures -= 1;
                 self.calls.lock().unwrap().push("end failed".into());
-                return Err(AppiumError::WebDriver(
+                return Err(UiError::WebDriver(
                     crate::webdriver::WebDriverError::Transport("injected cleanup failure".into()),
                 ));
             }

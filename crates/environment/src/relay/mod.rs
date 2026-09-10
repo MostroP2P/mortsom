@@ -18,8 +18,6 @@ use crate::ports::allocate_port;
 
 /// Path inside the container where nostr-rs-relay keeps its database.
 pub const RELAY_DATA_MOUNT: &str = "/usr/src/app/db";
-/// Hostname the Android emulator uses to reach the host.
-pub const EMULATOR_HOST: &str = "10.0.2.2";
 /// Default readiness deadline.
 pub const DEFAULT_READY_TIMEOUT: Duration = Duration::from_secs(60);
 /// Interval between readiness probes.
@@ -54,11 +52,6 @@ impl RelayHandle {
             crate::daemon::DOCKER_HOST_ALIAS,
             self.host_port
         )
-    }
-
-    /// URL as seen from an Android emulator.
-    pub fn emulator_url(&self) -> String {
-        format!("ws://{EMULATOR_HOST}:{}", self.host_port)
     }
 }
 

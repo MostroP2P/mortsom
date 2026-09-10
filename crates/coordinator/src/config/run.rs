@@ -5,8 +5,6 @@ use serde::{Deserialize, Serialize};
 
 /// Absolute ceiling for `max_run_spend_sats`, regardless of configuration.
 pub const MAX_RUN_SPEND_CEILING_SATS: u64 = 1_000_000;
-/// At most one retry, and only for classified infrastructure failures.
-pub const MAX_INFRA_RETRIES: u32 = 1;
 
 /// `[run]` section.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,9 +30,6 @@ pub struct RunConfig {
     /// Explicit opt-in for value-moving scenarios on mainnet.
     #[serde(default)]
     pub allow_mainnet: bool,
-    /// Retries permitted for classified infrastructure failures (0 or 1).
-    #[serde(default = "default_infra_retries")]
-    pub infra_retries: u32,
     /// Fiat currency code used by order drafts.
     #[serde(default = "default_fiat_code")]
     pub fiat_code: String,
@@ -74,9 +69,6 @@ pub(super) fn default_artifacts_dir() -> String {
 }
 fn default_true() -> bool {
     true
-}
-fn default_infra_retries() -> u32 {
-    MAX_INFRA_RETRIES
 }
 fn default_fiat_code() -> String {
     "USD".to_owned()
@@ -139,12 +131,6 @@ impl RunConfig {
         if self.artifacts_dir.is_empty() {
             errors.push("run.artifacts_dir must not be empty".to_owned());
         }
-        if self.infra_retries > MAX_INFRA_RETRIES {
-            errors.push(format!(
-                "run.infra_retries {} exceeds the maximum {}",
-                self.infra_retries, MAX_INFRA_RETRIES
-            ));
-        }
         if self.fiat_code.len() != 3 || !self.fiat_code.chars().all(|c| c.is_ascii_uppercase()) {
             errors.push("run.fiat_code must be a three-letter uppercase code".to_owned());
         }
@@ -182,7 +168,6 @@ mod tests {
             artifacts_dir: "./artifacts".into(),
             cleanup: true,
             allow_mainnet: false,
-            infra_retries: 1,
             fiat_code: "USD".into(),
             fiat_amount: 1,
             payment_method: "cash".into(),
@@ -227,7 +212,6 @@ mod tests {
         assert_eq!(config.artifacts_dir, "./artifacts");
         assert!(config.cleanup);
         assert!(!config.allow_mainnet);
-        assert_eq!(config.infra_retries, 1);
         assert_eq!(config.fiat_code, "USD");
         assert_eq!(config.state_timeout_secs, 180);
     }
@@ -262,21 +246,19 @@ mod tests {
     }
 
     #[test]
-    fn hard_ceiling_zero_values_and_retries_are_enforced() {
+    fn hard_ceiling_and_zero_values_are_enforced() {
         let mut config = valid();
         config.amount_sats = 0;
         config.max_order_sats = 0;
         config.max_run_spend_sats = MAX_RUN_SPEND_CEILING_SATS + 1;
         config.jobs = 0;
         config.artifacts_dir.clear();
-        config.infra_retries = 2;
 
         let errors = errors_of(&config);
 
         assert!(errors.iter().any(|e| e.contains("hard ceiling")));
         assert!(errors.iter().any(|e| e.contains("run.jobs")));
         assert!(errors.iter().any(|e| e.contains("artifacts_dir")));
-        assert!(errors.iter().any(|e| e.contains("infra_retries")));
         assert!(errors.iter().any(|e| e.contains("amount_sats must")));
     }
 

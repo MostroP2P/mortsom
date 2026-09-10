@@ -7,8 +7,8 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{OrderReference, OrderState};
+use mortsom_common::Actor;
 use mortsom_common::FailureCategory;
 
 use crate::actions::wait_app_state;
@@ -397,9 +397,7 @@ pub async fn replay_order_events(
     Ok(accepted)
 }
 
-fn infra(
-    what: &'static str,
-) -> impl Fn(mortsom_android_driver::appium::AppiumError) -> ScenarioError {
+fn infra(what: &'static str) -> impl Fn(mortsom_ui_driver::error::UiError) -> ScenarioError {
     move |e| ScenarioError::new(FailureCategory::TestInfrastructure, format!("{what}: {e}"))
 }
 
@@ -645,112 +643,85 @@ mod tests {
     async fn a_failed_rotation_restore_is_recorded() {
         struct StuckRotation;
         #[async_trait::async_trait]
-        impl mortsom_android_driver::ui::UiSession for StuckRotation {
-            async fn hide_keyboard(
-                &self,
-            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+        impl mortsom_ui_driver::ui::UiSession for StuckRotation {
+            async fn hide_keyboard(&self) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
             /// Rotating away works; coming back does not.
             async fn set_orientation(
                 &self,
                 landscape: bool,
-            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            ) -> Result<(), mortsom_ui_driver::error::UiError> {
                 if landscape {
                     return Ok(());
                 }
-                Err(mortsom_android_driver::appium::AppiumError::NotReady {
-                    url: "x".into(),
-                    timeout: Duration::ZERO,
-                })
+                Err(mortsom_ui_driver::error::UiError::WebDriver(
+                    mortsom_ui_driver::webdriver::WebDriverError::Transport(
+                        "rotation stuck".into(),
+                    ),
+                ))
             }
-            async fn exists(
-                &self,
-                _: &str,
-            ) -> Result<bool, mortsom_android_driver::appium::AppiumError> {
+            async fn exists(&self, _: &str) -> Result<bool, mortsom_ui_driver::error::UiError> {
                 Ok(false)
             }
             async fn wait_for(
                 &self,
                 _: &str,
                 _: Duration,
-            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            ) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
             async fn wait_gone(
                 &self,
                 _: &str,
                 _: Duration,
-            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            ) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
-            async fn tap(
-                &self,
-                _: &str,
-            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            async fn tap(&self, _: &str) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
             async fn type_text(
                 &self,
                 _: &str,
                 _: &str,
-            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            ) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
-            async fn text_of(
-                &self,
-                _: &str,
-            ) -> Result<String, mortsom_android_driver::appium::AppiumError> {
+            async fn text_of(&self, _: &str) -> Result<String, mortsom_ui_driver::error::UiError> {
                 Ok(String::new())
             }
-            async fn is_enabled(
-                &self,
-                _: &str,
-            ) -> Result<bool, mortsom_android_driver::appium::AppiumError> {
+            async fn is_enabled(&self, _: &str) -> Result<bool, mortsom_ui_driver::error::UiError> {
                 Ok(true)
             }
-            async fn label_of(
-                &self,
-                _: &str,
-            ) -> Result<String, mortsom_android_driver::appium::AppiumError> {
+            async fn label_of(&self, _: &str) -> Result<String, mortsom_ui_driver::error::UiError> {
                 Ok(String::new())
             }
-            async fn screenshot_png(
-                &self,
-            ) -> Result<Vec<u8>, mortsom_android_driver::appium::AppiumError> {
+            async fn screenshot_png(&self) -> Result<Vec<u8>, mortsom_ui_driver::error::UiError> {
                 Ok(vec![])
             }
-            async fn page_source(
-                &self,
-            ) -> Result<String, mortsom_android_driver::appium::AppiumError> {
+            async fn page_source(&self) -> Result<String, mortsom_ui_driver::error::UiError> {
                 Ok(String::new())
             }
-            async fn background(
-                &self,
-                _: u64,
-            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            async fn background(&self, _: u64) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
-            async fn terminate_app(
-                &self,
-            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            async fn terminate_app(&self) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
-            async fn activate_app(
-                &self,
-            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            async fn activate_app(&self) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
-            async fn clear_app(&self) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            async fn clear_app(&self) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
             async fn set_connectivity(
                 &self,
                 _: bool,
-            ) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            ) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
-            async fn end(&self) -> Result<(), mortsom_android_driver::appium::AppiumError> {
+            async fn end(&self) -> Result<(), mortsom_ui_driver::error::UiError> {
                 Ok(())
             }
         }

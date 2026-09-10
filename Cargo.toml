@@ -4,13 +4,11 @@ members = [
     "crates/common",
     "crates/coordinator",
     "crates/app-contract",
-    "crates/android-driver",
     "crates/desktop-driver",
     "crates/environment",
     "crates/observers",
     "crates/scenario-kit",
     "crates/solver",
-    "crates/app-adapters/mobile-legacy",
     "crates/app-adapters/mobile-v2",
     "scenarios",
 ]
@@ -28,13 +26,12 @@ fedimint-tonic-lnd = { version = "0.4.0", features = ["lightningrpc", "invoicesr
 # Internal crates
 mortsom-common = { path = "crates/common" }
 mortsom-app-contract = { path = "crates/app-contract" }
-mortsom-android-driver = { path = "crates/android-driver" }
+mortsom-ui-driver = { path = "crates/ui-driver" }
 mortsom-desktop-driver = { path = "crates/desktop-driver" }
 mortsom-environment = { path = "crates/environment" }
 mortsom-observers = { path = "crates/observers" }
 mortsom-scenario-kit = { path = "crates/scenario-kit" }
 mortsom-solver = { path = "crates/solver" }
-mortsom-adapter-mobile-legacy = { path = "crates/app-adapters/mobile-legacy" }
 mortsom-adapter-mobile-v2 = { path = "crates/app-adapters/mobile-v2" }
 mortsom-scenarios = { path = "scenarios" }
 
@@ -75,6 +72,7 @@ uuid = { version = "1.24.1", features = ["v4", "serde"] }
 chrono = { version = "0.4.45", features = ["serde"] }
 inventory = "0.3.24"
 lightning-invoice = "0.34.1"
+bitcoin = "0.32.7"
 regex = "1.13.1"
 zeroize = { version = "1.9.0", features = ["derive"] }
 

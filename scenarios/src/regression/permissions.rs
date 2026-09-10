@@ -1,7 +1,7 @@
 //! Unauthorized-action UX (Phase 5.4): each side sees only the actions its
 //! role and the order state allow, and nothing illegal reaches the relay.
 
-use mortsom_android_driver::avd::Actor;
+use mortsom_common::Actor;
 use mortsom_scenario_kit::cancel::expect_actions;
 use mortsom_scenario_kit::context::{Context, ScenarioError};
 use mortsom_scenario_kit::recovery::{expect_no_actor_message, message_baseline};

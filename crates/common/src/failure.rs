@@ -15,7 +15,7 @@ pub enum FailureCategory {
     Product,
     /// A stable identifier or bootstrap hook the app promised is missing.
     AutomationContract,
-    /// Emulator, Appium, adb, Docker or host tooling failed.
+    /// A client process, a driver, Docker or host tooling failed.
     TestInfrastructure,
     /// The run-owned relay failed or misbehaved.
     Relay,

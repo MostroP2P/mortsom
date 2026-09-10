@@ -1,7 +1,7 @@
 //! Immutable identity checks for the daemon image selected at stack up.
 use std::time::Duration;
 
-use mortsom_android_driver::process::{Command, CommandRunner, run_ok};
+use mortsom_ui_driver::process::{Command, CommandRunner, run_ok};
 use serde::Deserialize;
 
 use super::StackError;

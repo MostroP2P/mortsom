@@ -2,7 +2,7 @@
 //! The stack module against a scripted Docker: no daemon, no network.
 use super::*;
 use async_trait::async_trait;
-use mortsom_android_driver::process::{ChildProcess, Command, CommandRunner, Output, ProcessError};
+use mortsom_ui_driver::process::{ChildProcess, Command, CommandRunner, Output, ProcessError};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -370,7 +370,7 @@ async fn two_stacks_never_share_an_identity() {
 async fn up_refuses_when_the_pull_fails_and_starts_nothing() {
     // Arrange
     let (_dir, layout) = scratch();
-    let runner = mortsom_android_driver::process::tests_support::FakeRunner::default();
+    let runner = mortsom_ui_driver::process::tests_support::FakeRunner::default();
     runner.script_failure("docker pull", "manifest unknown");
 
     // Act

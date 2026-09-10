@@ -1,7 +1,7 @@
 //! W3C WebDriver automation of Flutter's public semantics DOM.
 use async_trait::async_trait;
-use mortsom_android_driver::{
-    appium::AppiumError,
+use mortsom_ui_driver::{
+    error::UiError,
     process::{ChildProcess, Command, CommandRunner},
     ui::UiSession,
     webdriver::{Element, Locator, Session},
@@ -13,12 +13,10 @@ use tokio::sync::Mutex;
 mod lifecycle;
 use lifecycle::{driver_port, stop};
 
-pub(crate) fn error(cause: impl std::fmt::Display) -> AppiumError {
-    AppiumError::WebDriver(
-        mortsom_android_driver::webdriver::WebDriverError::Transport(
-            mortsom_common::Redactor::default().redact(&format!("Web automation: {cause}")),
-        ),
-    )
+pub(crate) fn error(cause: impl std::fmt::Display) -> UiError {
+    UiError::WebDriver(mortsom_ui_driver::webdriver::WebDriverError::Transport(
+        mortsom_common::Redactor::default().redact(&format!("Web automation: {cause}")),
+    ))
 }
 
 struct Runtime {
@@ -63,7 +61,7 @@ impl WebSession {
         self
     }
 
-    async fn session(&self) -> Result<Session, AppiumError> {
+    async fn session(&self) -> Result<Session, UiError> {
         self.runtime
             .lock()
             .await
@@ -71,14 +69,14 @@ impl WebSession {
             .and_then(|r| r.session.clone())
             .ok_or_else(|| error("browser session is not ready"))
     }
-    async fn element(&self, id: &str) -> Result<Element, AppiumError> {
+    async fn element(&self, id: &str) -> Result<Element, UiError> {
         Ok(self
             .session()
             .await?
             .find_element(Locator::XPath, &selector(id)?)
             .await?)
     }
-    async fn wait(&self, id: &str, present: bool, timeout: Duration) -> Result<(), AppiumError> {
+    async fn wait(&self, id: &str, present: bool, timeout: Duration) -> Result<(), UiError> {
         tokio::time::timeout(timeout, async {
             let mut tick = tokio::time::interval(Duration::from_millis(150));
             loop {
@@ -90,7 +88,7 @@ impl WebSession {
         })
         .await
         .unwrap_or_else(|_| {
-            Err(AppiumError::WaitTimeout {
+            Err(UiError::WaitTimeout {
                 accessibility_id: id.into(),
                 condition: if present {
                     "not found"
@@ -101,7 +99,7 @@ impl WebSession {
             })
         })
     }
-    async fn create(&self, slot: &mut Option<Runtime>) -> Result<(), AppiumError> {
+    async fn create(&self, slot: &mut Option<Runtime>) -> Result<(), UiError> {
         use std::os::unix::fs::DirBuilderExt;
         let storage = self
             .storage
@@ -142,7 +140,7 @@ impl WebSession {
         Ok(())
     }
 
-    async fn start(&self, runtime: &mut Runtime) -> Result<(), AppiumError> {
+    async fn start(&self, runtime: &mut Runtime) -> Result<(), UiError> {
         let log = runtime.root.join("driver.log");
         runtime.driver = Some(
             self.runner
@@ -186,7 +184,7 @@ fn driver_args() -> Vec<&'static str> {
 }
 
 /// Exact identifier selector. IDs are contract values, not arbitrary XPath.
-pub fn selector(id: &str) -> Result<String, AppiumError> {
+pub fn selector(id: &str) -> Result<String, UiError> {
     if id.is_empty() || id.chars().any(char::is_control) {
         return Err(error("invalid automation identifier"));
     }
@@ -206,7 +204,7 @@ pub fn selector(id: &str) -> Result<String, AppiumError> {
 
 #[async_trait]
 impl UiSession for WebSession {
-    async fn exists(&self, id: &str) -> Result<bool, AppiumError> {
+    async fn exists(&self, id: &str) -> Result<bool, UiError> {
         Ok(!self
             .session()
             .await?
@@ -214,29 +212,29 @@ impl UiSession for WebSession {
             .await?
             .is_empty())
     }
-    async fn wait_for(&self, id: &str, timeout: Duration) -> Result<(), AppiumError> {
+    async fn wait_for(&self, id: &str, timeout: Duration) -> Result<(), UiError> {
         self.wait(id, true, timeout).await
     }
-    async fn wait_gone(&self, id: &str, timeout: Duration) -> Result<(), AppiumError> {
+    async fn wait_gone(&self, id: &str, timeout: Duration) -> Result<(), UiError> {
         self.wait(id, false, timeout).await
     }
-    async fn tap(&self, id: &str) -> Result<(), AppiumError> {
+    async fn tap(&self, id: &str) -> Result<(), UiError> {
         crate::web_input::press(&self.session().await?, id, Duration::from_secs(5)).await
     }
-    async fn type_text(&self, id: &str, text: &str) -> Result<(), AppiumError> {
+    async fn type_text(&self, id: &str, text: &str) -> Result<(), UiError> {
         crate::web_input::enter(&self.session().await?, id, text, Duration::from_secs(5)).await
     }
-    async fn text_of(&self, id: &str) -> Result<String, AppiumError> {
+    async fn text_of(&self, id: &str) -> Result<String, UiError> {
         let session = self.session().await?;
         match crate::web_input::read(&session, id).await {
             Ok(value) => Ok(value),
-            Err(AppiumError::WebDriver(cause)) if cause.is_no_such_element() => {
+            Err(UiError::WebDriver(cause)) if cause.is_no_such_element() => {
                 Ok(session.text(&self.element(id).await?).await?)
             }
             Err(cause) => Err(cause),
         }
     }
-    async fn label_of(&self, id: &str) -> Result<String, AppiumError> {
+    async fn label_of(&self, id: &str) -> Result<String, UiError> {
         let session = self.session().await?;
         let node = self.element(id).await?;
         let label = session
@@ -247,7 +245,7 @@ impl UiSession for WebSession {
             None => Ok(session.text(&node).await?.trim().to_owned()),
         }
     }
-    async fn is_enabled(&self, id: &str) -> Result<bool, AppiumError> {
+    async fn is_enabled(&self, id: &str) -> Result<bool, UiError> {
         let session = self.session().await?;
         let node = self.element(id).await?;
         let disabled = session
@@ -255,10 +253,10 @@ impl UiSession for WebSession {
             .await?;
         Ok(disabled.as_str() != Some("true") && session.is_enabled(&node).await?)
     }
-    async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
+    async fn screenshot_png(&self) -> Result<Vec<u8>, UiError> {
         Ok(self.session().await?.screenshot_png().await?)
     }
-    async fn page_source(&self) -> Result<String, AppiumError> {
+    async fn page_source(&self) -> Result<String, UiError> {
         Ok(self
             .session()
             .await?
@@ -266,17 +264,17 @@ impl UiSession for WebSession {
             .await?
             .replace("flt-semantics-identifier=", "resource-id="))
     }
-    async fn background(&self, _: u64) -> Result<(), AppiumError> {
+    async fn background(&self, _: u64) -> Result<(), UiError> {
         Err(error("Web background capability is not implemented"))
     }
-    async fn terminate_app(&self) -> Result<(), AppiumError> {
+    async fn terminate_app(&self) -> Result<(), UiError> {
         self.session()
             .await?
             .post("url", &json!({"url":"about:blank"}))
             .await?;
         Ok(())
     }
-    async fn activate_app(&self) -> Result<(), AppiumError> {
+    async fn activate_app(&self) -> Result<(), UiError> {
         {
             let mut slot = self.runtime.lock().await;
             if slot.is_none()
@@ -294,7 +292,7 @@ impl UiSession for WebSession {
             .await?;
         Ok(())
     }
-    async fn clear_app(&self) -> Result<(), AppiumError> {
+    async fn clear_app(&self) -> Result<(), UiError> {
         if self
             .storage
             .as_ref()
@@ -305,13 +303,13 @@ impl UiSession for WebSession {
         self.end().await?;
         self.create(&mut *self.runtime.lock().await).await
     }
-    async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
+    async fn set_connectivity(&self, _: bool) -> Result<(), UiError> {
         Err(error("Web network capability is not implemented"))
     }
-    async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
+    async fn set_orientation(&self, _: bool) -> Result<(), UiError> {
         Err(error("Web rotation capability is not implemented"))
     }
-    async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+    async fn hide_keyboard(&self) -> Result<(), UiError> {
         Ok(())
     }
     /// Chromium's own log, which carries the page's console and with it
@@ -335,7 +333,7 @@ impl UiSession for WebSession {
         })
         .collect()
     }
-    async fn end(&self) -> Result<(), AppiumError> {
+    async fn end(&self) -> Result<(), UiError> {
         let mut slot = self.runtime.lock().await;
         if let Some(runtime) = slot.as_mut() {
             stop(runtime).await?;

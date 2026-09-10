@@ -11,7 +11,6 @@ pub(super) async fn run_command(
     xvfb: PathBuf,
 ) -> ExitCode {
     mortsom_scenarios::link();
-    let desktop = platform != mortsom_desktop_driver::Platform::Android;
     let selected = match mortsom_scenario_kit::registry::select(&scenarios, tag.as_deref()) {
         Ok(selected) => selected,
         Err(error) => {
@@ -19,7 +18,7 @@ pub(super) async fn run_command(
             return ExitCode::from(2);
         }
     };
-    if !desktop || selected.len() == 1 {
+    if selected.len() == 1 {
         return run_once(
             config_path,
             stack_dir,
@@ -34,9 +33,9 @@ pub(super) async fn run_command(
         .await
         .code;
     }
-    // A desktop run starts fresh actors and resolves everything it created
-    // before it ends, so a family is a sequence of such runs, one scenario
-    // each, and never one run sharing Alice and Bob across scenarios.
+    // A run starts fresh actors and resolves everything it created before
+    // it ends, so a family is a sequence of such runs, one scenario each,
+    // and never one run sharing Alice and Bob across scenarios.
     let mut batch = Batch::default();
     for def in &selected {
         let attempt = run_once(
@@ -224,84 +223,51 @@ async fn run_once(
         artifact,
         xvfb,
     } = selection;
-    if let Err(error) = crate::run::select_for_run(
-        &scenarios,
-        tag.as_deref(),
-        platform != mortsom_desktop_driver::Platform::Android,
-    ) {
+    if let Err(error) = mortsom_scenario_kit::registry::select(&scenarios, tag.as_deref()) {
         eprintln!("{error}");
         return Attempt::refused(2);
     }
-    let loaded = if platform == mortsom_desktop_driver::Platform::Android {
-        Config::load(config_path)
-            .map(|config| (config, None))
-            .map_err(|e| e.to_string())
-    } else {
-        crate::desktop::load(config_path, stack_dir, &TokioRunner, &RealHost)
-            .await
-            .map(|(config, stack)| (config, Some(stack)))
-    };
-    let (config, stack) = match loaded {
-        Ok(loaded) => loaded,
-        Err(e) => {
-            eprintln!("{e}");
-            return Attempt::refused(2);
-        }
-    };
-    if platform != mortsom_desktop_driver::Platform::Android {
-        let pending = RealHost
-            .env("HOME")
-            .ok_or("HOME is required for desktop recovery".to_string())
-            .and_then(|home| {
-                crate::recovery_store::FileJournal::directory(std::path::Path::new(&home))
-            })
-            .and_then(|base| {
-                crate::recovery_store::FileJournal::refuse_pending(&base)
-                    .map_err(|pending| pending.message(use_color_on_stderr()))
-            });
-        if let Err(error) = pending {
-            eprintln!("{error}");
-            return Attempt::refused(2);
-        }
-        if ![&config.wallets.alice, &config.wallets.bob]
-            .iter()
-            .all(|wallet| matches!(wallet, mortsom_environment::WalletConfig::Lnd { .. }))
-        {
-            eprintln!(
-                "desktop checkpoint recovery requires Alice and Bob on caller-controlled LND wallets"
-            );
-            return Attempt::refused(2);
-        }
+    let (config, stack) =
+        match crate::desktop::load(config_path, stack_dir, &TokioRunner, &RealHost).await {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                eprintln!("{e}");
+                return Attempt::refused(2);
+            }
+        };
+    let pending = RealHost
+        .env("HOME")
+        .ok_or("HOME is required for desktop recovery".to_string())
+        .and_then(|home| crate::recovery_store::FileJournal::directory(std::path::Path::new(&home)))
+        .and_then(|base| {
+            crate::recovery_store::FileJournal::refuse_pending(&base)
+                .map_err(|pending| pending.message(use_color_on_stderr()))
+        });
+    if let Err(error) = pending {
+        eprintln!("{error}");
+        return Attempt::refused(2);
     }
-    let desktop = if platform == mortsom_desktop_driver::Platform::Android {
-        None
-    } else {
+    if ![&config.wallets.alice, &config.wallets.bob]
+        .iter()
+        .all(|wallet| matches!(wallet, mortsom_environment::WalletConfig::Lnd { .. }))
+    {
+        eprintln!(
+            "desktop checkpoint recovery requires Alice and Bob on caller-controlled LND wallets"
+        );
+        return Attempt::refused(2);
+    }
+    let desktop =
         match crate::desktop::prepare(&config, platform, artifact, xvfb, &TokioRunner, &RealHost)
             .await
         {
-            Ok(options) => Some(options),
+            Ok(options) => options,
             Err(error) => {
                 eprintln!("{error}");
                 return Attempt::refused(2);
             }
-        }
-    };
-    let appium = RealHost.which("appium").unwrap_or_default();
-    let flutter = RealHost.which("flutter").unwrap_or_default();
-    let ui = AppiumDriver::new(appium);
+        };
     let docker = DockerCli::default();
-    let seed = if desktop.is_some() {
-        format!("ws://127.0.0.1:{}", config.relay.host_port)
-    } else {
-        RelayHandle {
-            container_name: String::new(),
-            host_port: config.relay.host_port,
-            data_dir: std::path::PathBuf::new(),
-            image: String::new(),
-        }
-        .emulator_url()
-    };
-    let adapter = select_adapter(&config, flutter, seed);
+    let adapter = select_adapter();
     let env = |name: &str| std::env::var(name).ok();
     let wallets = wallet_factory;
     let net = RealNet::with_daemon_timeout(std::time::Duration::from_secs(
@@ -310,8 +276,6 @@ async fn run_once(
     let deps = RunDeps {
         desktop_factory: &crate::run::RealDesktopFactory,
         net: Some(&net),
-        runner: &TokioRunner,
-        ui: &ui,
         docker: Arc::new(docker),
         probe: Arc::new(NostrProbe),
         adapter,
@@ -322,9 +286,8 @@ async fn run_once(
     let options = RunOptions {
         scenarios,
         tag,
-        shutdown_grace: None,
         desktop,
-        stack,
+        stack: Some(stack),
     };
     match run_scenarios(&config, &options, &deps).await {
         Ok(summary) => {

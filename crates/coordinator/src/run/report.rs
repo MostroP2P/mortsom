@@ -1,13 +1,12 @@
 //! Scenario run report schema and final verdict rendering.
+use super::farm::TeardownItem;
 use crate::{
     artifacts::{RunArtifacts, files},
     bootstrap::ActorSetup,
     report::{RunReport, write_report},
 };
-use mortsom_android_driver::farm::TeardownItem;
 use mortsom_common::check::DoctorReport;
 use mortsom_common::{Lane, RunId};
-use mortsom_environment::relay::{RelayHandle, RelayTeardown};
 use mortsom_scenario_kit::{
     budget::Totals,
     cleanup::CleanupReport,
@@ -31,7 +30,7 @@ pub struct RunSummary {
     /// Version observed in a fresh signed daemon info event.
     #[serde(default)]
     pub mostrod_version: Option<String>,
-    /// Public persistent stack snapshot, absent in historical Android reports.
+    /// Public persistent stack snapshot, absent in historical reports.
     #[serde(default)]
     pub stack: Option<crate::stack::StackSnapshot>,
     /// Stable identity of the public stack configuration, when available.
@@ -48,8 +47,6 @@ pub struct RunSummary {
     pub app_build: Option<crate::provenance::BuildProvenance>,
     /// Whether mainnet clearance was granted.
     pub mainnet_cleared: bool,
-    /// Relay used.
-    pub relay: Option<RelayHandle>,
     /// Actor bootstrap outcomes.
     pub actors: Vec<ActorSetup>,
     /// Scenario results.
@@ -65,8 +62,6 @@ pub struct RunSummary {
     pub budget: Option<Totals>,
     /// Farm teardown.
     pub farm_teardown: Vec<TeardownItem>,
-    /// Relay teardown.
-    pub relay_teardown: Option<RelayTeardown>,
     /// True when every check passed and every selected scenario passed or
     /// was skipped with a reason.
     pub passed: bool,
@@ -110,7 +105,6 @@ pub(super) fn finish(artifacts: &RunArtifacts, summary: &mut RunSummary) -> Resu
         "orders": summary.cleanup,
         "recovery": summary.recovery,
         "farm": summary.farm_teardown,
-        "relay": summary.relay_teardown,
     });
     let environment = environment(summary, "finished");
     // The timeline is the scenario timeline written at teardown; the report
@@ -155,10 +149,7 @@ pub(super) fn initial_summary(
         command: "run".into(),
         app_profile,
         app_version: None,
-        app_build: options
-            .desktop
-            .as_ref()
-            .map(|desktop| desktop.provenance.clone()),
+        app_build: Some(options.desktop.provenance.clone()),
         mostrod_version: None,
         stack: options.stack.clone(),
         stack_fingerprint: options
@@ -166,18 +157,9 @@ pub(super) fn initial_summary(
             .as_ref()
             .map(crate::stack::StackSnapshot::fingerprint)
             .transpose()?,
-        app_artifact: options
-            .desktop
-            .as_ref()
-            .map(|d| d.bundle.fingerprint().clone()),
-        platform: Some(
-            options
-                .desktop
-                .as_ref()
-                .map_or(mortsom_desktop_driver::Platform::Android, |d| d.platform),
-        ),
+        app_artifact: Some(options.desktop.bundle.fingerprint().clone()),
+        platform: Some(options.desktop.platform),
         mainnet_cleared,
-        relay: None,
         actors: Vec::new(),
         results: Vec::new(),
         checks: DoctorReport::default(),
@@ -185,7 +167,6 @@ pub(super) fn initial_summary(
         recovery: None,
         budget: None,
         farm_teardown: Vec::new(),
-        relay_teardown: None,
         passed: false,
     })
 }
@@ -205,6 +186,5 @@ fn environment(summary: &RunSummary, status: &str) -> serde_json::Value {
         "app_artifact": summary.app_artifact,
         "app_build": summary.app_build,
         "mainnet_cleared": summary.mainnet_cleared,
-        "relay": summary.relay.as_ref().map(|r| serde_json::json!({"container_name": r.container_name, "host_port": r.host_port})),
     })
 }

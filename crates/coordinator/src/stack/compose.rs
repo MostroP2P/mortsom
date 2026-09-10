@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use mortsom_android_driver::process::{Command, CommandRunner, Output, run_ok};
+use mortsom_ui_driver::process::{Command, CommandRunner, Output, run_ok};
 
 use super::StackError;
 use super::layout::{Layout, PROJECT};

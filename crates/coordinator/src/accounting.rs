@@ -218,12 +218,12 @@ mod tests {
     fn summary(run_id: &str, lane: &str, passed: bool, settled: u64, unresolved: &str) -> String {
         format!(
             r#"{{
-  "run_id": "{run_id}", "lane": "{lane}", "command": "run", "app_profile": "mobile-legacy",
+  "run_id": "{run_id}", "lane": "{lane}", "command": "run", "app_profile": "profile-b",
   "app_version": "1.3.2", "mainnet_cleared": true, "relay": null, "actors": [],
   "results": [
-    {{"name": "happy_sell", "app_profile": "mobile-legacy", "app_version": null,
+    {{"name": "happy_sell", "app_profile": "profile-b", "app_version": null,
      "outcome": {{{}}}, "attempts": 1, "duration": {{"secs": 60, "nanos": 0}}}},
-    {{"name": "x", "app_profile": "mobile-legacy", "app_version": null,
+    {{"name": "x", "app_profile": "profile-b", "app_version": null,
      "outcome": {{"outcome": "skipped", "reason": "cap"}}, "attempts": 0, "duration": {{"secs": 0, "nanos": 0}}}}
   ],
   "checks": {{"checks": []}},
@@ -282,7 +282,7 @@ mod tests {
         assert!(canary.runs.iter().all(|r| r.lane == Lane::Canary));
         let md = std::fs::read_to_string(dir.path().join(ACCOUNTING_MD)).unwrap();
         assert!(md.contains(
-            "| 20260815T110000Z-bbbbbb | canary | mobile-legacy | FAIL | 0/0/2 | 0 | 1 | 0 | 1 |"
+            "| 20260815T110000Z-bbbbbb | canary | profile-b | FAIL | 0/0/2 | 0 | 1 | 0 | 1 |"
         ));
         let json: AccountingReport = serde_json::from_str(
             &std::fs::read_to_string(dir.path().join(ACCOUNTING_JSON)).unwrap(),

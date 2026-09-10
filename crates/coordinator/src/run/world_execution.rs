@@ -33,14 +33,14 @@ impl World<'_> {
             })
             .collect();
         let ctx = Context {
-            journal: recovery::journal(self.desktop.as_ref()),
+            journal: recovery::journal(&self.desktop),
             adapter: Arc::clone(&self.deps.adapter),
             actors,
             env: self.env(),
             relay: Arc::clone(observer),
             wallets: Arc::clone(wallets),
             node_wallets: self.node_wallets.clone(),
-            relay_control: self.relay_control(),
+            relay_control: Arc::new(NoRelayControl),
             solver: self
                 .solver
                 .clone()
@@ -68,8 +68,8 @@ impl World<'_> {
                 outage: Duration::from_secs(config.run.outage_secs),
             },
         };
-        if let Some(options) = self.desktop.as_ref().filter(|options| options.resume)
-            && let Some(journal) = options.recovery.as_ref()
+        if self.desktop.resume
+            && let Some(journal) = self.desktop.recovery.as_ref()
         {
             for event in journal.snapshot().events {
                 if let mortsom_scenario_kit::journal::RecoveryEvent::OrderFound { actor, order } =
@@ -79,22 +79,9 @@ impl World<'_> {
                 }
             }
         }
-        let result = execute_scenario(
-            def,
-            &ctx,
-            if self.desktop.is_some() {
-                0
-            } else {
-                config.run.infra_retries
-            },
-            &summary.app_profile,
-            summary.app_version.clone(),
-        )
-        .await;
-        if let Some(journal) = self
-            .desktop
-            .as_ref()
-            .and_then(|options| options.recovery.as_ref())
+        let result =
+            execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()).await;
+        if let Some(journal) = self.desktop.recovery.as_ref()
             && let Err(error) = recovery::discover(&ctx, journal).await
         {
             summary
@@ -102,10 +89,7 @@ impl World<'_> {
                 .push("recovery-discovery", CheckStatus::Fail, error);
         }
         execute::sweep_cleanup(&ctx).await;
-        if let Some(journal) = self
-            .desktop
-            .as_ref()
-            .and_then(|options| options.recovery.as_ref())
+        if let Some(journal) = self.desktop.recovery.as_ref()
             && let Err(error) = recovery::verify_payments(&ctx, journal).await
         {
             summary
@@ -168,10 +152,10 @@ impl World<'_> {
                     }
                 }
             }
-            summary.farm_teardown = farm.tear_down(self.deps.runner).await;
+            summary.farm_teardown = farm.tear_down().await;
             let ok = summary.farm_teardown.iter().all(|i| i.ok);
             summary.checks.push(
-                "device-teardown",
+                "client-teardown",
                 if ok {
                     CheckStatus::Pass
                 } else {
@@ -179,25 +163,6 @@ impl World<'_> {
                 },
                 format!("{} items", summary.farm_teardown.len()),
             );
-        }
-        if let Some(relay) = self.relay.take() {
-            let (teardown, logs) = teardown_relay(self.deps.docker.as_ref(), &relay, false).await;
-            if let Err(e) = self.artifacts.write_text("relay-container.log", &logs) {
-                self.evidence_failed(summary, "relay-container.log", e);
-            }
-            summary.checks.push(
-                "relay-teardown",
-                if teardown.removed {
-                    CheckStatus::Pass
-                } else {
-                    CheckStatus::Fail
-                },
-                teardown
-                    .error
-                    .clone()
-                    .unwrap_or_else(|| "container removed".into()),
-            );
-            summary.relay_teardown = Some(teardown);
         }
         if let Err(e) = self.artifacts.write_text(
             files::TIMELINE,
@@ -211,11 +176,7 @@ impl World<'_> {
         {
             self.evidence_failed(summary, files::TIMELINE_JSON, e);
         }
-        if let Some(journal) = self
-            .desktop
-            .as_ref()
-            .and_then(|options| options.recovery.as_ref())
-        {
+        if let Some(journal) = self.desktop.recovery.as_ref() {
             recovery::finish(journal, summary, self.artifacts);
         }
     }

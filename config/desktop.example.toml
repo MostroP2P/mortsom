@@ -4,7 +4,6 @@
 profile = "mobile-v2"
 source_dir = "../mobilev2"
 mostro_pubkey = "env:MORTSOM_MOSTRO_PUBKEY"
-package = "foundation.mostro.app"
 
 [ui]
 timeout_secs = 30
@@ -37,7 +36,6 @@ jobs = 1
 artifacts_dir = "./artifacts"
 cleanup = true
 allow_mainnet = false
-infra_retries = 0
 fiat_code = "ARS"
 fiat_amount = 1000
 payment_method = "cash"

@@ -6,35 +6,22 @@
 # until they are present. Secrets never live in TOML -- not even in the
 # gitignored overlay: wallet URIs and the daemon settings path are accepted
 # only as `env:` references.
+#
+# Clients run on Linux (default) or Web, built from the app checkout in
+# `source_dir`; see config/desktop.example.toml for the stack-owned layout.
 
 [mobile]
-profile = "mobile-legacy"        # mobile-legacy | mobile-v2
-source_dir = "../mobile"
-flavor = "mortsom"
-apk_path = ""                     # empty means build from source_dir
+profile = "mobile-v2"
+source_dir = "../mobilev2"
 mostro_pubkey = "env:MORTSOM_MOSTRO_PUBKEY"
-dart_defines = ["MOSTRO_PUB_KEY=${MORTSOM_MOSTRO_PUBKEY}"]
-package = "network.mostro.app"    # application id of the build under test
-main_activity = ""                # empty: UiAutomator2 resolves the launcher activity
 
-[android]
-avd_image = "system-images;android-35;google_apis;x86_64"
-device_profile = "pixel_6"           # avdmanager device id (see `avdmanager list device -c`)
-api_level = 35
-boot_timeout_secs = 180
-ui_timeout_secs = 30
-snapshot_name = "mortsom-clean"
-avd_name_prefix = "mortsom"       # AVDs are <prefix>-alice and <prefix>-bob
-base_console_port = 5554          # alice 5554/5555, bob 5556/5557
-emulator_ram_mb = 3072
-headless = true
-appium_port = 4723
-base_system_port = 8200           # UiAutomator2 systemPort per actor: 8200, 8201
+[ui]
+timeout_secs = 30                 # bounded wait for one UI interaction
 
 [relay]
 docker_image = "scsibug/nostr-rs-relay:latest"
 container_name_prefix = "mortsom-relay"
-host_port = 7000                  # first port tried; each run allocates a free one
+host_port = 7000                  # the stack relay; `relay smoke` allocates a free one from here
 container_port = 8080
 
 [mostro]
@@ -72,7 +59,6 @@ jobs = 1
 artifacts_dir = "./artifacts"
 cleanup = true
 allow_mainnet = false             # value-moving scenarios also need MORTSOM_MAINNET_CONFIRM
-infra_retries = 1                 # only classified infrastructure failures retry, at most once
 fiat_code = "USD"                 # order drafts
 fiat_amount = 1
 payment_method = "cash"

@@ -30,7 +30,7 @@ fn replay_survives_reopening_and_blocks_new_runs_until_explicit_resolution() {
     let journal = FileJournal::create(base.path(), manifest()).unwrap();
     journal
         .record(RecoveryEvent::SubmissionStarted {
-            actor: mortsom_android_driver::avd::Actor::Alice,
+            actor: mortsom_common::Actor::Alice,
             known_orders: vec![],
         })
         .unwrap();

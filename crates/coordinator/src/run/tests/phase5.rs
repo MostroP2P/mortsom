@@ -3,36 +3,11 @@
 
 use super::*;
 
-#[tokio::test]
-async fn live_relay_control_restarts_only_the_run_container() {
-    use mortsom_scenario_kit::recovery::RelayControl;
-
-    let docker = Arc::new(FakeDocker::default());
-    let handle = RelayHandle {
-        container_name: "mortsom-relay-run1".into(),
-        host_port: 1,
-        data_dir: std::env::temp_dir(),
-        image: "img".into(),
-    };
-    let control = super::relay_control::LiveRelayControl::new(
-        Arc::clone(&docker) as Arc<dyn ContainerRuntime>,
-        Arc::new(AlwaysReady),
-        handle,
-        Duration::from_millis(50),
-    );
-    control.restart().await.unwrap();
-    assert_eq!(
-        *docker.restarted.lock().unwrap(),
-        vec!["mortsom-relay-run1".to_owned()]
-    );
-    // Replay against a port nobody listens on fails closed.
-    let err = control.replay(&["{}".into()]).await.unwrap_err();
-    assert!(!err.is_empty());
-}
-
 /// Every Phase 5 scenario that moves no value runs end to end against the
 /// fakes; the two relay-replay ones fail honestly because nothing listens
-/// on the fake relay port, and the sweep closes what scenarios left open.
+/// on the fake relay port, the relay restart fails because the stack relay
+/// is not the run's to restart, and the sweep closes what scenarios left
+/// open.
 #[tokio::test]
 async fn phase5_no_value_scenarios_run_against_fakes() {
     mortsom_scenarios::link();
@@ -52,7 +27,7 @@ async fn phase5_no_value_scenarios_run_against_fakes() {
         "taker_cancel_at_taken",
         "nwc_cancel_payment",
     ];
-    let summary = run(&world, adapter.clone(), opts(&names), false)
+    let summary = run(&world, adapter.clone(), opts_in(&world, &names), false)
         .await
         .unwrap();
 
@@ -63,7 +38,10 @@ async fn phase5_no_value_scenarios_run_against_fakes() {
         .collect();
     for name in names {
         let outcome = by_name[name];
-        if name.ends_with("event_at_taken") || name.ends_with("events_at_taken") {
+        if name.ends_with("event_at_taken")
+            || name.ends_with("events_at_taken")
+            || name == "relay_restart_at_taken"
+        {
             assert!(
                 matches!(
                     outcome,
@@ -72,6 +50,13 @@ async fn phase5_no_value_scenarios_run_against_fakes() {
                         ..
                     }
                 ),
+                "{name}: {outcome:?}"
+            );
+        } else if name == "nwc_cancel_payment" {
+            // The app has no wallet of its own on a run whose nodes Mortsom
+            // holds, so a scenario about that wallet is skipped, not faked.
+            assert!(
+                matches!(outcome, Outcome::Skipped { reason } if reason.contains("node Mortsom holds")),
                 "{name}: {outcome:?}"
             );
         } else {
@@ -88,7 +73,6 @@ async fn phase5_no_value_scenarios_run_against_fakes() {
         .join(summary.run_id.as_str());
     let timeline = std::fs::read_to_string(run_dir.join(files::TIMELINE)).unwrap();
     assert!(timeline.contains("force-stopped and relaunched"));
-    assert!(timeline.contains("run relay restarted"));
     assert!(timeline.contains("no actor protocol message"));
     assert!(timeline.contains("offers [pay-invoice, cancel]"));
     assert!(
@@ -120,7 +104,7 @@ async fn phase5_value_scenarios_run_against_fakes() {
         "wallet_unavailable_then_pay",
         "hold_invoice_expires",
     ];
-    let summary = run(&world, adapter.clone(), opts(&names), true)
+    let summary = run(&world, adapter.clone(), opts_in(&world, &names), true)
         .await
         .unwrap();
 
@@ -160,7 +144,7 @@ async fn cleanup_reports_an_order_that_stays_open_honestly() {
     adapter.stubborn = true;
     let adapter = Arc::new(adapter);
 
-    let summary = run(&world, adapter, opts(&["happy_sell"]), true)
+    let summary = run(&world, adapter, opts_in(&world, &["happy_sell"]), true)
         .await
         .unwrap();
 
@@ -191,9 +175,15 @@ async fn cleanup_needs_the_relay_to_confirm_a_funded_cancellation() {
         canceled_gate: None,
     };
 
-    let summary = run_with_observer(&world, adapter, opts(&["happy_sell"]), true, &observer)
-        .await
-        .unwrap();
+    let summary = run_with_observer(
+        &world,
+        adapter,
+        opts_in(&world, &["happy_sell"]),
+        true,
+        &observer,
+    )
+    .await
+    .unwrap();
 
     assert!(!summary.passed);
     let cleanup = summary.cleanup.unwrap();
@@ -234,7 +224,7 @@ async fn cleanup_finishes_a_cooperative_cancel_the_maker_screen_called_done() {
     let summary = run_with_observer(
         &world,
         adapter.clone(),
-        opts(&["happy_sell"]),
+        opts_in(&world, &["happy_sell"]),
         true,
         &observer,
     )
@@ -267,9 +257,15 @@ async fn cleanup_needs_the_relay_to_close_an_order_the_app_does_not_list() {
         canceled_gate: None,
     };
 
-    let summary = run_with_observer(&world, adapter, opts(&["happy_sell"]), true, &observer)
-        .await
-        .unwrap();
+    let summary = run_with_observer(
+        &world,
+        adapter,
+        opts_in(&world, &["happy_sell"]),
+        true,
+        &observer,
+    )
+    .await
+    .unwrap();
 
     let cleanup = summary.cleanup.unwrap();
     assert_eq!(cleanup.unresolved, vec!["o1".to_owned()]);
@@ -291,7 +287,7 @@ async fn an_unlisted_order_the_relay_shows_closed_counts_as_resolved() {
     adapter.hides_trades = true;
     let adapter = Arc::new(adapter);
 
-    let summary = run(&world, adapter, opts(&["happy_sell"]), true)
+    let summary = run(&world, adapter, opts_in(&world, &["happy_sell"]), true)
         .await
         .unwrap();
 

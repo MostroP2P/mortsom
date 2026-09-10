@@ -4,8 +4,8 @@
 //! proof is the daemon's published state after a baseline, never a screen,
 //! and the escrow coming back where one was held.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{Capability, OrderKind, OrderState};
+use mortsom_common::Actor;
 use mortsom_scenario_kit::actions;
 use mortsom_scenario_kit::context::{Context, ScenarioError};
 

@@ -1,7 +1,7 @@
 //! Rating after a completed trade: the star given through the UI, and the
 //! daemon's own reputation event as the proof it was received.
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::OrderReference;
+use mortsom_common::Actor;
 use mortsom_observers::relay::ObservedEvent;
 
 use crate::context::{Context, ScenarioError};

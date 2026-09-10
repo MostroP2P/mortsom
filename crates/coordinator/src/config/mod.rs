@@ -8,7 +8,6 @@ mod run;
 mod ui;
 mod validate;
 
-use mortsom_android_driver::AndroidConfig;
 use mortsom_app_contract::MobileConfig;
 use mortsom_common::MissingEnv;
 use mortsom_environment::{MostroConfig, RelayConfig, WalletsConfig};
@@ -18,22 +17,19 @@ use thiserror::Error;
 pub use load::{ConfigDiagnosis, LOCAL_OVERLAY_SUFFIX};
 pub use maintenance::{ArtifactSettings, MaintenanceConfig};
 pub use publication::PublishSettings;
-pub use run::{MAX_INFRA_RETRIES, MAX_RUN_SPEND_CEILING_SATS, RunConfig};
+pub use run::{MAX_RUN_SPEND_CEILING_SATS, RunConfig};
 pub use ui::UiConfig;
 
 /// The complete, resolved and validated Mortsom configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    /// `[mobile]` — application build and profile.
+    /// `[mobile]` — application checkout and profile.
     pub mobile: MobileConfig,
-    /// `[android]` — emulator matrix.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub android: Option<AndroidConfig>,
     /// `[ui]` — shared interaction deadlines, independent of client platform.
     #[serde(default)]
     pub ui: UiConfig,
-    /// `[relay]` — run-owned relay container.
+    /// `[relay]` — the stack relay port, and the run-owned relay of `relay smoke`.
     #[serde(default = "default_relay")]
     pub relay: RelayConfig,
     /// `[mostro]` — external local daemon.
@@ -44,22 +40,13 @@ pub struct Config {
     pub run: RunConfig,
 }
 
-impl Config {
-    /// Requires explicit emulator settings for the reserved Android path.
-    pub fn require_android(&self) -> Result<&AndroidConfig, ConfigError> {
-        self.android.as_ref().ok_or_else(|| {
-            ConfigError::Invalid(vec![
-                "Android requires an explicit [android] section".into(),
-            ])
-        })
-    }
+/// Deadline for one UI interaction unless `[ui].timeout_secs` says otherwise.
+pub const DEFAULT_UI_TIMEOUT_SECS: u64 = 30;
 
-    /// Shared override, then legacy Android deadline, then the desktop default.
+impl Config {
+    /// The configured interaction deadline, or the default.
     pub fn ui_timeout_secs(&self) -> u64 {
-        self.ui
-            .timeout_secs
-            .or_else(|| self.android.as_ref().map(|a| a.ui_timeout_secs))
-            .unwrap_or(30)
+        self.ui.timeout_secs.unwrap_or(DEFAULT_UI_TIMEOUT_SECS)
     }
 }
 

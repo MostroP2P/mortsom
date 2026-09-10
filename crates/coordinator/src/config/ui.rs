@@ -1,7 +1,7 @@
-//! Interaction deadlines shared by Linux, Web and Android.
+//! Interaction deadlines shared by Linux and Web.
 use serde::{Deserialize, Serialize};
 
-/// Optional `[ui]` settings. Legacy Android deadlines remain a fallback.
+/// Optional `[ui]` settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UiConfig {

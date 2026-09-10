@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 
-**Updated:** 2026-09-08
+**Updated:** 2026-09-10
 
 **Status:** normative for all new work
 
@@ -29,9 +29,9 @@ Its first version did this with Android emulators. Two things changed:
 - **The client is changing.** The mobile app v1 (`MostroP2P/mobile`) is being deprecated. Its replacement is
   app v2 (`MostroP2P/app`), a Flutter application with a Rust core that already builds for Linux and Web.
 
-Mortsom therefore targets app v2 and adds two execution modes, **Linux** and **Web**, both produced from the
-same Flutter source. Android remains a selectable option so the emulator path is not lost, but no new Android
-work happens until the CPU and memory cost of Linux and Web has been observed.
+Mortsom therefore targets app v2 in two execution modes, **Linux** and **Web**, both produced from the same
+Flutter source. The Android emulator path has been removed: no emulator, Appium, adb or APK code remains in
+the repository, and `--platform` accepts only `linux` and `web`.
 
 ## 2. Goal and acceptance
 
@@ -96,16 +96,13 @@ mortsom run happy_buy --platform web
 mortsom run happy_sell --platform linux --app-artifact /path/to/bundle/mostro
 mortsom run happy_sell --platform web   --app-artifact /path/to/build/web
 
-# Frozen option: requires an explicit Android-compatible configuration.
-mortsom --config android.local.toml run happy_sell --platform android
-
 # Recover a run that left orders, payments or profiles behind.
 mortsom cleanup <run-id>
 ```
 
 `run` attaches to an already ready stack and fails with instructions when it is absent. It never creates or
-destroys the stack. One invocation runs one scenario with fresh actors. Unknown platforms fail before anything
-is built or launched. Selecting Android must neither silently use Linux nor claim capabilities it lacks.
+destroys the stack. One invocation runs one scenario with fresh actors. Unknown platforms, `android`
+included, fail before anything is built or launched.
 
 ## 5. Stack
 
@@ -183,11 +180,6 @@ allowed. No JavaScript calls into Dart, Rust or application state.
 
 Flutter may rebuild offscreen semantics after focus or scroll: re-find elements after transitions, scroll
 through user actions, and wait for interactability with bounded predicates instead of fixed sleeps.
-
-### 6.3 Android (frozen)
-
-The emulator-based path from the first version remains selectable. It receives no new features in this
-version. Its operating instructions are in [docs/history/legacy-android.md](docs/history/legacy-android.md).
 
 ## 7. Client builds and automation contract
 
@@ -421,10 +413,9 @@ Documented as roadmap, not required by this version:
 
 - The remaining scenario families of section 8.1: payment failures, anti-abuse bonds and adversarial
   messages.
-- CPU and memory comparison of Linux and Web, and against the Android baseline, under matched conditions.
+- CPU and memory comparison of Linux and Web under matched conditions.
 - Multi-scenario runs with in-process profile reset.
 - NWC wallet mode for desktop clients.
-- Any new Android emulator work.
 
 ## 15. Related documents
 
@@ -434,4 +425,4 @@ Documented as roadmap, not required by this version:
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Current state, open work and how to resume |
 | [docs/acceptance-ledger.md](docs/acceptance-ledger.md) | Per-platform acceptance ledger |
 | [docs/runbook.md](docs/runbook.md) | Failure categories and operator responses |
-| [docs/history/](docs/history/) | Archived material: spec v0.3 with its plan and attempt ledger, the Android guide, the app v2 inventory and the crate rationale |
+| [docs/history/](docs/history/) | Archived material: spec v0.3 with its plan and attempt ledger, the app v2 inventory and the crate rationale (both written when the emulator path still existed) |

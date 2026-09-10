@@ -8,8 +8,8 @@ use std::fmt;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{OrderDraft, OrderReference, OrderState, PaymentPath};
+use mortsom_common::Actor;
 use mortsom_observers::wallet::{PaymentObservation, PaymentState, payment_hash_of};
 use tracing::info;
 

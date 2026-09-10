@@ -2,8 +2,8 @@
 //! resolves the rate when the order is taken, so the sats only exist once
 //! the hold invoice does.
 
-use mortsom_android_driver::avd::Actor;
 use mortsom_app_contract::{Capability, OrderDraft, OrderKind};
+use mortsom_common::Actor;
 use mortsom_scenario_kit::actions;
 use mortsom_scenario_kit::context::{Context, ScenarioError};
 

@@ -1,4 +1,4 @@
-//! Thin W3C WebDriver client for Appium (spec §4.2, docs/stack.md). Only the
+//! Thin W3C WebDriver client for ChromeDriver (spec §6.2). Only the
 //! endpoints Mortsom needs; every response follows the W3C `{"value": ...}`
 //! envelope and errors surface as [`WebDriverError`].
 
@@ -15,12 +15,8 @@ use thiserror::Error;
 pub enum Locator {
     /// `accessibility id` — the app's stable semantic identifier.
     AccessibilityId,
-    /// `id` — Android resource id.
-    ResourceId,
-    /// `xpath` — last resort for native dialogs.
+    /// `xpath` — the Web session's semantics selectors.
     XPath,
-    /// `-android uiautomator` selector.
-    UiAutomator,
 }
 
 impl Locator {
@@ -28,9 +24,7 @@ impl Locator {
     pub fn using(self) -> &'static str {
         match self {
             Locator::AccessibilityId => "accessibility id",
-            Locator::ResourceId => "id",
             Locator::XPath => "xpath",
-            Locator::UiAutomator => "-android uiautomator",
         }
     }
 }
@@ -242,7 +236,7 @@ impl Session {
             .map_err(|e| WebDriverError::Shape(format!("screenshot is not base64: {e}")))
     }
 
-    /// Executes a synchronous script; Appium routes `mobile: ...` commands here.
+    /// Executes a synchronous script in the page.
     pub async fn execute(&self, script: &str, args: Vec<Value>) -> Result<Value, WebDriverError> {
         self.post("execute/sync", &json!({ "script": script, "args": args }))
             .await
@@ -264,21 +258,6 @@ impl Session {
             .await
             .map_err(|e| WebDriverError::Transport(e.to_string()))?;
         unwrap_value(response).await.map(|_| ())
-    }
-}
-
-/// GET `<base>/status`; true when the server answers with `ready: true`.
-pub async fn server_ready(base: &str, timeout: Duration) -> bool {
-    let Ok(http) = reqwest::Client::builder().timeout(timeout).build() else {
-        return false;
-    };
-    let url = format!("{}/status", base.trim_end_matches('/'));
-    match http.get(url).send().await {
-        Ok(response) => unwrap_value(response)
-            .await
-            .map(|v| v.get("ready").and_then(Value::as_bool).unwrap_or(false))
-            .unwrap_or(false),
-        Err(_) => false,
     }
 }
 
@@ -325,8 +304,8 @@ async fn unwrap_value(response: reqwest::Response) -> Result<Value, WebDriverErr
     Ok(value)
 }
 
-/// Accepts the W3C element key and, for compatibility with older Appium
-/// drivers, the legacy `ELEMENT` key.
+/// Accepts the W3C element key and, for compatibility with older drivers,
+/// the legacy `ELEMENT` key.
 fn element_from(value: &Value) -> Result<Element, WebDriverError> {
     value
         .get(ELEMENT_KEY)

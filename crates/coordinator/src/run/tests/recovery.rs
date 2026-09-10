@@ -2,7 +2,7 @@
 use super::super::recovery as recovery_impl;
 use super::*;
 use crate::recovery_store::{FileJournal, RecoveryManifest};
-use mortsom_android_driver::avd::Actor;
+use mortsom_common::Actor;
 use mortsom_desktop_driver::Platform;
 use mortsom_scenario_kit::journal::RecoveryEvent;
 
@@ -12,61 +12,61 @@ pub(super) struct RetainedUi {
 }
 #[async_trait]
 impl UiSession for RetainedUi {
-    async fn exists(&self, _: &str) -> Result<bool, AppiumError> {
+    async fn exists(&self, _: &str) -> Result<bool, UiError> {
         unreachable!()
     }
-    async fn wait_for(&self, _: &str, _: Duration) -> Result<(), AppiumError> {
+    async fn wait_for(&self, _: &str, _: Duration) -> Result<(), UiError> {
         unreachable!()
     }
-    async fn wait_gone(&self, _: &str, _: Duration) -> Result<(), AppiumError> {
+    async fn wait_gone(&self, _: &str, _: Duration) -> Result<(), UiError> {
         unreachable!()
     }
-    async fn tap(&self, _: &str) -> Result<(), AppiumError> {
+    async fn tap(&self, _: &str) -> Result<(), UiError> {
         panic!("recovery must not generate an identity")
     }
-    async fn type_text(&self, _: &str, _: &str) -> Result<(), AppiumError> {
+    async fn type_text(&self, _: &str, _: &str) -> Result<(), UiError> {
         unreachable!()
     }
-    async fn text_of(&self, id: &str) -> Result<String, AppiumError> {
+    async fn text_of(&self, id: &str) -> Result<String, UiError> {
         assert_eq!(id, "identity");
         self.calls.lock().unwrap().push("read identity");
         Ok(self.identity.clone())
     }
-    async fn is_enabled(&self, _: &str) -> Result<bool, AppiumError> {
+    async fn is_enabled(&self, _: &str) -> Result<bool, UiError> {
         unreachable!()
     }
-    async fn label_of(&self, _: &str) -> Result<String, AppiumError> {
+    async fn label_of(&self, _: &str) -> Result<String, UiError> {
         unreachable!()
     }
-    async fn screenshot_png(&self) -> Result<Vec<u8>, AppiumError> {
+    async fn screenshot_png(&self) -> Result<Vec<u8>, UiError> {
         Ok(vec![])
     }
-    async fn page_source(&self) -> Result<String, AppiumError> {
+    async fn page_source(&self) -> Result<String, UiError> {
         Ok("<fixture/>".into())
     }
-    async fn background(&self, _: u64) -> Result<(), AppiumError> {
+    async fn background(&self, _: u64) -> Result<(), UiError> {
         unreachable!()
     }
-    async fn terminate_app(&self) -> Result<(), AppiumError> {
+    async fn terminate_app(&self) -> Result<(), UiError> {
         unreachable!()
     }
-    async fn activate_app(&self) -> Result<(), AppiumError> {
+    async fn activate_app(&self) -> Result<(), UiError> {
         self.calls.lock().unwrap().push("activate");
         Ok(())
     }
-    async fn clear_app(&self) -> Result<(), AppiumError> {
+    async fn clear_app(&self) -> Result<(), UiError> {
         panic!("retained identity must never be cleared")
     }
-    async fn set_connectivity(&self, _: bool) -> Result<(), AppiumError> {
+    async fn set_connectivity(&self, _: bool) -> Result<(), UiError> {
         unreachable!()
     }
-    async fn set_orientation(&self, _: bool) -> Result<(), AppiumError> {
+    async fn set_orientation(&self, _: bool) -> Result<(), UiError> {
         unreachable!()
     }
-    async fn hide_keyboard(&self) -> Result<(), AppiumError> {
+    async fn hide_keyboard(&self) -> Result<(), UiError> {
         unreachable!()
     }
-    async fn end(&self) -> Result<(), AppiumError> {
+    async fn end(&self) -> Result<(), UiError> {
         self.calls.lock().unwrap().push("end");
         Ok(())
     }
@@ -145,7 +145,7 @@ pub(super) fn options(journal: Arc<FileJournal>) -> RunOptions {
             .unwrap(),
     );
     RunOptions {
-        desktop: Some(DesktopOptions {
+        desktop: DesktopOptions {
             recovery: Some(journal),
             resume: true,
             platform: Platform::Linux,
@@ -155,9 +155,10 @@ pub(super) fn options(journal: Arc<FileJournal>) -> RunOptions {
             xvfb: "unused".into(),
             browser: "unused".into(),
             chromedriver: "unused".into(),
-        }),
+        },
         stack: Some(stack()),
-        ..Default::default()
+        scenarios: Vec::new(),
+        tag: None,
     }
 }
 
@@ -192,14 +193,10 @@ async fn attempt_with_wallet_and_book(
     wallet: Option<(String, Arc<RecoveryWallet>)>,
     book_statuses: &[&'static str],
 ) -> (RunSummary, Vec<Arc<RetainedUi>>) {
-    let runner = FakeRunner::default();
-    let ui = FakeUi(adapter.flags.clone());
     let env = |_: &str| None;
     let deps = RunDeps {
         desktop_factory: &RealDesktopFactory,
         net: None,
-        runner: &runner,
-        ui: &ui,
         docker: Arc::new(FakeDocker::default()),
         probe: Arc::new(AlwaysReady),
         adapter: adapter.clone(),
@@ -221,7 +218,7 @@ async fn attempt_with_wallet_and_book(
     let sessions = attach_runtime_with_book(
         &mut world,
         &journal,
-        options.desktop.as_ref().unwrap().bundle.clone(),
+        options.desktop.bundle.clone(),
         book_statuses,
     );
     if let Some((label, wallet)) = wallet {
@@ -466,14 +463,10 @@ fn changed_stack_refuses_resume_before_environment_or_process_access() {
     let mut options = options(journal.clone());
     options.stack.as_mut().unwrap().daemon_pubkey = Keys::generate().public_key().to_hex();
     let adapter = Arc::new(FakeAdapter::full());
-    let ui = FakeUi(adapter.flags.clone());
-    let runner = FakeRunner::default();
     let env = |_: &str| panic!("stack mismatch must precede recovery environment access");
     let deps = RunDeps {
         desktop_factory: &RealDesktopFactory,
         net: None,
-        runner: &runner,
-        ui: &ui,
         docker: Arc::new(FakeDocker::default()),
         probe: Arc::new(AlwaysReady),
         adapter: adapter.clone(),

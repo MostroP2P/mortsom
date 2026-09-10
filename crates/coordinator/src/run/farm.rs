@@ -1,13 +1,21 @@
-//! Platform-neutral ownership of actor sessions.
+//! Ownership of the run's actor sessions and their shared Web server.
 use super::{DesktopFactory, DesktopServer};
-use mortsom_android_driver::{
-    avd::Actor,
-    farm::{DeviceFarm, TeardownItem},
-    process::CommandRunner,
-    ui::UiSession,
-};
+use mortsom_common::Actor;
 use mortsom_desktop_driver::Platform;
+use mortsom_ui_driver::ui::UiSession;
+use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, sync::Arc};
+
+/// What happened to one client resource at teardown.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TeardownItem {
+    /// Resource name.
+    pub resource: String,
+    /// Whether it was released.
+    pub ok: bool,
+    /// Error detail when it was not.
+    pub error: Option<String>,
+}
 
 /// Built client artifact and selected runtime.
 #[derive(Debug, Clone)]
@@ -16,7 +24,7 @@ pub struct DesktopOptions {
     pub recovery: Option<Arc<crate::recovery_store::FileJournal>>,
     /// Resume existing identities; never run first-launch bootstrap.
     pub resume: bool,
-    /// Linux or Web; Android uses the established device farm.
+    /// Linux or Web.
     pub platform: Platform,
     /// Native executable or Web build directory.
     pub artifact: PathBuf,
@@ -41,7 +49,6 @@ impl DesktopOptions {
                     && self.artifact.file_name().is_some()
             }
             Platform::Web => self.artifact == self.bundle.root(),
-            Platform::Android => false,
         };
         if !contained {
             return Err("desktop artifact does not belong to the captured bundle".into());
@@ -56,7 +63,6 @@ impl DesktopOptions {
 }
 
 pub(super) enum Farm {
-    Android(DeviceFarm),
     Desktop {
         sessions: Vec<(Actor, Arc<dyn UiSession>)>,
         server: Option<Box<dyn DesktopServer>>,
@@ -107,31 +113,23 @@ impl Farm {
     pub(super) fn origin(&self) -> Option<String> {
         match self {
             Self::Desktop { server, .. } => server.as_ref().map(|server| server.url().into()),
-            _ => None,
         }
     }
 
     pub(super) fn sessions(&self) -> Vec<(Actor, Arc<dyn UiSession>)> {
         match self {
-            Self::Android(farm) => farm
-                .devices()
-                .iter()
-                .map(|d| (d.actor, Arc::clone(&d.session)))
-                .collect(),
             Self::Desktop { sessions, .. } => sessions.clone(),
         }
     }
 
     pub(super) fn version(&self) -> Option<String> {
         match self {
-            Self::Android(farm) => Some(farm.device(Actor::Alice).version.version_name.clone()),
             Self::Desktop { app_version, .. } => app_version.clone(),
         }
     }
 
-    pub(super) async fn tear_down(self, runner: &dyn CommandRunner) -> Vec<TeardownItem> {
+    pub(super) async fn tear_down(self) -> Vec<TeardownItem> {
         match self {
-            Self::Android(farm) => farm.tear_down(runner).await,
             Self::Desktop {
                 sessions,
                 server,

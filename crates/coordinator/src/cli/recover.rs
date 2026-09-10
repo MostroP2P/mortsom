@@ -43,7 +43,7 @@ pub(super) fn attribute_orders(
     specs: &[String],
     audit: &super::recover_audit::RelayAudit,
 ) -> Result<(), String> {
-    use mortsom_android_driver::avd::Actor;
+    use mortsom_common::Actor;
     use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
     for spec in specs {
         let (actor, order_id) = spec.split_once('=').ok_or_else(|| {
@@ -150,7 +150,7 @@ async fn recover(
     }
     let manifest = journal.snapshot();
     if manifest.events.is_empty() || manifest.resolution_verified {
-        for actor in mortsom_android_driver::avd::Actor::ALL {
+        for actor in mortsom_common::Actor::ALL {
             let path = root.join("actors").join(actor.as_str());
             if path.exists() {
                 mortsom_desktop_driver::storage::ensure_stopped(&path)
@@ -222,12 +222,7 @@ async fn recover(
         chromedriver: web_tools.chromedriver.path,
         browser: web_tools.browser.path,
     };
-    let ui = AppiumDriver::new(PathBuf::new());
-    let adapter = select_adapter(
-        &config,
-        PathBuf::new(),
-        format!("ws://127.0.0.1:{}", config.relay.host_port),
-    );
+    let adapter = select_adapter();
     let env = |name: &str| std::env::var(name).ok();
     let net = RealNet::with_daemon_timeout(std::time::Duration::from_secs(
         config.mostro.health_timeout_secs,
@@ -235,8 +230,6 @@ async fn recover(
     let deps = RunDeps {
         desktop_factory: &crate::run::RealDesktopFactory,
         net: Some(&net),
-        runner: &TokioRunner,
-        ui: &ui,
         docker: Arc::new(DockerCli::default()),
         probe: Arc::new(NostrProbe),
         adapter,
@@ -245,9 +238,10 @@ async fn recover(
         observer: &LiveObserver,
     };
     let options = RunOptions {
-        desktop: Some(desktop),
+        desktop,
         stack: Some(stack),
-        ..Default::default()
+        scenarios: Vec::new(),
+        tag: None,
     };
     let summary = run_scenarios(&config, &options, &deps).await?;
     print!("{}", summary.checks.render_with_color(use_color()));
@@ -267,7 +261,7 @@ async fn recover(
 mod tests {
     use super::*;
     use crate::recovery_store::RecoveryManifest;
-    use mortsom_android_driver::avd::Actor;
+    use mortsom_common::Actor;
     use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
 
     fn journal_with(events: Vec<RecoveryEvent>) -> (tempfile::TempDir, FileJournal) {

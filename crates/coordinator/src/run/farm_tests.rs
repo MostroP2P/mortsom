@@ -1,7 +1,6 @@
 #![allow(clippy::unwrap_used)]
 use super::*;
-use mortsom_android_driver::process::TokioRunner;
-use mortsom_android_driver::ui::tests_support::ScriptedUi;
+use mortsom_ui_driver::ui::tests_support::ScriptedUi;
 
 #[tokio::test]
 async fn failed_actor_shutdown_is_retried_before_releasing_session_ownership() {
@@ -17,7 +16,7 @@ async fn failed_actor_shutdown_is_retried_before_releasing_session_ownership() {
         bundle,
         app_version: None,
     };
-    let result = farm.tear_down(&TokioRunner).await;
+    let result = farm.tear_down().await;
     assert!(result.iter().all(|item| item.ok));
     assert!(alice.calls().contains(&"end failed".to_owned()));
     assert!(alice.calls().contains(&"end session".to_owned()));
@@ -113,7 +112,7 @@ async fn injected_actors_are_independent_and_shutdown_releases_the_shared_server
     let sessions = farm.sessions();
     assert!(!Arc::ptr_eq(&sessions[0].1, &sessions[1].1));
     assert!(factory.alice.calls().is_empty() && factory.bob.calls().is_empty());
-    let report = farm.tear_down(&TokioRunner).await;
+    let report = farm.tear_down().await;
     assert!(report.iter().all(|item| item.ok));
     assert!(factory.stopped.load(std::sync::atomic::Ordering::SeqCst));
 }
@@ -122,7 +121,7 @@ async fn exhausted_shutdown_retries_still_close_the_sibling_and_server_and_repor
     let (options, factory) = fixture();
     factory.alice.fail_end_times(2);
     let farm = Farm::desktop(&options, &factory).await.unwrap();
-    let report = farm.tear_down(&TokioRunner).await;
+    let report = farm.tear_down().await;
     assert!(!report[0].ok);
     assert!(report[0].error.as_deref().unwrap().contains("retry"));
     assert!(report[1].ok);

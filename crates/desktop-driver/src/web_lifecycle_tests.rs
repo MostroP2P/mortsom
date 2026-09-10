@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 use super::*;
-use mortsom_android_driver::process::{Output, ProcessError};
+use mortsom_ui_driver::process::{Output, ProcessError};
 use std::sync::Mutex as StdMutex;
 
 #[derive(Default)]

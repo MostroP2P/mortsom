@@ -5,8 +5,8 @@ use atspi::proxy::{
     text::TextProxy,
 };
 use atspi::zbus::{self, Connection};
-use mortsom_android_driver::appium::AppiumError;
-use mortsom_android_driver::webdriver::WebDriverError;
+use mortsom_ui_driver::error::UiError;
+use mortsom_ui_driver::webdriver::WebDriverError;
 use std::time::Duration;
 
 /// One public accessibility object.
@@ -21,8 +21,8 @@ pub struct Node {
 }
 
 /// Converts transport errors without exposing application data.
-pub fn error(cause: impl std::fmt::Display) -> AppiumError {
-    AppiumError::WebDriver(WebDriverError::Transport(
+pub fn error(cause: impl std::fmt::Display) -> UiError {
+    UiError::WebDriver(WebDriverError::Transport(
         mortsom_common::Redactor::default().redact(&format!("Linux accessibility: {cause}")),
     ))
 }
@@ -50,7 +50,7 @@ pub struct Native {
 
 impl Native {
     /// Connects to the actor's private accessibility bus.
-    pub async fn connect(address: &str) -> Result<Self, AppiumError> {
+    pub async fn connect(address: &str) -> Result<Self, UiError> {
         let connection = zbus::connection::Builder::address(address)
             .map_err(error)?
             .build()
@@ -68,7 +68,7 @@ impl Native {
                     .await
                     .map_err(error)?
                 {
-                    return Ok::<_, AppiumError>(());
+                    return Ok::<_, UiError>(());
                 }
             }
         })
@@ -91,7 +91,7 @@ impl Native {
     }
 
     /// Reads the current public tree, bounded by node count and time at caller.
-    pub async fn nodes(&self) -> Result<Vec<Node>, AppiumError> {
+    pub async fn nodes(&self) -> Result<Vec<Node>, UiError> {
         retry(Duration::from_secs(10), || self.nodes_once()).await
     }
 
@@ -126,7 +126,7 @@ impl Native {
     }
 
     /// Finds an exact namespaced identifier, never localized copy.
-    pub async fn find(&self, id: &str) -> Result<Option<Node>, AppiumError> {
+    pub async fn find(&self, id: &str) -> Result<Option<Node>, UiError> {
         let nodes = tokio::time::timeout(std::time::Duration::from_secs(10), self.nodes())
             .await
             .map_err(error)??;
@@ -136,7 +136,7 @@ impl Native {
     }
 
     /// Invokes the accessible object's default user action.
-    pub async fn click(&self, node: &Node) -> Result<(), AppiumError> {
+    pub async fn click(&self, node: &Node) -> Result<(), UiError> {
         with_fresh_node(
             node,
             Duration::from_secs(10),
@@ -169,14 +169,14 @@ impl Native {
     }
 
     /// Focuses and verifies text through public accessibility state.
-    pub async fn type_text(&self, node: &Node, value: &str) -> Result<(), AppiumError> {
+    pub async fn type_text(&self, node: &Node, value: &str) -> Result<(), UiError> {
         let (id, _) =
             label(&node.name).ok_or_else(|| error("text control has no contract identifier"))?;
         crate::text_entry::enter(self, id, value, std::time::Duration::from_secs(10)).await
     }
 
     /// Sends the public editable-text command; the caller must verify the read-back.
-    async fn set_text(&self, node: &Node, value: &str) -> Result<(), AppiumError> {
+    async fn set_text(&self, node: &Node, value: &str) -> Result<(), UiError> {
         with_fresh_node(
             node,
             Duration::from_secs(10),
@@ -203,7 +203,7 @@ impl Native {
     }
 
     /// Reads text content when the public Text interface is implemented.
-    pub async fn text_value(&self, node: &Node) -> Result<String, AppiumError> {
+    pub async fn text_value(&self, node: &Node) -> Result<String, UiError> {
         with_fresh_node(
             node,
             Duration::from_secs(10),
@@ -239,7 +239,7 @@ impl Native {
             .map_err(classify)
     }
 
-    async fn focus_text(&self, node: &Node) -> Result<(), AppiumError> {
+    async fn focus_text(&self, node: &Node) -> Result<(), UiError> {
         with_fresh_node(
             node,
             Duration::from_secs(10),
@@ -287,7 +287,7 @@ impl Native {
     }
 
     /// Public keyboard-focus state used for editable controls and evidence.
-    pub async fn focused(&self, node: &Node) -> Result<bool, AppiumError> {
+    pub async fn focused(&self, node: &Node) -> Result<bool, UiError> {
         with_fresh_node(
             node,
             Duration::from_secs(10),
@@ -308,7 +308,7 @@ impl Native {
     }
 
     /// The accessible enabled state.
-    pub async fn enabled(&self, node: &Node) -> Result<bool, AppiumError> {
+    pub async fn enabled(&self, node: &Node) -> Result<bool, UiError> {
         with_fresh_node(
             node,
             Duration::from_secs(10),
@@ -331,19 +331,19 @@ impl Native {
 
 #[async_trait::async_trait]
 impl crate::text_entry::TextEntry for Native {
-    async fn find(&self, id: &str) -> Result<Option<Node>, AppiumError> {
+    async fn find(&self, id: &str) -> Result<Option<Node>, UiError> {
         Native::find(self, id).await
     }
-    async fn focus(&self, node: &Node) -> Result<(), AppiumError> {
+    async fn focus(&self, node: &Node) -> Result<(), UiError> {
         self.focus_text(node).await
     }
-    async fn focused(&self, node: &Node) -> Result<bool, AppiumError> {
+    async fn focused(&self, node: &Node) -> Result<bool, UiError> {
         Native::focused(self, node).await
     }
-    async fn set(&self, node: &Node, value: &str) -> Result<(), AppiumError> {
+    async fn set(&self, node: &Node, value: &str) -> Result<(), UiError> {
         self.set_text(node, value).await
     }
-    async fn text(&self, node: &Node) -> Result<String, AppiumError> {
+    async fn text(&self, node: &Node) -> Result<String, UiError> {
         with_fresh_node(
             node,
             Duration::from_secs(10),
