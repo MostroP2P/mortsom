@@ -225,7 +225,14 @@ pub async fn run_scenarios(
         mainnet,
         matches!(clearance, Clearance::PendingRegtest),
     );
-    world.needs_solver = runnable.iter().any(|def| def.needs_solver);
+    // A cleanup run may find an order left disputed by a broken run; only a
+    // solver can close it, so a cleanup on an owned stack registers one.
+    let resuming = options
+        .desktop
+        .as_ref()
+        .is_some_and(|options| options.resume);
+    world.needs_solver =
+        runnable.iter().any(|def| def.needs_solver) || (resuming && options.stack.is_some());
     if let Err(stage) = world.bring_up(&mut summary).await {
         for def in &runnable {
             summary.results.push(ScenarioResult {

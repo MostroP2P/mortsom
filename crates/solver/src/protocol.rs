@@ -24,11 +24,14 @@ fn request_id() -> u64 {
     u64::from_be_bytes(id)
 }
 
-/// `admin-add-solver` for `solver`, read-write: the operator's act.
+/// `admin-add-solver` for `solver`, read-write: the operator's act. The
+/// daemon reads the solver out of the payload and looks nothing up by id,
+/// but its message check still demands an id on this action and drops
+/// the message without a word when it is missing, so a fresh one is set.
 pub fn add_solver_message(solver: &PublicKey) -> Message {
     let npub = solver.to_bech32().unwrap_or_else(|_| solver.to_hex());
     Message::new_dispute(
-        None,
+        Some(Uuid::new_v4()),
         Some(request_id()),
         None,
         Action::AdminAddSolver,
@@ -47,10 +50,12 @@ pub fn take_dispute_message(dispute_id: Uuid) -> Message {
     )
 }
 
-/// `admin-settle` or `admin-cancel` for `order_id`: the message id is the
-/// order's, and the dispute must already be this solver's.
+/// `admin-settle` or `admin-cancel` for `order_id`, on the dispute
+/// wrapper: the message id is the order's (the daemon resolves the order
+/// from it, unlike the take, which carries the dispute id), and the
+/// dispute must already be this solver's.
 pub fn ruling_message(order_id: Uuid, ruling: Action) -> Message {
-    Message::new_order(Some(order_id), Some(request_id()), None, ruling, None)
+    Message::new_dispute(Some(order_id), Some(request_id()), None, ruling, None)
 }
 
 /// Reads a daemon message as the answer to a request that expects
@@ -86,7 +91,11 @@ mod tests {
         let message = add_solver_message(&solver.public_key());
         let kind = message.get_inner_message_kind();
         assert_eq!(kind.action, Action::AdminAddSolver);
-        assert!(kind.id.is_none());
+        assert!(
+            kind.id.is_some(),
+            "the daemon drops an id-less admin message"
+        );
+        assert!(kind.verify());
         let npub = solver.public_key().to_bech32().unwrap();
         assert!(matches!(
             &kind.payload,
@@ -109,6 +118,8 @@ mod tests {
             assert_eq!(message.get_inner_message_kind().id, Some(order));
             assert_eq!(message.get_inner_message_kind().action, ruling);
             assert!(message.get_inner_message_kind().request_id.is_some());
+            assert!(message.get_inner_message_kind().verify());
+            assert!(matches!(message, Message::Dispute(_)));
         }
         assert_ne!(
             take.get_inner_message_kind().request_id,
@@ -152,10 +163,9 @@ mod tests {
         );
     }
 
-    /// The wire round trip the solver relies on: a message wrapped for
-    /// the daemon with one key as identity and trade key opens on the
-    /// daemon side with that identity, and the daemon's answer opens for
-    /// the solver.
+    /// The wire round trip the solver relies on: a registration wrapped
+    /// from the daemon key to itself opens on the daemon side with that
+    /// identity, and the daemon's answer opens for the solver.
     #[tokio::test]
     async fn messages_wrap_and_unwrap_on_the_nip44_transport() {
         let daemon = Keys::generate();
@@ -179,6 +189,8 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(opened.identity, daemon.public_key());
+        assert_eq!(opened.sender, daemon.public_key());
+        assert!(opened.signature.is_some());
         assert_eq!(
             opened.message.get_inner_message_kind().action,
             Action::AdminAddSolver

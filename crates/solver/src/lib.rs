@@ -136,10 +136,11 @@ impl Solver {
     }
 
     /// Registers this solver with the daemon, as its operator would: an
-    /// `admin-add-solver` signed with the daemon's own key. The daemon
-    /// answers itself, which this identity cannot read, so registration is
-    /// proved by the first ruling the daemon accepts; a solver it does not
-    /// know is refused there as an invalid public key.
+    /// `admin-add-solver` sent from the daemon's own key, identity and
+    /// trade key alike, which is the only key the daemon accepts it from.
+    /// The daemon's acknowledgement goes to that key, so it is not
+    /// awaited: a registration that did not land shows up as the first
+    /// ruling being refused for an unknown public key.
     pub async fn register(&self, daemon_nsec: &Secret) -> Result<(), SolverError> {
         let daemon_keys = Keys::parse(daemon_nsec.expose()).map_err(|_| SolverError::DaemonKey)?;
         if daemon_keys.public_key() != self.daemon {
@@ -154,12 +155,13 @@ impl Solver {
                 action: Action::AdminAddSolver,
                 detail: e.to_string(),
             })?;
-        info!(solver = %self.keys.public_key(), "solver registered with the daemon");
+        info!(solver = %self.keys.public_key(), "solver registration sent to the daemon");
         Ok(())
     }
 
     /// Sends `message` as this solver and waits for the daemon's answer:
     /// the reply carrying `expected`, or its refusal.
+    /// The solver is one fixed identity: identity key and trade key alike.
     async fn request(&self, message: Message, expected: Action) -> Result<Message, SolverError> {
         let action = message.get_inner_message_kind().action.clone();
         let request_id = message.get_inner_message_kind().request_id;

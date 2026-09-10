@@ -19,5 +19,9 @@ mostro-core = { workspace = true }
 nostr-sdk = { workspace = true }
 uuid = { workspace = true }
 
+[dev-dependencies]
+mortsom-environment = { workspace = true }
+tracing-subscriber = { workspace = true }
+
 [lints]
 workspace = true
