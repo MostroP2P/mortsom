@@ -5,8 +5,8 @@ Repository content is English; the operator conversation is Spanish.
 
 ## Where things stand (2026-09-10)
 
-**The happy-path and cancellation families are implemented, and accepted live on Linux (10/10); Web is
-being accepted in the same order** (cancellations 5/5 done, happy path running). Spec section 8 lists
+**The happy-path and cancellation families are implemented and accepted live on Linux (10/10) and Web
+(10/10).** Spec section 8 lists
 the seven scenario families with their tags; the first two are in the catalogue: `range_order`,
 `market_price_order`, `full_trade_with_rating` (with `happy_sell`, `happy_buy`) and `cancel_before_taken`
 (was `cancel_pending`), `cancel_after_take_unpaid`, `taker_cancel_at_taken`, `cooperative_cancel`,
@@ -124,6 +124,9 @@ same time: `docker logs -f mortsom-regtest-mostro-1`, and `mortsom-regtest-lnd-c
   funds were recovered by cooperative cancel. Nothing in the harness depends on this.
 - A Web run whose browsers fail to start leaves an empty journal that blocks the next desktop run until
   `cleanup` removes it. If it happens twice in a row, check for a stray ChromeDriver from an earlier attempt.
+- The host going to sleep kills both Chromium sessions mid-trade (2026-09-10 01:29, `systemd-suspend` in
+  the system log); `cleanup` recovers the funds. Keep the machine awake during Web families, or run the
+  family one scenario at a time so a dead run stops less.
 
 ## Invariants to preserve
 
