@@ -60,12 +60,14 @@ pub async fn cancel_after_take_unpaid(ctx: &Context) -> Result<(), ScenarioError
     actions::wait_relay_state(ctx, &order, OrderState::Taken).await?;
     let reaped =
         actions::wait_relay_state_since(ctx, &order, REAPED, since, ctx.expiration_timeout).await?;
-    actions::wait_app_state_in(ctx, Actor::Alice, &order, &[reaped], ctx.expiration_timeout)
-        .await?;
     if reaped == OrderState::Pending {
         // Back on the book for the maker: the cleanup sweep closes it.
+        actions::wait_app_state(ctx, Actor::Alice, &order, OrderState::Pending).await?;
         return Ok(());
     }
+    // Closed by the daemon: the maker's app drops a trade that never went
+    // active, or shows it closed; either way it no longer holds it open.
+    actions::expect_closed(ctx, Actor::Alice, &order, ctx.expiration_timeout).await?;
     actions::mark_resolved(ctx, &order);
     Ok(())
 }

@@ -104,9 +104,9 @@ async fn phase5_no_value_scenarios_run_against_fakes() {
 }
 
 /// The value-moving Phase 5 scenarios complete their trades (or cancel
-/// cooperatively) against the fakes under clearance; the fake daemon never
-/// expires an order, so `expiration_unpaid` reports a product failure once
-/// its bounded wait ends instead of hanging.
+/// cooperatively) against the fakes under clearance; the fake app never
+/// lets go of a taken order, so `hold_invoice_expires` reports a product
+/// failure once its bounded wait ends instead of hanging.
 #[tokio::test]
 async fn phase5_value_scenarios_run_against_fakes() {
     mortsom_scenarios::link();
@@ -118,7 +118,7 @@ async fn phase5_value_scenarios_run_against_fakes() {
         "restart_at_completed",
         "cooperative_cancel",
         "wallet_unavailable_then_pay",
-        "expiration_unpaid",
+        "hold_invoice_expires",
     ];
     let summary = run(&world, adapter.clone(), opts(&names), true)
         .await
@@ -131,9 +131,9 @@ async fn phase5_value_scenarios_run_against_fakes() {
         .collect();
     for name in names {
         let outcome = by_name[name];
-        if name == "expiration_unpaid" {
+        if name == "hold_invoice_expires" {
             assert!(
-                matches!(outcome, Outcome::Failed { category: mortsom_common::FailureCategory::Product, message } if message.contains("did not reach cancelled")),
+                matches!(outcome, Outcome::Failed { category: mortsom_common::FailureCategory::Product, message } if message.contains("still open")),
                 "{name}: {outcome:?}"
             );
         } else {

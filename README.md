@@ -151,7 +151,7 @@ families to mark the cheap subset (`happy_sell`, `happy_buy`, `cancel_before_tak
 | Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
 | Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
 
-The first two families are implemented; the others are roadmap ([spec.md](spec.md), sections 8 and 14).
+The first three families are implemented; the others are roadmap ([spec.md](spec.md), sections 8 and 14).
 A scenario the app profile cannot support is skipped with a reason, never failed and never counted.
 
 ## Running scenarios
@@ -174,6 +174,11 @@ order), `cancel_after_take_unpaid` (Bob takes and walks away; the daemon reaps t
 order; the escrow returns) and `unilateral_cancel_rejected` (Alice alone cannot cancel a funded order; the
 relay never shows it cancelled during the window). The maker's own screen never proves a cancellation: the
 relay must show it.
+
+Expirations, each waiting for one of the daemon's clocks (`stack/limits.toml`): `pending_order_expires`
+(nobody takes the order; the test build asks the daemon for the declared `order_expiration_secs`),
+`hold_invoice_expires` (the seller never pays) and `buyer_invoice_deadline` (the buyer of a funded order
+never invoices; the escrow comes back). The daemon has no fiat-payment window, so none is driven.
 
 Range and rating scenarios need an app build carrying the range and star identifiers
 (`order.create.range`, `order.create.fiat_min`, `order.create.fiat_max`, `trade.rate.star.<n>`); an older

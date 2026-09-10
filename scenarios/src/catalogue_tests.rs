@@ -44,6 +44,20 @@ fn the_cancellation_family_is_every_way_an_order_ends_before_the_sats_move() {
     );
 }
 
+#[test]
+fn the_expiration_family_is_every_clock_the_daemon_runs_on_its_own() {
+    assert_eq!(
+        tagged("expiration"),
+        BTreeSet::from([
+            "pending_order_expires",
+            "hold_invoice_expires",
+            "buyer_invoice_deadline",
+        ])
+    );
+    crate::link();
+    assert!(registry::find("expiration_unpaid").is_none());
+}
+
 /// Three scenarios, enough to tell a broken setup from a working one.
 #[test]
 fn smoke_cuts_across_the_families() {

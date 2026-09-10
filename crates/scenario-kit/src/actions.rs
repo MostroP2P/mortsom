@@ -277,8 +277,14 @@ pub async fn wait_app_state_in(
 ) -> Result<OrderState, ScenarioError> {
     let session = ctx.actor(actor)?;
     let device = session.device(ctx.ui_timeout);
+    let read_detail = accepted.iter().all(|state| leaves_the_take(*state));
     let found = wait_until(timeout, STATE_POLL, || async {
-        match ctx.adapter.observe_order(&device, order).await {
+        let observed = if read_detail {
+            ctx.adapter.observe_order_detail(&device, order).await
+        } else {
+            ctx.adapter.observe_order(&device, order).await
+        };
+        match observed {
             Ok(state) if accepted.contains(&state.state) => Some(Ok(state)),
             Ok(state) if state.state.is_terminal() => Some(Err(ScenarioError::product(format!(
                 "order {} reached terminal `{}` while waiting for {}",
@@ -308,6 +314,51 @@ pub async fn wait_app_state_in(
             "order {} did not reach {} on {actor} within {timeout:?}",
             order.id,
             names(accepted)
+        ))),
+    }
+}
+
+/// Waits (bounded by `timeout`) until `actor`'s app no longer holds `order`
+/// open: it shows the order in a terminal state, or it no longer lists the
+/// order at all. App v2 drops a trade that never went active from its list
+/// once the daemon closes it, so for a cancelled or expired take there is no
+/// status to read on the screen -- the absence is what the app shows, and
+/// the relay is the proof the daemon closed it.
+pub async fn expect_closed(
+    ctx: &Context,
+    actor: Actor,
+    order: &OrderReference,
+    timeout: Duration,
+) -> Result<(), ScenarioError> {
+    let session = ctx.actor(actor)?;
+    let device = session.device(ctx.ui_timeout);
+    let found = wait_until(timeout, STATE_POLL, || async {
+        let listed = match ctx.adapter.owned_orders(&device).await {
+            Ok(ids) => ids.contains(&order.id),
+            Err(_) => return None,
+        };
+        if !listed {
+            return Some("no longer listed".to_owned());
+        }
+        match ctx.adapter.observe_order_detail(&device, order).await {
+            Ok(state) if state.state.is_terminal() => Some(format!("`{}`", state.raw_label)),
+            _ => None,
+        }
+    })
+    .await;
+    match found {
+        Some(how) => {
+            ctx.timeline.push(
+                TimelineKind::UiState,
+                Some(actor.as_str()),
+                format!("order {} is closed on {actor}: {how}", order.id),
+                None,
+            );
+            Ok(())
+        }
+        None => Err(ScenarioError::product(format!(
+            "order {} is still open on {actor} after {timeout:?}",
+            order.id
         ))),
     }
 }

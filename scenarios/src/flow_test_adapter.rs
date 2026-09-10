@@ -100,6 +100,10 @@ impl Adapter {
             tokio::spawn(async move {
                 tokio::time::sleep(DAEMON_DELAY).await;
                 let reaped = OrderState::from_protocol_status(wire).unwrap();
+                if reaped.is_terminal() {
+                    // A take the daemon closed is dropped from both lists.
+                    this.state.lock().unwrap().dropped.push(ORDER.to_owned());
+                }
                 this.transition(reaped, wire).await;
             });
         }
@@ -152,7 +156,7 @@ impl AppAdapter for Adapter {
     async fn owned_orders(&self, _: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
         let state = self.state.lock().unwrap();
         let mut ids = vec![];
-        if state.created.is_some() {
+        if state.created.is_some() && !state.dropped.iter().any(|id| id == ORDER) {
             ids.push(ORDER.to_owned());
         }
         if state.remainder.is_some() {
@@ -174,6 +178,20 @@ impl AppAdapter for Adapter {
         }
         let tags = self.book_tags();
         self.publish(ORDER, "pending", &tags).await;
+        if self.state.lock().unwrap().expires_pending {
+            let this = Adapter {
+                state: self.state.clone(),
+                relay: self.relay.clone(),
+                keys: self.keys.clone(),
+            };
+            tokio::spawn(async move {
+                tokio::time::sleep(DAEMON_DELAY).await;
+                let untaken = this.state.lock().unwrap().order == OrderState::Pending;
+                if untaken {
+                    this.transition(OrderState::Expired, "expired").await;
+                }
+            });
+        }
         Ok(VisibleOrder {
             id: Some(ORDER.into()),
             state: OrderState::Pending,
@@ -218,6 +236,32 @@ impl AppAdapter for Adapter {
     ) -> Result<PaymentHandoff, AdapterError> {
         self.action("hold", device.actor);
         assert_eq!(path, PaymentPath::ExternalWallet);
+        if self.state.lock().unwrap().cancels_funded_take {
+            // The buyer never invoices: after its window the daemon cancels
+            // the order, returns the escrow, and both apps drop the trade.
+            let this = Adapter {
+                state: self.state.clone(),
+                relay: self.relay.clone(),
+                keys: self.keys.clone(),
+            };
+            tokio::spawn(async move {
+                tokio::time::sleep(DAEMON_DELAY).await;
+                let unpaid = {
+                    let mut state = this.state.lock().unwrap();
+                    if state.order != OrderState::Taken {
+                        false
+                    } else {
+                        state.refunded = true;
+                        state.dropped.push(ORDER.to_owned());
+                        state.actions.push("daemon:cancel-unpaid".into());
+                        true
+                    }
+                };
+                if unpaid {
+                    this.transition(OrderState::Cancelled, "canceled").await;
+                }
+            });
+        }
         Ok(PaymentHandoff {
             kind: path,
             invoice: Some(Secret::new(INVOICE)),
@@ -360,6 +404,12 @@ impl AppAdapter for Adapter {
         order: &OrderReference,
     ) -> Result<AppOrderState, AdapterError> {
         let guard = self.state.lock().unwrap();
+        if guard.dropped.contains(&order.id) {
+            return Err(AdapterError::contract(format!(
+                "`trades.item.{}` did not appear",
+                order.id
+            )));
+        }
         if order.id == REMAINDER {
             let state = guard
                 .remainder

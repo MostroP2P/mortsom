@@ -20,6 +20,9 @@ section 8) is accepted on both platforms. All 2026-09-10 runs are on the Mortsom
 | `cancel_after_take_unpaid` | cancellation | **Accepted** 2026-09-10, run `20260910T003143Z-95733e80e9ec` (the daemon republished the order as pending 175 s after the take) | **Accepted** 2026-09-10, run `20260910T012237Z-b281ee1c1439` (family batch) |
 | `taker_cancel_at_taken` | cancellation | **Accepted** 2026-09-10, run `20260910T002521Z-4b4fde2673ae` | **Accepted** 2026-09-10, run `20260910T011604Z-5d1f4ddb0661` (family batch) |
 | `cooperative_cancel` | cancellation | **Accepted** 2026-09-10, run `20260910T002711Z-e02786ef112e` | **Accepted** 2026-09-10, run `20260910T011803Z-17007d8cd2a8` (family batch) |
+| `pending_order_expires` | expiration | Pending | Pending |
+| `hold_invoice_expires` | expiration | Pending | Pending |
+| `buyer_invoice_deadline` | expiration | Pending | Pending |
 | `unilateral_cancel_rejected` | cancellation | **Accepted** 2026-09-10, run `20260910T002921Z-704f54b3ff05` | **Accepted** 2026-09-10, run `20260910T012017Z-0e1186dbd6e7` (family batch) |
 
 ## Live attempts

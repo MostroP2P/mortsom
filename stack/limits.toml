@@ -2,8 +2,11 @@
 # Recorded in every run's stack fingerprint. The windows must equal the
 # values in mostro-settings.tpl.toml; a test fails when they drift apart.
 
-# Untaken order lifetime the reaper enforces.
-order_expiration_secs = 300
+# Untaken order lifetime. The daemon's own default is [mostro].expiration_hours,
+# hour-granular; a Mortsom client build asks the daemon for this lifetime on
+# every order it creates (MORTSOM_ORDER_EXPIRY_SECS), and the reaper checks
+# expiries once a minute.
+order_expiration_secs = 600
 # [lightning].hold_invoice_expiration_window
 hold_invoice_expiry_secs = 120
 # [mostro].expiration_seconds

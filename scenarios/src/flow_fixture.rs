@@ -65,6 +65,14 @@ struct State {
     rated: Vec<Actor>,
     /// What the daemon publishes when a take is abandoned, if anything.
     reaps_abandoned_take_to: Option<&'static str>,
+    /// The daemon expires an order nobody takes.
+    expires_pending: bool,
+    /// The daemon cancels a funded take whose buyer never invoices, and
+    /// returns the escrow.
+    cancels_funded_take: bool,
+    /// Orders the fixture daemon closed on its own, dropped from the app's
+    /// list the way app v2 drops a never-active trade.
+    dropped: Vec<String>,
     misbehaviour: Misbehaviour,
 }
 
@@ -101,6 +109,9 @@ impl Fixture {
             cancel_requests: Vec::new(),
             rated: Vec::new(),
             reaps_abandoned_take_to: None,
+            expires_pending: false,
+            cancels_funded_take: false,
+            dropped: Vec::new(),
             misbehaviour,
         }));
         let adapter = Arc::new(Adapter {
@@ -185,6 +196,17 @@ impl Fixture {
     /// The daemon reaps an abandoned take by publishing the order as `wire`.
     pub fn reaps_abandoned_take_to(self, wire: &'static str) -> Self {
         self.state.lock().unwrap().reaps_abandoned_take_to = Some(wire);
+        self
+    }
+    /// The daemon expires the order once nobody has taken it.
+    pub fn expires_pending(self) -> Self {
+        self.state.lock().unwrap().expires_pending = true;
+        self
+    }
+    /// The daemon cancels a funded take whose buyer never invoices and
+    /// returns the escrow.
+    pub fn cancels_funded_take(self) -> Self {
+        self.state.lock().unwrap().cancels_funded_take = true;
         self
     }
 

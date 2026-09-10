@@ -229,7 +229,7 @@ a whole family; `smoke` cuts across families to mark the cheap subset (`happy_se
 | Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
 | Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
 
-This version implements the first two families in full. The other five are roadmap (section 14): their
+This version implements the first three families in full. The other four are roadmap (section 14): their
 tags are reserved, and no scenario carries them yet.
 
 A scenario whose profile lacks a required capability is **skipped with a reason, never failed**, and a
@@ -262,6 +262,23 @@ needs the daemon's exchange-rate source to be reachable from the stack.
 
 The maker's own screen is never proof of a cancellation: app v2 marks a funded order cancelled on the
 request alone, while the daemon has only opened the cooperative flow and still holds the escrow.
+
+### 8.4 Expirations
+
+Every scenario here waits for a deadline the daemon owns, so each takes as long as the stack's limits
+(section 5, `stack/limits.toml`) say. The proof is the daemon's published state after a baseline taken
+before the wait, never a screen. App v2 drops a trade that never went active from its list once the
+daemon closes it, so on the app the evidence is that the order is no longer held open: shown closed, or no
+longer listed.
+
+| Scenario | Narrative | Required evidence |
+|---|---|---|
+| `pending_order_expires` | Alice creates a sell order and nobody takes it. The test build asks the daemon for the lifetime the stack declares (`order_expiration_secs`, through `MORTSOM_ORDER_EXPIRY_SECS`), since the daemon's own default is hour-granular. | The relay shows the order `expired` after the baseline. Alice's app no longer holds it open. No payment. |
+| `hold_invoice_expires` | Alice creates a sell order, Bob takes it and provides his invoice; Alice never pays the hold. | After the daemon's taker window the relay shows the order `canceled` (never `expired`, which is for orders nobody took). Neither app holds it open. No payment. |
+| `buyer_invoice_deadline` | Bob creates a buy order, Alice takes it and pays the hold; Bob never provides his payout invoice. | After the window the relay shows the order `canceled`, neither app holds it open, and Alice's hold payment fails: the escrow came back. |
+
+A fiat-payment window is not driven: the daemon has no such clock (`fiat_window_secs` stays undeclared in
+`stack/limits.toml`), so an active order never expires on its own.
 
 Rules for every scenario:
 
@@ -370,8 +387,8 @@ overlooked bugs. Commits follow Conventional Commits and never include secrets, 
 
 Documented as roadmap, not required by this version:
 
-- The remaining scenario families of section 8.1: expirations, disputes, payment failures, anti-abuse
-  bonds and adversarial messages.
+- The remaining scenario families of section 8.1: disputes, payment failures, anti-abuse bonds and
+  adversarial messages.
 - CPU and memory comparison of Linux and Web, and against the Android baseline, under matched conditions.
 - Multi-scenario runs with in-process profile reset.
 - NWC wallet mode for desktop clients.
