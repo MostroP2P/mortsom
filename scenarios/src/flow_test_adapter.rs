@@ -188,7 +188,10 @@ impl AppAdapter for Adapter {
                 tokio::time::sleep(DAEMON_DELAY).await;
                 let untaken = this.state.lock().unwrap().order == OrderState::Pending;
                 if untaken {
-                    this.transition(OrderState::Expired, "expired").await;
+                    // The daemon's own status is `expired`; the book says
+                    // `canceled`, as for every order closed without a trade.
+                    this.state.lock().unwrap().order = OrderState::Expired;
+                    this.publish(ORDER, "canceled", &[]).await;
                 }
             });
         }

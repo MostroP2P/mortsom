@@ -273,7 +273,7 @@ longer listed.
 
 | Scenario | Narrative | Required evidence |
 |---|---|---|
-| `pending_order_expires` | Alice creates a sell order and nobody takes it. The test build asks the daemon for the lifetime the stack declares (`order_expiration_secs`, through `MORTSOM_ORDER_EXPIRY_SECS`), since the daemon's own default is hour-granular. | The relay shows the order `expired` after the baseline. Alice's app no longer holds it open. No payment. |
+| `pending_order_expires` | Alice creates a sell order and nobody takes it. The test build asks the daemon for the lifetime the stack declares (`order_expiration_secs`, through `MORTSOM_ORDER_EXPIRY_SECS`), since the daemon's own default is hour-granular. | The relay shows the order closed after the baseline (the daemon's own status is `expired`; the book carries `canceled`, the one wire word for every order closed without a trade). Alice's app no longer holds it open. No payment. |
 | `hold_invoice_expires` | Alice creates a sell order, Bob takes it and provides his invoice; Alice never pays the hold. | After the daemon's taker window the relay shows the order `canceled` (never `expired`, which is for orders nobody took). Neither app holds it open. No payment. |
 | `buyer_invoice_deadline` | Bob creates a buy order, Alice takes it and pays the hold; Bob never provides his payout invoice. | After the window the relay shows the order `canceled`, neither app holds it open, and Alice's hold payment fails: the escrow came back. |
 

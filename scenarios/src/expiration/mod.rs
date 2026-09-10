@@ -26,17 +26,22 @@ const FUNDED_TAKE_REQUIRES: &[Capability] = &[
     Capability::BuyerInvoice,
 ];
 
+/// What the book shows for an untaken order the daemon expired: its own
+/// status is `expired`, but the public event carries `canceled` -- the
+/// daemon maps every closed-without-a-trade status onto one wire word.
+const EXPIRED_ON_THE_BOOK: &[OrderState] = &[OrderState::Expired, OrderState::Cancelled];
+
 /// Nobody takes the order and it lapses. The build asks the daemon for
 /// the lifetime the stack declares (`order_expiration_secs`), since the
-/// daemon's own default is hour-granular; the daemon publishes `expired`
-/// after it, and the maker's app stops holding the order open.
+/// daemon's own default is hour-granular; after it the daemon closes the
+/// order on the book, and the maker's app stops holding it open.
 pub async fn pending_order_expires(ctx: &Context) -> Result<(), ScenarioError> {
     let order = flow::create_pending(ctx).await?;
     let since = actions::relay_cursor(ctx);
     actions::wait_relay_state_since(
         ctx,
         &order,
-        &[OrderState::Expired],
+        EXPIRED_ON_THE_BOOK,
         since,
         ctx.expiration_timeout,
     )

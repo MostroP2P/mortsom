@@ -21,7 +21,7 @@ async fn an_untaken_order_expires_on_the_daemons_clock() {
         .unwrap();
 
     assert_eq!(fixture.actions(), ["create:alice"]);
-    assert_eq!(fixture.relay_states(ORDER), ["pending", "expired"]);
+    assert_eq!(fixture.relay_states(ORDER), ["pending", "canceled"]);
     assert_eq!(
         fixture.context.cleanup.report().entries[0].result,
         Some(CleanupResult::Resolved)
