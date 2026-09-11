@@ -109,7 +109,9 @@ Generated state lives in the gitignored `stack/local/`: the actors' node credent
 (which hold its key, owner-only) and database, and `public.json`, the descriptor every command reads to
 attach. `stack status` exits non-zero until the stack is usable, so it can be waited on. `stack down` stops
 the services, removes their volumes and deletes `stack/local/`; it is never evidence that an order was
-cancelled or a payment refunded. Both `up` and `down` refuse containers another directory created.
+cancelled or a payment refunded. Both `up` and `down` refuse containers another directory created and name
+that directory; `stack up --replace` removes such a stack and builds here instead, leaving the other
+directory's generated state stale.
 
 `stack logs [service]` shows a service's log by its name -- `mostro` (the default), `relay`, `bitcoind`,
 `lnd-alice`, `lnd-bob` or `lnd-carol` -- through the same Compose project every other stack command uses,
@@ -122,8 +124,13 @@ check, say) leaves no line; the run's `relay-events.jsonl` shows whether it reac
 ./target/debug/mortsom stack logs relay --since 5m
 ```
 
-`--stack-dir` selects another directory holding the same files; the default is `stack`, so run the binary
-from the repository root.
+`--stack-dir` (or `MORTSOM_STACK_DIR`) selects another directory holding the same files; the default is
+`stack`, so run the binary from the repository root. The published ports allow one stack per machine, so
+checkouts and worktrees share it by pointing at the same directory:
+
+```sh
+export MORTSOM_STACK_DIR=~/dev/mortsom/stack
+```
 
 ## Building the app
 

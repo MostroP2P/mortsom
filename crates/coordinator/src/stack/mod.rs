@@ -43,10 +43,18 @@ pub enum StackError {
     #[error(
         "the `{project}` Compose project belongs to {0}, not this stack directory; \
          run `mortsom stack down --stack-dir {0}` to release it, or \
-         `docker compose -p {project} down -v` if that directory is gone",
+         `mortsom stack up --replace` to remove it and build here",
         project = PROJECT
     )]
     ForeignOwner(String),
+    /// Project resources exist that cannot be shown to belong to this stack
+    /// directory; holds why.
+    #[error(
+        "the `{project}` Compose project cannot be shown to belong to this stack directory: \
+         {0}; `mortsom stack up --replace` removes it and builds here",
+        project = PROJECT
+    )]
+    Unowned(String),
     /// A request the stack cannot serve as asked; nothing is wrong with
     /// the stack itself.
     #[error("{0}")]

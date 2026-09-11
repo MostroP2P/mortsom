@@ -145,7 +145,11 @@ each node's active channels and the daemon identity in effect.
 
 `stack down` stops the services, removes their volumes and deletes the generated identity and credentials,
 so no public key is left that nothing answers on. Both `up` and `down` refuse to touch containers or volumes
-that this Mortsom checkout did not create.
+that this stack directory did not create, and name the directory that did. The one exception is
+`stack up --replace`, an explicit operator action: it removes the `mortsom-regtest` project by name, whatever
+created it, before building, and the replaced directory's generated state is stale from then on. The
+published ports allow one stack per host, so checkouts share it by selecting the same stack directory
+(`--stack-dir`, or `MORTSOM_STACK_DIR`).
 
 `run` never creates, updates or destroys the stack. Scenario teardown never removes containers or volumes. A
 stack reset is an explicit operator action; it is not evidence that an order was cancelled or a payment
