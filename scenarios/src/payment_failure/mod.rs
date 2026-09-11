@@ -92,6 +92,7 @@ pub async fn payout_invoice_below_expiry_floor(ctx: &Context) -> Result<(), Scen
     actions::wait_app_label(ctx, Actor::Bob, &order, WAITING_INVOICE).await?;
     actions::wait_app_state(ctx, Actor::Alice, &order, OrderState::Taken).await?;
     actions::provide_buyer_invoice(ctx, Actor::Bob, &order).await?;
+    actions::wait_app_state(ctx, Actor::Bob, &order, OrderState::Taken).await?;
     actions::wait_app_state(ctx, Actor::Alice, &order, OrderState::Taken).await?;
     actions::wait_relay_state(ctx, &order, OrderState::Taken).await?;
     actions::expect_payout_never_settled(ctx, Actor::Bob, &order, &refused.hash).await?;
@@ -157,6 +158,18 @@ async fn drive_capped_payouts(
     trades: &[(OrderReference, String)],
 ) -> Result<(), ScenarioError> {
     let since = actions::relay_cursor(ctx);
+    release_all_holding_up_to(ctx, cap, trades).await?;
+    prove_the_capped_payout_waits(ctx, cap, trades).await?;
+    settle_all_and_complete(ctx, trades, since).await
+}
+
+/// Releases every trade: the escrow settles once per release, and up to
+/// the cap each payout lands on Bob's node as an accepted hold invoice.
+async fn release_all_holding_up_to(
+    ctx: &Context,
+    cap: usize,
+    trades: &[(OrderReference, String)],
+) -> Result<(), ScenarioError> {
     for (index, (order, hash)) in trades.iter().enumerate() {
         actions::release(ctx, Actor::Alice, order).await?;
         actions::settle_hold_payment(ctx, order).await?;
@@ -172,6 +185,17 @@ async fn drive_capped_payouts(
             .await?;
         }
     }
+    Ok(())
+}
+
+/// The trade past the cap proves the reconciliation: nothing is dispatched
+/// to it for the whole quiet window, and once Bob settles one held payout
+/// the waiting one goes out on its own.
+async fn prove_the_capped_payout_waits(
+    ctx: &Context,
+    cap: usize,
+    trades: &[(OrderReference, String)],
+) -> Result<(), ScenarioError> {
     let (pinned_order, pinned_hash) = &trades[cap];
     actions::expect_hold_invoice_stays(
         ctx,
@@ -193,7 +217,16 @@ async fn drive_capped_payouts(
         HoldInvoiceState::Accepted,
         ctx.expiration_timeout,
     )
-    .await?;
+    .await
+}
+
+/// Bob settles the rest; every payout lands once and every trade completes
+/// on both apps and on the book.
+async fn settle_all_and_complete(
+    ctx: &Context,
+    trades: &[(OrderReference, String)],
+    since: u64,
+) -> Result<(), ScenarioError> {
     for (order, hash) in trades.iter().skip(1) {
         actions::settle_buyer_hold_invoice(ctx, Actor::Bob, order, hash).await?;
         actions::expect_payout_settled(ctx, Actor::Bob, order, hash).await?;

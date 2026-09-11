@@ -53,10 +53,6 @@ pub async fn submit_rejected_buyer_invoice(
         .adapter
         .submit_buyer_invoice(&session.device(ctx.ui_timeout), order, invoice)
         .await?;
-    let step = ctx
-        .evidence
-        .checkpoint(actor.as_str(), "buyer-invoice-refused", session.ui.as_ref())
-        .await;
     let reason = match verdict {
         InvoiceSubmission::Rejected { reason } => reason,
         InvoiceSubmission::Accepted => {
@@ -66,6 +62,10 @@ pub async fn submit_rejected_buyer_invoice(
             )));
         }
     };
+    let step = ctx
+        .evidence
+        .checkpoint(actor.as_str(), "buyer-invoice-refused", session.ui.as_ref())
+        .await;
     ctx.timeline.push(
         TimelineKind::Step,
         Some(actor.as_str()),

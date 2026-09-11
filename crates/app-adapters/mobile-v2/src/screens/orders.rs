@@ -61,8 +61,6 @@ pub async fn create(
     })
 }
 
-/// Fills the fiat side of the form: one amount, or the range toggle and
-/// its two bounds.
 /// Opens the create form from the book and fills every field of `draft`,
 /// leaving the keyboard down and submit untouched.
 async fn fill_create_form(
@@ -124,6 +122,8 @@ async fn submit_ready(device: &DeviceContext<'_>) -> Result<bool, AdapterError> 
     }
 }
 
+/// Fills the fiat side of the form: one amount, or the range toggle and
+/// its two bounds.
 async fn enter_fiat_amount(
     device: &DeviceContext<'_>,
     fiat: FiatAmount,
@@ -553,7 +553,17 @@ pub async fn submit_buyer_invoice(
     invoice: &Secret,
 ) -> Result<InvoiceSubmission, AdapterError> {
     enter_buyer_invoice(device, order, invoice).await?;
+    // A form kept open after a refusal still shows that refusal's
+    // `invoice.error`; the app clears it when it handles the new
+    // submission. Reading the verdict before it clears would report the
+    // previous refusal as this one's.
+    let stale_error = present(device, Ids::INVOICE_ERROR).await?;
     tap(device, Ids::INVOICE_SUBMIT).await?;
+    if stale_error && !super::gone_within(device, Ids::INVOICE_ERROR, device.ui_timeout).await? {
+        return Err(AdapterError::contract(
+            "the previous `invoice.error` never cleared after a new submission",
+        ));
+    }
     match super::first_present(device, &[Ids::ORDER_STATUS, Ids::INVOICE_ERROR]).await? {
         Some(id) if id == Ids::ORDER_STATUS => {
             verify_order_id(device, Ids::ORDER_ID, order).await?;

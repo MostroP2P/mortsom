@@ -719,11 +719,12 @@ impl LndWallet {
     }
 }
 
-/// Decodes a hex string; `None` when it is not valid hex.
+/// Encodes bytes as lowercase hex.
 fn hex_of(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// Decodes a hex string; `None` when it is not valid hex.
 fn hex_to_bytes(hex: &str) -> Option<Vec<u8>> {
     if !hex.len().is_multiple_of(2)
         || hex.is_empty()

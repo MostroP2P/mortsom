@@ -182,6 +182,54 @@ fn a_superseded_payment_lets_a_replacement_be_prepared_for_the_same_order() {
     ));
 }
 
+/// A supersede names the exact prepared intent it withdraws: an outgoing
+/// payment, another wallet's invoice or another order's hash never matches.
+#[test]
+fn only_the_prepared_incoming_payment_can_be_superseded() {
+    let base = tempfile::tempdir().unwrap();
+    let journal = FileJournal::create(base.path(), manifest()).unwrap();
+    let expected =
+        |order: &str, wallet: &str, hash: &str, incoming: bool| RecoveryEvent::PaymentExpected {
+            order_id: order.into(),
+            wallet: wallet.into(),
+            hash: hash.into(),
+            incoming,
+            amount_sats: 1000,
+        };
+    let supersede = |order: &str, wallet: &str, hash: &str| RecoveryEvent::PaymentSuperseded {
+        order_id: order.into(),
+        wallet: wallet.into(),
+        hash: hash.into(),
+    };
+    journal
+        .record(expected("o1", "alice", &"a".repeat(64), false))
+        .unwrap();
+    assert!(
+        journal
+            .record(supersede("o1", "alice", &"a".repeat(64)))
+            .is_err(),
+        "an outgoing payment is never superseded"
+    );
+    journal
+        .record(expected("o1", "bob", &"b".repeat(64), true))
+        .unwrap();
+    assert!(
+        journal
+            .record(supersede("o1", "alice", &"b".repeat(64)))
+            .is_err(),
+        "another wallet's invoice"
+    );
+    assert!(
+        journal
+            .record(supersede("o2", "bob", &"b".repeat(64)))
+            .is_err(),
+        "another order's invoice"
+    );
+    journal
+        .record(supersede("o1", "bob", &"b".repeat(64)))
+        .unwrap();
+}
+
 #[test]
 fn verified_resolution_survives_a_crash_between_profile_and_bundle_deletion() {
     let base = tempfile::tempdir().unwrap();

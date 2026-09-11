@@ -463,8 +463,19 @@ impl AppAdapter for Adapter {
     ) -> Result<(), AdapterError> {
         self.action("release", device.actor);
         // The escrow settles at once; the payout is the daemon's next
-        // step, and how it goes depends on the buyer's invoice.
+        // step, and how it goes depends on the buyer's invoice. A settled
+        // escrow never unsettles, even while the order waits again for a
+        // replacement invoice.
         self.private_transition(&order.id, OrderState::PayoutPending);
+        {
+            let mut state = self.state.lock().unwrap();
+            let escrow = state.invoices.values_mut().find(|invoice| {
+                invoice.actor == Actor::Alice && invoice.order.as_deref() == Some(order.id.as_str())
+            });
+            if let Some(invoice) = escrow {
+                invoice.settled = true;
+            }
+        }
         self.dispatch_payout(&order.id).await;
         // A release under dispute settles the dispute too.
         if self.state.lock().unwrap().dispute_initiator.is_some() {

@@ -5,8 +5,8 @@ Repository content is English; the operator conversation is Spanish.
 
 ## Where things stand (2026-09-10)
 
-**Four families are implemented and accepted live on Linux (17/17) and Web (17/17): happy path,
-cancellations, expirations and disputes.** The dispute family (Mortsom `feat/dispute-family`, app
+**Five families are implemented and accepted live on Linux (20/20), the first four also on Web (17/20):
+happy path, cancellations, expirations, disputes and payment failures.** The dispute family (Mortsom `feat/dispute-family`, app
 `feat/mortsom-dispute-back-id`) adds `crates/solver`: each run that needs one mints a solver identity,
 registers it with `admin-add-solver` sent from the daemon key read from `stack/local/config/settings.toml`
 (the message needs an id or the daemon drops it silently), and rules with `admin-take-dispute` (dispute

@@ -78,7 +78,8 @@ pub struct IssuedInvoice {
     pub hold: Option<HoldInvoiceState>,
     /// Cancelled on the node.
     pub superseded: bool,
-    /// The daemon paid it.
+    /// Settled for good: the daemon paid it (a payout invoice), or the
+    /// escrow it secures settled at the release (Alice's hold invoice).
     pub settled: bool,
 }
 
@@ -520,6 +521,8 @@ impl WalletReader for Wallet {
                 let order = invoice.order.as_deref().expect("hold names its order");
                 if state.refunded {
                     PaymentState::Failed
+                } else if invoice.settled {
+                    PaymentState::Settled
                 } else {
                     assert!(state.funded.contains(order));
                     match state.order(order) {
