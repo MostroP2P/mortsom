@@ -221,7 +221,7 @@ a whole family; `smoke` cuts across families to mark the cheap subset (`happy_se
 | Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
 | Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
 
-This version implements the first four families in full. The other three are roadmap (section 14): their
+This version implements the first five families in full. The other two are roadmap (section 14): their
 tags are reserved, and no scenario carries them yet.
 
 A scenario whose profile lacks a required capability is **skipped with a reason, never failed**, and a
@@ -303,6 +303,34 @@ order the dispute is about is what the daemon reports when the solver takes it. 
 The cleanup sweep treats a disputed order as out of the parties' hands: when the run has a solver, it takes
 each open dispute the daemon published until one is about the order, and cancels the order so the escrow
 returns; without a solver the order is reported unresolved.
+
+### 8.6 Payment failures
+
+The daemon settles the seller's escrow at release and only then pays the buyer's invoice. What it does when
+that payment cannot be made is a product surface of its own: it retries on the schedule it declares
+(`[lightning].payment_attempts` every `payment_retries_interval` seconds), tells the buyer with
+`payment-failed`, and once the retries are spent asks for a new invoice with an `add-invoice` whose order
+still reads `settled-hold-invoice`; the app must show that request as it shows the first one, and the
+replacement goes through the same manual form. Before any of that, an invoice the daemon will not be able
+to pay in time is refused at submission (`invoice_expiration_window`, declared to the run as
+`payout_invoice_min_expiry_secs`). And a payee who never settles what the daemon pays holds an HTLC open
+on the daemon's node for each payout; the daemon caps how many unresolved payouts one destination may
+hold (`max_inflight_payouts_per_destination`) and lets the next one wait, settled escrow and all, until a
+slot frees.
+
+Bob's wallet is a node Mortsom holds, so every invoice in this family is shaped from the outside and never
+through the app: withdrawn on the node before the release, issued with a chosen lifetime, or issued as a
+hold invoice. The declared limits reach scenarios from the stack descriptor; a stack that declares none
+makes the scenario an environment error before an order exists. A withdrawn or refused invoice is
+recorded as superseded in the recovery journal before the node cancels it, which is what lets a
+replacement be prepared for the same order and what recovery later verifies: a superseded payout must
+show failed with no settled record, whatever the order came to.
+
+| Scenario | Narrative | Required evidence |
+|---|---|---|
+| `payout_fails_then_replaced` | Alice creates, Bob takes and invoices, Alice funds, Bob reports fiat sent. Bob withdraws his invoice on his node. Alice releases. | The hold settles once on Alice's node at the release. The daemon fails to pay, retries as declared, then asks Bob for a new invoice: his app shows `waiting-invoice` again. Bob hands in a replacement through the manual form; both apps show completion, the book `success`, the replacement settled once on Bob's node and the withdrawn invoice failed with no settled record. |
+| `payout_invoice_below_expiry_floor` | Alice creates, Bob takes and hands in an invoice whose lifetime is half the declared floor. | The daemon refuses it (`CantDo`); Bob's app keeps the form open with the reason as `invoice.error`, and the order stays taken and waiting for his invoice on both sides. A proper invoice is then accepted: both apps taken, the book `in-progress`. The refused invoice never settles. No payment; the cleanup sweep closes the order. |
+| `payout_slots_capped_per_destination` | One more funded trade than the declared cap, each with a hold invoice on Bob's node as the payout invoice, all reported fiat sent. Alice releases them in turn. | Each release settles that hold once on Alice's node. Up to the cap, each hold invoice on Bob's node turns `accepted`: the payout is in flight and held. The next one stays `open` for the whole quiet window: nothing was dispatched to it. Bob settles the first; its payout lands, and the held-back payout is dispatched on its own (its invoice turns `accepted`). Bob settles the rest; every payout settles once, every trade completes on both apps and on the book. |
 
 Rules for every scenario:
 
@@ -411,8 +439,7 @@ overlooked bugs. Commits follow Conventional Commits and never include secrets, 
 
 Documented as roadmap, not required by this version:
 
-- The remaining scenario families of section 8.1: payment failures, anti-abuse bonds and adversarial
-  messages.
+- The remaining scenario families of section 8.1: anti-abuse bonds and adversarial messages.
 - CPU and memory comparison of Linux and Web under matched conditions.
 - Multi-scenario runs with in-process profile reset.
 - NWC wallet mode for desktop clients.

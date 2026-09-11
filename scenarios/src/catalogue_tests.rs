@@ -81,6 +81,33 @@ fn the_dispute_family_is_every_way_a_dispute_ends() {
     );
 }
 
+#[test]
+fn the_payment_failure_family_is_what_the_daemon_cannot_pay_and_what_one_payee_can_pin() {
+    assert_eq!(
+        tagged("payment-failure"),
+        BTreeSet::from([
+            "payout_fails_then_replaced",
+            "payout_invoice_below_expiry_floor",
+            "payout_slots_capped_per_destination",
+        ])
+    );
+    crate::link();
+    // Only the refused invoice ends before the sats move.
+    let moving: BTreeSet<&str> = registry::all()
+        .into_iter()
+        .filter(|def| def.tags.contains(&"payment-failure"))
+        .filter(|def| def.moves_value)
+        .map(|def| def.name)
+        .collect();
+    assert_eq!(
+        moving,
+        BTreeSet::from([
+            "payout_fails_then_replaced",
+            "payout_slots_capped_per_destination"
+        ])
+    );
+}
+
 /// Three scenarios, enough to tell a broken setup from a working one.
 #[test]
 fn smoke_cuts_across_the_families() {

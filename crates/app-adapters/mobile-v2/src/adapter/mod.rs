@@ -3,8 +3,8 @@
 use async_trait::async_trait;
 use mortsom_app_contract::{
     AdapterError, AppAdapter, AppOrderState, AppProfile, CancelOutcome, Capability, CapabilitySet,
-    DeviceContext, Identity, OrderDraft, OrderKind, OrderReference, PaymentHandoff, PaymentPath,
-    TestEnvironment, VisibleOrder, WalletConnection,
+    DeviceContext, Identity, InvoiceSubmission, OrderDraft, OrderKind, OrderReference,
+    PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };
 use mortsom_common::Secret;
 
@@ -189,6 +189,15 @@ impl AppAdapter for MobileV2Adapter {
         invoice: Option<&Secret>,
     ) -> Result<Option<Secret>, AdapterError> {
         orders::provide_buyer_invoice(device, order, invoice).await
+    }
+
+    async fn submit_buyer_invoice(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+        invoice: &Secret,
+    ) -> Result<InvoiceSubmission, AdapterError> {
+        orders::submit_buyer_invoice(device, order, invoice).await
     }
 
     async fn confirm_fiat_sent(

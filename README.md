@@ -162,7 +162,7 @@ families to mark the cheap subset (`happy_sell`, `happy_buy`, `cancel_before_tak
 | Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
 | Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
 
-The first four families are implemented; the others are roadmap ([spec.md](spec.md), sections 8 and 14).
+The first five families are implemented; the others are roadmap ([spec.md](spec.md), sections 8 and 14).
 A scenario the app profile cannot support is skipped with a reason, never failed and never counted.
 
 ## Running scenarios
@@ -198,6 +198,17 @@ paid, Alice will not release; Bob disputes and the solver settles for him), `dis
 solver is registered per run with the daemon's own key from the stack's owner-only settings, so the two
 solver scenarios run only against a Mortsom-owned stack and are skipped elsewhere. The proof is the daemon's
 published dispute event after each step, never a screen.
+
+Payment failures, all with Alice as seller and Bob as buyer and Bob's invoices issued on the node Mortsom
+holds for him: `payout_fails_then_replaced` (Bob withdraws his payout invoice before Alice releases; the
+daemon settles the escrow, fails to pay, retries as it declares and asks for a new invoice, which Bob hands
+in; only the replacement settles), `payout_invoice_below_expiry_floor` (an invoice shorter than the
+declared floor is refused with the reason kept on screen as `invoice.error`; a proper one is then accepted;
+no payment) and `payout_slots_capped_per_destination` (one more funded trade than the declared
+per-destination cap, each paying out to a hold invoice Bob never settles; the daemon dispatches up to the
+cap and holds the next payout back until Bob settles one, then every trade completes). The limits come
+from `stack/limits.toml` (`payout_invoice_min_expiry_secs`, `max_inflight_payouts_per_destination`); the
+app must carry the `invoice.error` readout and route the daemon's replacement request to the invoice form.
 
 Range and rating scenarios need an app build carrying the range and star identifiers
 (`order.create.range`, `order.create.fiat_min`, `order.create.fiat_max`, `trade.rate.star.<n>`); an older

@@ -543,6 +543,16 @@ async fn payment_attempt(
     wallet: Arc<RecoveryWallet>,
     maker: Actor,
 ) -> (RunSummary, Arc<FakeAdapter>) {
+    payment_attempt_with(state, incoming, false, wallet, maker).await
+}
+
+async fn payment_attempt_with(
+    state: OrderState,
+    incoming: bool,
+    superseded: bool,
+    wallet: Arc<RecoveryWallet>,
+    maker: Actor,
+) -> (RunSummary, Arc<FakeAdapter>) {
     use mortsom_scenario_kit::journal::RecoveryJournal;
     let mut fixture = world(false);
     fixture.config.run.settle_timeout_secs = 1;
@@ -557,6 +567,15 @@ async fn payment_attempt(
             amount_sats: 100,
         })
         .unwrap();
+    if superseded {
+        journal
+            .record(RecoveryEvent::PaymentSuperseded {
+                order_id: "old-order".into(),
+                wallet: label.into(),
+                hash: "c".repeat(64),
+            })
+            .unwrap();
+    }
     let root = journal.root().to_path_buf();
     drop(journal);
     let journal = Arc::new(FileJournal::open(&root).unwrap());
@@ -624,6 +643,37 @@ async fn a_client_stuck_on_payout_pending_resolves_only_with_the_daemons_success
         );
         assert_eq!(journal.snapshot().closed, healthy);
     }
+}
+
+/// A payout invoice the scenario withdrew must never have been paid, even
+/// on a trade that completed on a replacement: the node is asked to cancel
+/// it again, and only a failed invoice with no settled record is safe.
+#[tokio::test]
+async fn a_superseded_payout_is_safe_only_when_it_never_settled() {
+    let wallet = RecoveryWallet::new(PaymentState::Failed, 100, 0, 0);
+    let (summary, _) = payment_attempt_with(
+        OrderState::Completed,
+        true,
+        true,
+        wallet.clone(),
+        Actor::Bob,
+    )
+    .await;
+    assert!(!payment_failed(&summary), "{:?}", summary.checks);
+    assert!(
+        wallet
+            .calls
+            .lock()
+            .unwrap()
+            .contains(&"cancel invoice".to_owned()),
+        "{:?}",
+        wallet.calls.lock().unwrap()
+    );
+
+    let wallet = RecoveryWallet::new(PaymentState::Settled, 100, 0, 1);
+    let (summary, _) =
+        payment_attempt_with(OrderState::Completed, true, true, wallet, Actor::Bob).await;
+    assert!(payment_failed(&summary), "{:?}", summary.checks);
 }
 
 fn payment_failed(summary: &RunSummary) -> bool {

@@ -22,6 +22,7 @@ rust-version = "1.89"
 
 [workspace.dependencies]
 sha2 = "0.11.0"
+rand = "0.10.2"
 fedimint-tonic-lnd = { version = "0.4.0", features = ["lightningrpc", "invoicesrpc", "routerrpc"] }
 # Internal crates
 mortsom-common = { path = "crates/common" }

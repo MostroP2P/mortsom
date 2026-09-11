@@ -272,6 +272,18 @@ pub enum CancelOutcome {
     NotFound,
 }
 
+/// The daemon's verdict on a buyer invoice submitted through the app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InvoiceSubmission {
+    /// The daemon took the invoice: the app returned to the trade detail.
+    Accepted,
+    /// The daemon refused it and the app kept the form open, showing why.
+    Rejected {
+        /// The reason the app displays, as its stable readout.
+        reason: String,
+    },
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod draft_tests {

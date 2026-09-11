@@ -16,7 +16,7 @@ pub use config::MobileConfig;
 pub use error::AdapterError;
 pub use states::OrderState;
 pub use types::{
-    AppOrderState, AppProfile, CancelOutcome, FiatAmount, Identity, OrderDraft, OrderKind,
-    OrderPrice, OrderReference, PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder,
-    WalletConnection,
+    AppOrderState, AppProfile, CancelOutcome, FiatAmount, Identity, InvoiceSubmission, OrderDraft,
+    OrderKind, OrderPrice, OrderReference, PaymentHandoff, PaymentPath, TestEnvironment,
+    VisibleOrder, WalletConnection,
 };

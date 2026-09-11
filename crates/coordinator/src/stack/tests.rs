@@ -577,6 +577,22 @@ async fn up_and_down_refuse_containers_another_directory_created() {
     );
 }
 
+/// What the payment-failure family drives comes from the declared limits,
+/// undeclared caps staying undeclared rather than defaulting.
+#[test]
+fn payout_limits_are_the_declared_ones_or_nothing() {
+    let mut limits: DeclaredLimits =
+        toml::from_str(include_str!("../../../../stack/limits.toml")).unwrap();
+    let payout = limits.payout_limits();
+    assert_eq!(payout.payout_invoice_min_expiry_secs, Some(300));
+    assert_eq!(payout.max_inflight_payouts_per_destination, Some(2));
+    limits.max_inflight_payouts_per_destination = None;
+    assert_eq!(
+        limits.payout_limits().max_inflight_payouts_per_destination,
+        None
+    );
+}
+
 #[test]
 fn declared_limits_match_the_settings_template() {
     // Arrange

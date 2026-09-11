@@ -24,7 +24,12 @@ pub(in crate::run) async fn verify_payments(
             .node_wallets
             .get(wallet)
             .ok_or("payment recovery requires the original node wallet")?;
-        if *incoming && matches!(state, OrderState::Cancelled | OrderState::Expired) {
+        // A payment the scenario withdrew on purpose (a refused or replaced
+        // payout invoice) must never have settled, whatever the order came
+        // to; the node is asked to cancel it again, which is idempotent.
+        let withdrawn = *incoming && crate::recovery_store::superseded(&events, wallet, hash);
+        if withdrawn || (*incoming && matches!(state, OrderState::Cancelled | OrderState::Expired))
+        {
             node.cancel_invoice(hash).await?;
         }
         let payment = ctx
@@ -33,7 +38,9 @@ pub(in crate::run) async fn verify_payments(
             .await
             .map_err(|e| e.to_string())?;
         let count = node.settled_record_count(hash, *incoming).await?;
-        let safe = if state == OrderState::Completed {
+        let safe = if withdrawn {
+            payment.state == PaymentState::Failed && count == 0
+        } else if state == OrderState::Completed {
             payment.state == PaymentState::Settled
                 && payment.amount_sats == *amount_sats
                 && if *incoming {
@@ -53,7 +60,7 @@ pub(in crate::run) async fn verify_payments(
         ctx.timeline.push(
             mortsom_scenario_kit::timeline::TimelineKind::Assertion,
             None,
-            format!("wallet {wallet} order {order_id} hash {hash}: incoming={incoming}, principal={} sats, fee={} sats, settled ledger records={count}", payment.amount_sats, payment.fee_sats),
+            format!("wallet {wallet} order {order_id} hash {hash}: incoming={incoming}, withdrawn={withdrawn}, principal={} sats, fee={} sats, settled ledger records={count}", payment.amount_sats, payment.fee_sats),
             Some(hash.clone()),
         );
     }

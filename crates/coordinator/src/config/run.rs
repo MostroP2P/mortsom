@@ -59,6 +59,12 @@ pub struct RunConfig {
     /// Length of an injected connectivity outage (recovery scenarios).
     #[serde(default = "default_outage")]
     pub outage_secs: u64,
+    /// The daemon's payout limits, as the stack declares them. Never read
+    /// from configuration: the stack descriptor fills it in when a run
+    /// attaches, so a scenario about those limits tests what the daemon
+    /// was actually started with.
+    #[serde(skip)]
+    pub payout_limits: mortsom_scenario_kit::PayoutLimits,
 }
 
 fn default_jobs() -> u32 {
@@ -160,6 +166,7 @@ mod tests {
 
     fn valid() -> RunConfig {
         RunConfig {
+            payout_limits: Default::default(),
             lane: Lane::Local,
             amount_sats: 1000,
             max_order_sats: 5000,

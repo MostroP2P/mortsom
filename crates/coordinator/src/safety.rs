@@ -105,6 +105,7 @@ mod tests {
 
     fn run(allow_mainnet: bool, lane: Lane) -> RunConfig {
         RunConfig {
+            payout_limits: Default::default(),
             lane,
             amount_sats: 1,
             max_order_sats: 1,

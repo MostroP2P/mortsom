@@ -1971,8 +1971,10 @@ dependencies = [
  "mostro-core",
  "nostr-sdk",
  "nwc",
+ "rand 0.10.2",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
@@ -2025,7 +2027,9 @@ name = "mortsom-scenarios"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bitcoin",
  "inventory",
+ "lightning-invoice",
  "mortsom-app-contract",
  "mortsom-common",
  "mortsom-observers",

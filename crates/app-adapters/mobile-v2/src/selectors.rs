@@ -100,6 +100,8 @@ impl Ids {
     pub const INVOICE_TEXT: &'static str = "invoice.text";
     pub const INVOICE_SUBMIT: &'static str = "invoice.submit";
     pub const INVOICE_CANCEL: &'static str = "invoice.cancel";
+    /// Readout: why the daemon refused the last submitted buyer invoice.
+    pub const INVOICE_ERROR: &'static str = "invoice.error";
     pub const PAY_INVOICE_TEXT: &'static str = "pay.invoice.text";
     pub const PAY_ORDER_ID: &'static str = "pay.order_id";
     pub const PAY_NWC: &'static str = "pay.nwc";
@@ -183,6 +185,7 @@ impl Ids {
         Self::INVOICE_TEXT,
         Self::INVOICE_SUBMIT,
         Self::INVOICE_CANCEL,
+        Self::INVOICE_ERROR,
         Self::PAY_INVOICE_TEXT,
         Self::PAY_ORDER_ID,
         Self::PAY_NWC,

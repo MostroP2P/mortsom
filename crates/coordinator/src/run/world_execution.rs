@@ -67,6 +67,7 @@ impl World<'_> {
                 background_secs: config.run.background_secs,
                 outage: Duration::from_secs(config.run.outage_secs),
             },
+            limits: config.run.payout_limits,
         };
         if self.desktop.resume
             && let Some(journal) = self.desktop.recovery.as_ref()

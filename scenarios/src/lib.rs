@@ -7,6 +7,7 @@ pub mod dispute;
 pub mod expiration;
 pub mod flow;
 pub mod happy;
+pub mod payment_failure;
 pub mod recovery;
 pub mod regression;
 pub mod smoke;
@@ -85,6 +86,7 @@ pub fn link() {
     cancellation::link();
     dispute::link();
     expiration::link();
+    payment_failure::link();
     recovery::link();
     regression::link();
 }

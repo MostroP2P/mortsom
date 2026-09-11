@@ -2,19 +2,43 @@
 use mortsom_app_contract::OrderReference;
 use mortsom_common::Actor;
 use mortsom_common::Secret;
-use mortsom_observers::wallet::{amount_msats_of, payment_hash_of};
+use mortsom_observers::wallet::{amount_msats_of, expiry_secs_of, payment_hash_of};
 
 use crate::{Context, ScenarioError, journal::RecoveryEvent};
 
+/// Which invoice the buyer's node issues for the payout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuyerInvoice {
+    /// An ordinary invoice the daemon can pay at once.
+    Standard,
+    /// An invoice that stops being payable `secs` after issue; below the
+    /// daemon's declared floor it is refused at submission.
+    Expiring {
+        /// Lifetime in seconds.
+        secs: u64,
+    },
+    /// A hold invoice: the daemon's payment is accepted and then held,
+    /// unresolved, until the scenario settles it.
+    Hold,
+}
+
 pub(super) struct Prepared {
     pub invoice: Option<Secret>,
-    expected: Option<(String, u64)>,
+    pub(super) expected: Option<(String, u64)>,
+}
+
+impl Prepared {
+    /// The hash the node issued, when Mortsom holds the buyer's node.
+    pub(super) fn hash(&self) -> Option<&str> {
+        self.expected.as_ref().map(|(hash, _)| hash.as_str())
+    }
 }
 
 pub(super) async fn prepare(
     ctx: &Context,
     actor: Actor,
     order: &OrderReference,
+    kind: BuyerInvoice,
 ) -> Result<Prepared, ScenarioError> {
     let Some(node) = ctx.node_wallet(actor) else {
         return Ok(Prepared {
@@ -38,12 +62,18 @@ pub(super) async fn prepare(
         ctx.amount_sats
     };
     validate_request(requested, cap)?;
-    let invoice = node
-        .make_invoice(requested, &format!("mortsom {}", order.id))
-        .await
-        .map_err(ScenarioError::environment)?;
+    let memo = format!("mortsom {}", order.id);
+    let invoice = match kind {
+        BuyerInvoice::Standard => node.make_invoice(requested, &memo).await,
+        BuyerInvoice::Expiring { secs } => node.make_invoice_expiring(requested, &memo, secs).await,
+        BuyerInvoice::Hold => node.make_hold_invoice(requested, &memo).await,
+    }
+    .map_err(ScenarioError::environment)?;
     ctx.protect(&invoice);
     let hash = validate_invoice(&invoice, requested)?;
+    if let BuyerInvoice::Expiring { secs } = kind {
+        validate_expiry(&invoice, secs)?;
+    }
     ctx.journal
         .record(RecoveryEvent::PaymentExpected {
             order_id: order.id.clone(),
@@ -69,6 +99,19 @@ fn validate_request(requested: u64, cap: u64) -> Result<(), ScenarioError> {
         return Err(ScenarioError::product(
             "requested buyer invoice amount is zero or exceeds the order cap",
         ));
+    }
+    Ok(())
+}
+
+/// The node must have encoded the lifetime that was asked for: a scenario
+/// about the daemon's expiry floor proves nothing with a default lifetime.
+fn validate_expiry(invoice: &Secret, secs: u64) -> Result<(), ScenarioError> {
+    let encoded =
+        expiry_secs_of(invoice).map_err(|_| ScenarioError::wallet("invalid buyer invoice"))?;
+    if encoded != secs {
+        return Err(ScenarioError::wallet(format!(
+            "buyer invoice encodes a {encoded}s lifetime, not the {secs}s requested"
+        )));
     }
     Ok(())
 }
@@ -145,5 +188,16 @@ mod tests {
         assert!(verify_returned(&prepared, Some(&invoice)).is_err());
         let error = validate_invoice(&Secret::new("secret-invalid-invoice"), 1).unwrap_err();
         assert!(!error.message.contains("secret-invalid-invoice"));
+    }
+
+    /// The reference invoice encodes a one-minute lifetime; asking for
+    /// anything else must be caught before submission.
+    #[test]
+    fn a_requested_lifetime_the_node_did_not_encode_is_refused() {
+        let invoice = Secret::new(INVOICE);
+        assert!(validate_expiry(&invoice, 60).is_ok());
+        let error = validate_expiry(&invoice, 120).unwrap_err();
+        assert!(error.message.contains("60s lifetime"), "{error}");
+        assert!(validate_expiry(&Secret::new("not-an-invoice"), 120).is_err());
     }
 }

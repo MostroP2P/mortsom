@@ -4,7 +4,7 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 17/17, Web 17/17.** Every scenario of the happy-path, cancellation, expiration and
+**Accepted: Linux 20/20, Web 17/20.** Every scenario of the happy-path, cancellation, expiration and
 dispute families (spec section 8) is accepted on both platforms. The dispute family ran on 2026-09-10 with
 the clients built from app branch `feat/mortsom-dispute-back-id` (`6222334`, the dispute screen's
 `appbar.back`), each run registering its own solver with the daemon. The expiration
@@ -30,6 +30,9 @@ family ran on a stack rebuilt on 2026-09-10 for the declared `order_expiration_s
 | `unilateral_cancel_rejected` | cancellation | **Accepted** 2026-09-10, run `20260910T002921Z-704f54b3ff05` | **Accepted** 2026-09-10, run `20260910T012017Z-0e1186dbd6e7` (family batch) |
 | `dispute_settled_by_solver` | dispute | **Accepted** 2026-09-10, run `20260910T115327Z-f2a515741b09` (dispute initiated → in-progress → settled; hold and payout settled once each) | **Accepted** 2026-09-10, run `20260910T120310Z-ca276d92a07b` |
 | `dispute_canceled_by_solver` | dispute | **Accepted** 2026-09-10, run `20260910T115609Z-0039c33d54ae` (dispute initiated → in-progress → seller-refunded; hold refunded) | **Accepted** 2026-09-10, run `20260910T120645Z-b8e2f466b31e` (hold refunded) |
+| `payout_fails_then_replaced` | payment-failure | **Accepted** 2026-09-10, run `20260910T230415Z-d1899f794311` (hold settled once; withdrawn invoice `1d59302a…` never settled; replacement settled once; both apps completed; again 2026-09-11 in the family run, `20260911T000038Z-bcaf43c223ef`) | Not run |
+| `payout_invoice_below_expiry_floor` | payment-failure | **Accepted** 2026-09-10, run `20260910T222335Z-0280ef09fd9f` (invoice `7405e1e7…` refused with `invoice.error`, a proper one accepted, no payment; sweep cancelled the order; again 2026-09-11 in the family run, `20260911T000325Z-1d7eb0d00a40`) | Not run |
+| `payout_slots_capped_per_destination` | payment-failure | **Accepted** 2026-09-10, run `20260910T235331Z-93b77b09d64d` (two payouts held on Bob's node, the third stayed `open` for the quiet window, dispatched after the first settled; three payouts and three holds settled once each; again 2026-09-11 in the family run, `20260911T000523Z-e462512985e1`) | Not run |
 | `dispute_released_by_seller` | dispute | **Accepted** 2026-09-10, run `20260910T115806Z-c9f7dfc464fd` (dispute initiated → settled on the release) | **Accepted** 2026-09-10, run `20260910T120935Z-ee1fb55d8b99` |
 
 ## Live attempts
@@ -38,6 +41,8 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260910T233238Z-f2d39b37d22b` | Linux | `payout_slots_capped_per_destination` | first trade at fiat-sent; second create form filled | Product: `order.create.submit` stayed disabled on the second create form of the session, with every field showing its value and the preview priced, even after the method and price were typed again. Recovered with `cleanup --attribute-order alice=none`. Fixed in the adapter by leaving the form and filling a fresh one once (see the open note below). |
+| `20260910T230716Z-be358da32fa8` | Linux | `payout_slots_capped_per_destination` | first trade at fiat-sent; second create form filled | Test infrastructure: tap on `order.create.submit` refused ("control exposes no default user action"): the same disabled submit, seen through AT-SPI. Recovered with `cleanup --attribute-order alice=none`. |
 | `20260910T111844Z-287ee1abca1a` | Linux | dispute_settled_by_solver | Bob opened the dispute; the daemon published it `initiated` | Two gaps. Bob's app pushed its dispute screen, whose back button carried no `appbar.back`, so no later observation could leave it (app fix: the dispute screen's back button is tagged). The solver's registration had been dropped by the daemon without a word: `admin-add-solver` fails the daemon's structural check without a message id (harness fix: a fresh id is set, and settle/cancel travel on the dispute wrapper, as the reference client does). The stuck dispute was closed by the operator tool (`solve … cancel`, `canceled-by-admin`, escrow returned) and the run resolved by `cleanup` (`20260910T115019Z-350c2b31b041`) |
 | `20260910T075757Z-82bc2e9e7752` | Web | pending_order_expires | The daemon expired the order; Alice's Web client logged the book's `canceled` for it (`status order=… wire=Canceled local=Pending applies=true`) and its browser died on the next line, while Bob's lived on | **Open Web flake.** Same death as the attempt below, now with the client's console kept (`alice/app.log`): no error before the end. The verbose ChromeDriver log was not on. The harness now stops a wait after three consecutive infrastructure failures (`ae1b549`) instead of polling a dead session for 15 minutes. Resolved by `cleanup` (`20260910T081037Z`, order already closed, no payment) |
 | `20260910T072641Z-1cb58f8f9805` | Web | pending_order_expires (last of the `--tag expiration` batch) | The daemon expired the order at 07:38:06; Alice's browser closed its relay connection 76 ms later and was gone | Alice's Chromium died as her client processed the expiry; Bob's stayed. No crash record (verbose driver log off, console log not yet kept on Web). Resolved by `cleanup` (`20260910T075336Z`, order already closed, no payment) |
@@ -80,6 +85,18 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 | `20260908T160318Z-e617fd03c704` | Linux | happy_sell | Order created | Bob could not locate the merged native book-tab label. Fixed in `b6bec7c` |
 
 ## Known app v2 product issues
+
+### Second create form of a session keeps submit disabled (open)
+
+Twice on 2026-09-10 (`20260910T230716Z-be358da32fa8`, `20260910T233238Z-f2d39b37d22b`) the second order Alice
+created in one session showed the amount, the currency, the custom payment method and the fixed price, and
+the preview priced the order, while `order.create.submit` stayed disabled; typing the method and the price
+again changed nothing. Leaving the form with `order.create.cancel` and filling a fresh one submits at once
+(`20260910T235331Z-93b77b09d64d`, three orders in one session). The form's validity is
+`hasPayment && sats && amount` over Riverpod state that the screen resets in a microtask on `initState`; the
+custom-method text is visible while its provider reads empty, which points at that reset racing the
+section's `TextEditingController` on a reopened screen. To be filed against `MostroP2P/app`; the adapter's
+refill is a workaround, not a fix.
 
 ### Web client can die when its own pending order expires (open)
 
