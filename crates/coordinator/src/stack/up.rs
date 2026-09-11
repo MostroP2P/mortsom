@@ -146,7 +146,7 @@ async fn claim(
         outcome => return outcome,
     };
     tracing::warn!("--replace: removing {replaced}");
-    ownership::release(runner).await?;
+    ownership::release(runner, layout).await?;
     ownership::verify(runner, layout).await
 }
 

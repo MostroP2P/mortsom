@@ -158,7 +158,7 @@ impl CommandRunner for ScriptedStack {
     async fn run(&self, command: &Command, _timeout: Duration) -> Result<Output, ProcessError> {
         let key = format!("{} {}", command.program.display(), command.args.join(" "));
         self.calls.lock().unwrap().push(key.clone());
-        if key == format!("docker compose -p {PROJECT} down -v --remove-orphans") {
+        if key == "docker compose --profile daemon down -v --remove-orphans" {
             *self.owner.lock().unwrap() = None;
         }
         if key.starts_with("docker network rm") {
@@ -629,7 +629,7 @@ async fn up_with_replace_releases_a_stack_another_directory_created_before_build
     let calls = docker.calls();
     let release = calls
         .iter()
-        .position(|call| *call == format!("docker compose -p {PROJECT} down -v --remove-orphans"))
+        .position(|call| call.ends_with("compose --profile daemon down -v --remove-orphans"))
         .unwrap_or_else(|| panic!("{calls:?}"));
     let start = calls
         .iter()
@@ -687,6 +687,34 @@ async fn up_with_replace_removes_project_networks_left_without_containers() {
         1,
         "{:?}",
         docker.calls()
+    );
+}
+
+#[tokio::test]
+async fn up_with_replace_removes_nothing_when_docker_cannot_be_inspected() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let runner = mortsom_ui_driver::process::tests_support::FakeRunner::default();
+    runner.script_failure("docker ps", "daemon unavailable");
+    let options = UpOptions {
+        replace: true,
+        ..quick()
+    };
+
+    // Act
+    let error = up(&runner, &Publishes(true), &layout, &options)
+        .await
+        .unwrap_err();
+
+    // Assert
+    assert!(matches!(error, StackError::Process(_)), "{error}");
+    assert!(
+        runner
+            .calls()
+            .iter()
+            .all(|call| !call.contains(" down") && !call.contains(" rm")),
+        "{:?}",
+        runner.calls()
     );
 }
 

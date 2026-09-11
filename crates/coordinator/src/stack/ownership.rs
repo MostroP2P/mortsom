@@ -3,6 +3,7 @@
 //! directory created -- unless `up --replace` releases the project by name.
 
 use super::StackError;
+use super::compose::Compose;
 use super::layout::{Layout, PROJECT};
 use mortsom_ui_driver::process::{Command, CommandRunner, run_ok};
 use std::{path::Path, time::Duration};
@@ -84,16 +85,16 @@ pub(super) async fn verify_container(
     Ok(())
 }
 
-/// Removes the project by name, whichever directory created it: containers
-/// and volumes through Compose, which needs no compose file for that, then
-/// whatever Compose leaves when no container remained to find it by.
-pub(super) async fn release(runner: &dyn CommandRunner) -> Result<(), StackError> {
+/// Removes the project whichever directory created it. Compose finds its
+/// containers by project label, so this directory's plan serves, and it
+/// pins the compose file and project name against the ambient environment.
+/// Whatever Compose leaves when no container remained to find it by goes
+/// after.
+pub(super) async fn release(runner: &dyn CommandRunner, layout: &Layout) -> Result<(), StackError> {
+    let compose = Compose::new(layout, None);
     run_ok(
         runner,
-        &Command::new(
-            "docker",
-            &["compose", "-p", PROJECT, "down", "-v", "--remove-orphans"],
-        ),
+        &compose.command(&["--profile", "daemon", "down", "-v", "--remove-orphans"]),
         RELEASE_TIMEOUT,
     )
     .await?;
