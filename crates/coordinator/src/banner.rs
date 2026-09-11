@@ -299,7 +299,13 @@ mod tests {
         // Arrange
         let elsewhere = PathBuf::from("/srv/another-stack");
         let actions = [
-            (StackAction::Up { mostro_image: None }, "stack up"),
+            (
+                StackAction::Up {
+                    mostro_image: None,
+                    replace: false,
+                },
+                "stack up",
+            ),
             (StackAction::Status, "stack status"),
             (StackAction::Down, "stack down"),
         ];

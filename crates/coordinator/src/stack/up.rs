@@ -55,6 +55,9 @@ pub struct UpOptions {
     pub image: String,
     /// Service wait policy.
     pub timing: Timing,
+    /// Remove a project this directory cannot be shown to own -- another
+    /// checkout's, or resources left without containers -- before building.
+    pub replace: bool,
 }
 
 /// Builds or completes the stack and returns its public descriptor.
@@ -64,7 +67,7 @@ pub async fn up(
     layout: &Layout,
     options: &UpOptions,
 ) -> Result<Descriptor, StackError> {
-    ownership::verify(runner, layout).await?;
+    claim(runner, layout, options.replace).await?;
     let template = read(&layout.template())?;
     if !template.contains(NSEC_PLACEHOLDER) {
         return Err(StackError::Configuration(format!(
@@ -123,6 +126,28 @@ pub async fn up(
     .await?;
     image::verify_running(runner, &compose, layout, &expected).await?;
     Ok(descriptor)
+}
+
+/// Refuses a project this directory does not own; with `replace`, removes
+/// it by name instead and checks again. A stack this directory owns is left
+/// alone either way, since `up` completes it.
+async fn claim(
+    runner: &dyn CommandRunner,
+    layout: &Layout,
+    replace: bool,
+) -> Result<(), StackError> {
+    let replaced = match ownership::verify(runner, layout).await {
+        Err(StackError::ForeignOwner(dir)) if replace => {
+            format!("the stack {dir} created; the generated state there is stale from now on")
+        }
+        Err(StackError::Unowned(reason)) if replace => {
+            format!("a stack no directory can be shown to own ({reason})")
+        }
+        outcome => return outcome,
+    };
+    tracing::warn!("--replace: removing {replaced}");
+    ownership::release(runner, layout).await?;
+    ownership::verify(runner, layout).await
 }
 
 async fn prepare_chain(

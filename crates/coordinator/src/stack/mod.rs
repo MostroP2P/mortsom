@@ -36,8 +36,25 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum StackError {
     /// Missing stack state, a refused mutation or an unusable service.
-    #[error("stack is not configured: {0}; run `mortsom stack up` first")]
+    #[error("stack is not configured: {0}")]
     Configuration(String),
+    /// The Compose project exists, but another stack directory created it;
+    /// holds that directory. Neither `up` nor `down` here may touch it.
+    #[error(
+        "the `{project}` Compose project belongs to {0}, not this stack directory; \
+         run `mortsom stack down --stack-dir {0}` to release it, or \
+         `mortsom stack up --replace` to remove it and build here",
+        project = PROJECT
+    )]
+    ForeignOwner(String),
+    /// Project resources exist that cannot be shown to belong to this stack
+    /// directory; holds why.
+    #[error(
+        "the `{project}` Compose project cannot be shown to belong to this stack directory: \
+         {0}; `mortsom stack up --replace` removes it and builds here",
+        project = PROJECT
+    )]
+    Unowned(String),
     /// A request the stack cannot serve as asked; nothing is wrong with
     /// the stack itself.
     #[error("{0}")]
@@ -99,12 +116,12 @@ impl StackContext {
         let status = status::inspect(runner, &layout).await?;
         let Some(descriptor) = status.descriptor.clone() else {
             return Err(StackError::Configuration(
-                "no daemon identity is recorded here".into(),
+                "no daemon identity is recorded here; run `mortsom stack up` first".into(),
             ));
         };
         if !status.is_ready() {
             return Err(StackError::Configuration(format!(
-                "the stack is not ready:\n{}",
+                "the stack is not ready; run `mortsom stack up` to finish it:\n{}",
                 status.render()
             )));
         }

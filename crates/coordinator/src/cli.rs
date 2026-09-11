@@ -38,7 +38,14 @@ pub struct Cli {
     #[arg(long, global = true, default_value = DEFAULT_CONFIG)]
     pub config: PathBuf,
     /// Directory holding the stack's compose file and its generated state.
-    #[arg(long, global = true, default_value = "stack")]
+    /// The host ports allow one stack per machine: point every checkout at
+    /// the same directory to share it.
+    #[arg(
+        long,
+        global = true,
+        env = "MORTSOM_STACK_DIR",
+        default_value = "stack"
+    )]
     pub stack_dir: PathBuf,
     /// Subcommand.
     #[command(subcommand)]
@@ -155,6 +162,11 @@ pub enum StackAction {
         /// build from a mostro branch. Recorded in the stack fingerprint.
         #[arg(long)]
         mostro_image: Option<String>,
+        /// Remove a `mortsom-regtest` stack this directory does not own --
+        /// another checkout's, or resources left without containers -- and
+        /// build here instead. The owner's generated state goes stale.
+        #[arg(long)]
+        replace: bool,
     },
     /// Inspect the persistent services.
     Status,
@@ -205,10 +217,14 @@ async fn stack_cli(stack_dir: &std::path::Path, action: StackAction) -> ExitCode
         }
     };
     let outcome = match action {
-        StackAction::Up { mostro_image } => {
+        StackAction::Up {
+            mostro_image,
+            replace,
+        } => {
             let options = stack::UpOptions {
                 image: mostro_image.unwrap_or_else(|| stack::DEFAULT_MOSTRO_IMAGE.to_owned()),
                 timing: stack::Timing::default(),
+                replace,
             };
             stack::up(&TokioRunner, &stack::LiveRelay, &layout, &options)
                 .await
@@ -583,6 +599,37 @@ mod tests {
         assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "android"]).is_err());
         assert!(super::Cli::try_parse_from(["mortsom", "device", "smoke"]).is_err());
         assert!(super::Cli::try_parse_from(["mortsom", "app", "setup"]).is_err());
+    }
+
+    #[test]
+    fn stack_dir_is_read_from_mortsom_stack_dir_when_the_flag_is_absent() {
+        use clap::CommandFactory;
+        let command = super::Cli::command();
+        let stack_dir = command
+            .get_arguments()
+            .find(|arg| arg.get_id() == "stack_dir")
+            .unwrap();
+        assert_eq!(
+            stack_dir.get_env(),
+            Some(std::ffi::OsStr::new("MORTSOM_STACK_DIR"))
+        );
+    }
+
+    #[test]
+    fn stack_up_replaces_a_foreign_stack_only_when_asked() {
+        use clap::Parser;
+        for (args, expected) in [
+            (&["mortsom", "stack", "up"][..], false),
+            (&["mortsom", "stack", "up", "--replace"][..], true),
+        ] {
+            let cli = super::Cli::try_parse_from(args).unwrap();
+            assert!(matches!(
+                cli.command,
+                super::Command::Stack {
+                    action: super::StackAction::Up { replace, .. }
+                } if replace == expected
+            ));
+        }
     }
 
     fn names() -> Vec<String> {

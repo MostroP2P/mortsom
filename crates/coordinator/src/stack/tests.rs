@@ -18,7 +18,11 @@ struct ScriptedStack {
     channels: Mutex<Vec<String>>,
     daemon_state: &'static str,
     running_image: &'static str,
-    owner: Option<PathBuf>,
+    /// Directory the project's containers were created from; none until
+    /// set, and cleared when the project is released by name.
+    owner: Mutex<Option<PathBuf>>,
+    /// A project network Compose left behind without containers.
+    leftover_network: Mutex<bool>,
 }
 
 impl ScriptedStack {
@@ -30,7 +34,8 @@ impl ScriptedStack {
             channels: Mutex::new(Vec::new()),
             daemon_state: "running",
             running_image: IMAGE_ID,
-            owner: None,
+            owner: Mutex::new(None),
+            leftover_network: Mutex::new(false),
         }
     }
 
@@ -62,14 +67,24 @@ impl ScriptedStack {
         if key.starts_with("docker ps") {
             return ok(self
                 .owner
+                .lock()
+                .unwrap()
                 .as_ref()
                 .map(|_| "c".repeat(64))
                 .unwrap_or_default());
         }
+        if key.starts_with("docker network ls") && *self.leftover_network.lock().unwrap() {
+            return ok(format!("{PROJECT}_default"));
+        }
         if key.starts_with("docker inspect") {
             let format = args.iter().find(|arg| arg.contains("{{")).unwrap();
             if format.contains("working_dir") {
-                let owner = self.owner.clone().unwrap_or_else(|| self.root.clone());
+                let owner = self
+                    .owner
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or_else(|| self.root.clone());
                 return ok(serde_json::json!({
                     "working_dir": owner.display().to_string(),
                     "config_files": owner.join("compose.yml").display().to_string(),
@@ -143,6 +158,12 @@ impl CommandRunner for ScriptedStack {
     async fn run(&self, command: &Command, _timeout: Duration) -> Result<Output, ProcessError> {
         let key = format!("{} {}", command.program.display(), command.args.join(" "));
         self.calls.lock().unwrap().push(key.clone());
+        if key == "docker compose --profile daemon down -v --remove-orphans" {
+            *self.owner.lock().unwrap() = None;
+        }
+        if key.starts_with("docker network rm") {
+            *self.leftover_network.lock().unwrap() = false;
+        }
         Ok(self.reply(&key, &command.args))
     }
 
@@ -190,6 +211,7 @@ fn quick() -> UpOptions {
             wait: Duration::ZERO,
             poll: Duration::ZERO,
         },
+        replace: false,
     }
 }
 
@@ -555,8 +577,8 @@ async fn down_removes_services_volumes_and_every_generated_secret() {
 async fn up_and_down_refuse_containers_another_directory_created() {
     // Arrange
     let (_dir, layout) = scratch();
-    let mut docker = ScriptedStack::built(&layout);
-    docker.owner = Some(PathBuf::from("/elsewhere/stack"));
+    let docker = ScriptedStack::built(&layout);
+    *docker.owner.lock().unwrap() = Some(PathBuf::from("/elsewhere/stack"));
 
     // Act
     let up_error = up(&docker, &Publishes(true), &layout, &quick())
@@ -566,7 +588,17 @@ async fn up_and_down_refuse_containers_another_directory_created() {
 
     // Assert
     for error in [up_error, down_error] {
-        assert!(error.to_string().contains("ownership"), "{error}");
+        let message = error.to_string();
+        assert!(message.contains("/elsewhere/stack"), "{message}");
+        assert!(
+            message.contains("mortsom stack down --stack-dir /elsewhere/stack"),
+            "{message}"
+        );
+        assert!(message.contains("mortsom stack up --replace"), "{message}");
+        assert!(
+            !message.contains("run `mortsom stack up` first"),
+            "{message}"
+        );
     }
     assert!(docker.calls().iter().all(|call| !call.contains(" down")));
     assert!(
@@ -574,6 +606,115 @@ async fn up_and_down_refuse_containers_another_directory_created() {
             .calls()
             .iter()
             .all(|call| !call.contains("compose up"))
+    );
+}
+
+#[tokio::test]
+async fn up_with_replace_releases_a_stack_another_directory_created_before_building() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let docker = ScriptedStack::built(&layout);
+    *docker.owner.lock().unwrap() = Some(PathBuf::from("/elsewhere/stack"));
+    let options = UpOptions {
+        replace: true,
+        ..quick()
+    };
+
+    // Act
+    up(&docker, &Publishes(true), &layout, &options)
+        .await
+        .unwrap();
+
+    // Assert
+    let calls = docker.calls();
+    let release = calls
+        .iter()
+        .position(|call| call.ends_with("compose --profile daemon down -v --remove-orphans"))
+        .unwrap_or_else(|| panic!("{calls:?}"));
+    let start = calls
+        .iter()
+        .position(|call| call.contains("up -d bitcoind"))
+        .unwrap_or_else(|| panic!("{calls:?}"));
+    assert!(release < start, "{calls:?}");
+}
+
+#[tokio::test]
+async fn up_with_replace_keeps_the_stack_this_directory_created() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let docker = ScriptedStack::built(&layout);
+    *docker.owner.lock().unwrap() = Some(layout.root().to_path_buf());
+    let options = UpOptions {
+        replace: true,
+        ..quick()
+    };
+
+    // Act
+    up(&docker, &Publishes(true), &layout, &options)
+        .await
+        .unwrap();
+
+    // Assert
+    assert!(docker.matching(" down").is_empty(), "{:?}", docker.calls());
+}
+
+#[tokio::test]
+async fn up_with_replace_removes_project_networks_left_without_containers() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let docker = ScriptedStack::built(&layout);
+    *docker.leftover_network.lock().unwrap() = true;
+    let options = UpOptions {
+        replace: true,
+        ..quick()
+    };
+
+    // Act
+    let refused = up(&docker, &Publishes(true), &layout, &quick())
+        .await
+        .unwrap_err();
+    up(&docker, &Publishes(true), &layout, &options)
+        .await
+        .unwrap();
+
+    // Assert
+    assert!(
+        refused.to_string().contains("mortsom stack up --replace"),
+        "{refused}"
+    );
+    assert_eq!(
+        docker.matching("docker network rm").len(),
+        1,
+        "{:?}",
+        docker.calls()
+    );
+}
+
+#[tokio::test]
+async fn up_with_replace_removes_nothing_when_docker_cannot_be_inspected() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let runner = mortsom_ui_driver::process::tests_support::FakeRunner::default();
+    runner.script_failure("docker ps", "daemon unavailable");
+    let options = UpOptions {
+        replace: true,
+        ..quick()
+    };
+
+    // Act
+    let error = up(&runner, &Publishes(true), &layout, &options)
+        .await
+        .unwrap_err();
+
+    // Assert
+    assert!(matches!(error, StackError::Process(_)), "{error}");
+    assert!(
+        runner
+            .calls()
+            .iter()
+            .all(|call| !call.contains(" down") && !call.contains(" rm")),
+        "{:?}",
+        runner.calls()
     );
 }
 
