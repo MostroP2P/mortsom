@@ -566,7 +566,16 @@ async fn up_and_down_refuse_containers_another_directory_created() {
 
     // Assert
     for error in [up_error, down_error] {
-        assert!(error.to_string().contains("ownership"), "{error}");
+        let message = error.to_string();
+        assert!(message.contains("/elsewhere/stack"), "{message}");
+        assert!(
+            message.contains("mortsom stack down --stack-dir /elsewhere/stack"),
+            "{message}"
+        );
+        assert!(
+            !message.contains("run `mortsom stack up` first"),
+            "{message}"
+        );
     }
     assert!(docker.calls().iter().all(|call| !call.contains(" down")));
     assert!(

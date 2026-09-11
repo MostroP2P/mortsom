@@ -61,9 +61,11 @@ async fn verify_empty_project(runner: &dyn CommandRunner) -> Result<(), StackErr
         )
         .await?;
         if !output.stdout.trim().is_empty() {
-            return Err(StackError::Configuration(
-                "project resources remain without containers to establish checkout ownership; refusing mutation".into(),
-            ));
+            return Err(StackError::Configuration(format!(
+                "`{PROJECT}` {resource}s remain without containers to establish checkout ownership; \
+                 refusing mutation. List them with `docker {resource} ls --filter \
+                 label=com.docker.compose.project={PROJECT}` and remove them once nothing uses them"
+            )));
         }
     }
     Ok(())
@@ -84,17 +86,23 @@ pub(super) async fn verify_container(
     )
     .await?;
     let labels: Ownership = serde_json::from_str(&output.stdout).map_err(|_| invalid())?;
-    if Path::new(&labels.working_dir) != layout.root()
-        || Path::new(&labels.config_files) != layout.compose_file()
-    {
-        return Err(invalid());
+    if Path::new(&labels.working_dir) != layout.root() {
+        return Err(StackError::ForeignOwner(labels.working_dir));
+    }
+    if Path::new(&labels.config_files) != layout.compose_file() {
+        return Err(StackError::Configuration(format!(
+            "the `{PROJECT}` Compose project here was started from {}, not {}; \
+             `docker compose -p {PROJECT} down -v` releases it",
+            labels.config_files,
+            layout.compose_file().display()
+        )));
     }
     Ok(())
 }
 
 fn invalid() -> StackError {
     StackError::Configuration(
-        "Compose project ownership does not match the selected stack directory".into(),
+        "Compose project ownership labels are unreadable; refusing mutation".into(),
     )
 }
 
