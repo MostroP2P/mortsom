@@ -220,6 +220,12 @@ pub mod tests_support {
             self.swallowed.lock().unwrap().insert(id.into(), taps);
         }
 
+        /// `id` accepts one press and then greys out: the app took the
+        /// request and is still working on it.
+        pub fn disables_after_tap(&self, id: &str) {
+            self.disabled_after_tap.lock().unwrap().push(id.to_owned());
+        }
+
         /// Greys `ids` out: on screen, but not accepting a press.
         ///
         /// A form that has been submitted and is waiting on the network
@@ -227,12 +233,6 @@ pub mod tests_support {
         /// again does nothing the app would honour. A double that answers
         /// every control as enabled cannot tell that apart from a form
         /// that was never submitted at all.
-        /// `id` accepts one press and then greys out: the app took the
-        /// request and is still working on it.
-        pub fn disables_after_tap(&self, id: &str) {
-            self.disabled_after_tap.lock().unwrap().push(id.to_owned());
-        }
-
         pub fn disables(&self, ids: &[&str]) {
             self.disabled
                 .lock()
