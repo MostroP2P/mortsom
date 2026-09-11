@@ -107,6 +107,9 @@ pub mod tests_support {
         swallowed: Mutex<BTreeMap<String, u32>>,
         /// Controls the app has greyed out while it works.
         disabled: Mutex<Vec<String>>,
+        /// Controls that grey out once tapped, the way a submit does while
+        /// the app is still working on the request.
+        disabled_after_tap: Mutex<Vec<String>>,
         end_failures: Mutex<u32>,
     }
 
@@ -224,6 +227,12 @@ pub mod tests_support {
         /// again does nothing the app would honour. A double that answers
         /// every control as enabled cannot tell that apart from a form
         /// that was never submitted at all.
+        /// `id` accepts one press and then greys out: the app took the
+        /// request and is still working on it.
+        pub fn disables_after_tap(&self, id: &str) {
+            self.disabled_after_tap.lock().unwrap().push(id.to_owned());
+        }
+
         pub fn disables(&self, ids: &[&str]) {
             self.disabled
                 .lock()
@@ -320,6 +329,15 @@ pub mod tests_support {
             self.calls.lock().unwrap().push(format!("tap {id}"));
             if self.swallows(id) {
                 return Ok(());
+            }
+            if self
+                .disabled_after_tap
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|d| d == id)
+            {
+                self.disabled.lock().unwrap().push(id.to_owned());
             }
             if let Some(appear) = self.on_tap.lock().unwrap().get(id).cloned() {
                 self.present.lock().unwrap().extend(appear);

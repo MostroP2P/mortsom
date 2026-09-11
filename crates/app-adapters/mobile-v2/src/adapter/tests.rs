@@ -237,7 +237,7 @@ async fn a_submit_the_app_took_is_not_sent_twice() {
 async fn a_submit_still_working_is_waited_for_not_pressed_again() {
     let ui = app_with_orders();
     adapter().onboard(&device(&ui), &env()).await.unwrap();
-    ui.disables(&[Ids::ORDER_CREATE_SUBMIT]);
+    ui.disables_after_tap(Ids::ORDER_CREATE_SUBMIT);
     ui.appears_after(Ids::ORDER_CONFIRM_HOME, 6);
 
     let outcome = adapter().create_order(&device(&ui), &draft()).await;
@@ -515,6 +515,43 @@ async fn create_order_returns_the_new_trade_id_and_state() {
     let calls = ui.calls();
     assert!(calls.contains(&"tap order.create.currency.USD".to_owned()));
     assert!(calls.contains(&"type order.create.sats_amount (4 chars)".to_owned()));
+}
+
+/// A create form that keeps submit disabled with every field filled gets
+/// its payment method and price entered once more; if that does not
+/// enable it, the product is asked nothing further and the order is never
+/// submitted.
+#[tokio::test]
+async fn a_create_form_that_stays_disabled_is_filled_again_once_then_reported() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.disables(&[Ids::ORDER_CREATE_SUBMIT]);
+    ui.present(&[Ids::ORDER_CREATE_CANCEL]);
+
+    let error = adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.category, mortsom_common::FailureCategory::Product);
+    assert!(error.message.contains("kept submit disabled"), "{error}");
+    let calls = ui.calls();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|c| c.starts_with("type order.create.payment_method"))
+            .count(),
+        2,
+        "{calls:?}"
+    );
+    assert!(
+        calls.contains(&"tap order.create.cancel".to_owned()),
+        "{calls:?}"
+    );
+    assert!(
+        !calls.contains(&"tap order.create.submit".to_owned()),
+        "{calls:?}"
+    );
 }
 
 /// The currency picker's lazy list rebuilds its rows while it filters, and

@@ -46,7 +46,10 @@ recovery verifies the old one never settled. The app change was needed because t
 replacement request (`add-invoice` on a `settled-hold-invoice` order) was persisted as that status and
 never shown; the app now treats it as a request for an invoice, maps `invoice-updated` back to
 `payout-pending`, and keeps a refused invoice's reason on screen as `invoice.error` (see the app's
-`docs/automation-contract.md`, "Buyer payout failure"). Build the clients from that app branch.
+`docs/automation-contract.md`, "Buyer payout failure"). Build the clients from that app branch. All
+three scenarios are accepted on Linux (2026-09-10, ledger); Web was not run. The capped-payouts scenario
+exposed an app quirk on the second create form of a session (submit stays disabled with every field
+filled); the adapter now leaves and refills the form once, and the ledger records it as an open app issue.
 
 **The checkpoint is met: all four cells are accepted.** Linux `happy_sell` and `happy_buy`, Web `happy_sell`
 and `happy_buy`, each a funded regtest trade driven end to end through the real app v2 UI, with the hold
