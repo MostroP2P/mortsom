@@ -1,5 +1,8 @@
 //! Public DOM scrolling, W3C editing and value-property verification.
-use crate::web::{error, selector};
+use crate::{
+    text_entry::shows,
+    web::{error, selector},
+};
 use mortsom_ui_driver::{
     error::UiError,
     webdriver::{Element, Locator, Session, WebDriverError},
@@ -56,7 +59,7 @@ pub(crate) async fn enter(
 }
 
 async fn replace(session: &Session, id: &str, text: &str) -> Result<bool, UiError> {
-    if read(session, id).await? == text {
+    if shows(&read(session, id).await?, text) {
         return Ok(true);
     }
     let node = session.find_element(Locator::XPath, &selector(id)?).await?;
@@ -82,7 +85,7 @@ async fn replace(session: &Session, id: &str, text: &str) -> Result<bool, UiErro
     session.click(&input(session, id).await?).await?;
     session.clear(&input(session, id).await?).await?;
     session.send_keys(&input(session, id).await?, text).await?;
-    Ok(read(session, id).await? == text)
+    Ok(shows(&read(session, id).await?, text))
 }
 
 /// Presses `id` once, after it has come to rest.
