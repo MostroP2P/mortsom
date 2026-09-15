@@ -28,6 +28,9 @@ pub struct SourceIdentity {
 pub struct BuildProvenance {
     /// Source build or supplied artifact.
     pub origin: ArtifactOrigin,
+    /// Managed branch/PR resolved once before this build; absent for local/prebuilt.
+    #[serde(default)]
+    pub remote_selection: Option<crate::app_source::RemoteSelection>,
     /// Checkout state before generation.
     pub source_before: Option<SourceIdentity>,
     /// Checkout state after the complete build.
@@ -45,6 +48,7 @@ impl BuildProvenance {
     pub fn prebuilt() -> Self {
         Self {
             origin: ArtifactOrigin::Prebuilt,
+            remote_selection: None,
             source_before: None,
             source_after: None,
             app_version: None,
@@ -92,6 +96,7 @@ impl BuildProvenance {
         }
         Ok(Self {
             origin: ArtifactOrigin::Source,
+            remote_selection: None,
             source_before: Some(identity),
             source_after: None,
             app_version: Some(version),
@@ -165,7 +170,6 @@ async fn package_version(source: &Path, host: &dyn HostProbe) -> Result<String, 
         "cargo",
         &[
             "metadata",
-            "--offline",
             "--no-deps",
             "--format-version=1",
             "--manifest-path",

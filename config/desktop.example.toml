@@ -2,7 +2,9 @@
 # its connection references in memory; credentials never enter configuration.
 [mobile]
 profile = "mobile-v2"
-source_dir = "../mobilev2"
+# Omit source_dir/app_ref to fetch MostroP2P/app main into .mortsom/app.
+# app_ref = "main"                 # or https://github.com/MostroP2P/app/pull/123
+# source_dir = "../mobilev2"       # explicit local developer checkout
 mostro_pubkey = "env:MORTSOM_MOSTRO_PUBKEY"
 
 [ui]

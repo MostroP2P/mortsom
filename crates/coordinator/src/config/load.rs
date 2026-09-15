@@ -458,4 +458,40 @@ mod lane_examples {
             assert_eq!(config.mobile.source_dir, "../mobilev2", "{name}");
         }
     }
+    #[test]
+    fn remote_selection_validates_and_cli_overrides_the_configured_source_mode() {
+        use crate::{app_source::Selector, cli::SourceOverrides};
+        let mut config = load("local.example.toml");
+        let remote = SourceOverrides {
+            app_ref: Some(Selector::parse("feature/fix").unwrap()),
+            app_source: None,
+        };
+        remote.apply(&mut config);
+        assert!(config.mobile.source_dir.is_empty());
+        assert_eq!(config.mobile.app_ref.as_deref(), Some("feature/fix"));
+        assert!(config.validate().is_ok());
+        SourceOverrides {
+            app_ref: None,
+            app_source: Some("/developer/app".into()),
+        }
+        .apply(&mut config);
+        assert_eq!(config.mobile.source_dir, "/developer/app");
+        assert!(config.mobile.app_ref.is_none());
+        config.mobile.app_ref = Some("main".into());
+        assert!(
+            config.validate().is_err(),
+            "configured source modes conflict"
+        );
+        config.mobile.source_dir.clear();
+        config.mobile.app_ref = Some("https://github.com/other/app/pull/1".into());
+        assert!(
+            config.validate().is_err(),
+            "config selectors use the CLI validation"
+        );
+        config.mobile.app_ref = None;
+        assert!(
+            config.validate().is_ok(),
+            "omitted source selects managed main"
+        );
+    }
 }

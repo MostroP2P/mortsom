@@ -124,6 +124,7 @@ mod tests {
         Command::Run {
             platform: mortsom_desktop_driver::Platform::Linux,
             app_artifact: None,
+            source: Default::default(),
             xvfb: PathBuf::from("Xvfb"),
             scenarios: scenarios.iter().map(|s| (*s).to_owned()).collect(),
             tag: tag.map(str::to_owned),
@@ -233,6 +234,7 @@ mod tests {
             Command::Doctor {
                 platform: mortsom_desktop_driver::Platform::Web,
                 app_artifact: None,
+                source: Default::default(),
                 no_network: false,
                 json: false,
             },
@@ -280,6 +282,7 @@ mod tests {
             &Command::Doctor {
                 platform: mortsom_desktop_driver::Platform::Web,
                 app_artifact: None,
+                source: Default::default(),
                 no_network: false,
                 json: false,
             },

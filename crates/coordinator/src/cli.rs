@@ -1,11 +1,14 @@
 //! `mortsom` command-line interface.
 
 mod maintenance;
+mod prepared;
 mod recover;
 mod recover_audit;
 mod run;
+mod source;
 use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};
 use run::run_command;
+pub use source::SourceOverrides;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -119,6 +122,9 @@ pub enum Command {
         /// Prebuilt native executable or Web bundle; otherwise builds the source.
         #[arg(long)]
         app_artifact: Option<PathBuf>,
+        /// Override configured source selection.
+        #[command(flatten)]
+        source: SourceOverrides,
         /// Xvfb executable for isolated Linux desktops.
         #[arg(long, default_value = "Xvfb")]
         xvfb: PathBuf,
@@ -144,6 +150,9 @@ pub enum Command {
         /// Validate an existing artifact instead of source/build prerequisites.
         #[arg(long)]
         app_artifact: Option<PathBuf>,
+        /// Override configured source selection.
+        #[command(flatten)]
+        source: SourceOverrides,
         /// Skip every check that opens a network connection.
         #[arg(long)]
         no_network: bool,
@@ -389,16 +398,20 @@ pub async fn run(cli: Cli) -> ExitCode {
             tag,
             platform,
             app_artifact,
+            source,
             xvfb,
         } => {
             run_command(
                 &cli.config,
                 &cli.stack_dir,
-                scenarios,
-                tag,
-                platform,
-                app_artifact,
-                xvfb,
+                run::RunSelection {
+                    scenarios,
+                    tag,
+                    platform,
+                    artifact: app_artifact,
+                    source,
+                    xvfb,
+                },
             )
             .await
         }
@@ -408,6 +421,7 @@ pub async fn run(cli: Cli) -> ExitCode {
             json,
             platform,
             app_artifact,
+            source,
         } => {
             // The daemon probe waits for events republished on the daemon's
             // own cycle, so it uses the configured health timeout.
@@ -423,6 +437,7 @@ pub async fn run(cli: Cli) -> ExitCode {
                 &crate::doctor::DesktopDoctorOptions {
                     platform,
                     artifact: app_artifact,
+                    source,
                     no_network,
                 },
                 &RealHost,

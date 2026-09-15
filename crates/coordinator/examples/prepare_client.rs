@@ -10,13 +10,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .nth(1)
         .ok_or("provide linux or web")?
         .parse()?;
-    let (config, _) = desktop::load(
+    let home = std::env::var("HOME")?;
+    let _lock = mortsom_coordinator::lock::RunLock::acquire_host(Path::new(&home))?;
+    let stack = std::env::var("MORTSOM_STACK_DIR").unwrap_or_else(|_| "stack".into());
+    let (mut config, _) = desktop::load(
         Path::new("config/desktop.example.toml"),
-        Path::new("stack"),
+        Path::new(&stack),
         &TokioRunner,
         &RealHost,
     )
     .await?;
+    if let Some(value) = std::env::args().nth(2) {
+        let selector = mortsom_coordinator::app_source::Selector::parse(&value)?;
+        config.mobile.source_dir.clear();
+        config.mobile.app_ref = Some(selector.to_string());
+    }
     println!("{platform}: preparing source build against the verified persistent stack");
     let options = desktop::prepare(
         &config,

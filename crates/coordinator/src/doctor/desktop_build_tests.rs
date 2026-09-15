@@ -68,7 +68,7 @@ async fn linux_checks_the_pinned_codegen_and_native_libraries_without_building()
         ..Host::default()
     };
     let mut report = DoctorReport::default();
-    check(Path::new("/app"), Platform::Linux, &host, &mut report).await;
+    check(Some(Path::new("/app")), Platform::Linux, &host, &mut report).await;
     let calls = host.calls.lock().unwrap();
     assert!(calls.contains(&(
         "env".into(),
@@ -107,7 +107,7 @@ async fn build_prerequisite_failures_are_reported_with_sanitized_details() {
     host.failures
         .insert("pkg-config".into(), "libraries unavailable".into());
     let mut report = DoctorReport::default();
-    check(Path::new("/app"), Platform::Linux, &host, &mut report).await;
+    check(Some(Path::new("/app")), Platform::Linux, &host, &mut report).await;
     assert!(failed(&report, "build ninja"));
     assert!(failed(&report, "app codegen pin"));
     assert!(failed(&report, "Linux development libraries"));
@@ -123,7 +123,7 @@ async fn web_requires_nightly_rust_sources_and_never_invokes_wasm_pack_build() {
             ..Host::default()
         };
         let mut report = DoctorReport::default();
-        check(Path::new("/app"), Platform::Web, &host, &mut report).await;
+        check(Some(Path::new("/app")), Platform::Web, &host, &mut report).await;
         assert_eq!(failed(&report, "Web nightly rust-src"), !rust_src);
         let calls = host.calls.lock().unwrap();
         assert!(calls.contains(&(
@@ -139,4 +139,23 @@ async fn web_requires_nightly_rust_sources_and_never_invokes_wasm_pack_build() {
         assert_eq!(calls.len(), 2);
         assert!(report.checks.iter().any(|c| c.name == "build wasm-pack"));
     }
+}
+
+#[tokio::test]
+async fn managed_source_checks_tools_without_running_app_scripts_or_fetching() {
+    let host = Host {
+        rust_src: true,
+        ..Host::default()
+    };
+    for platform in [Platform::Linux, Platform::Web] {
+        let mut report = DoctorReport::default();
+        check(None, platform, &host, &mut report).await;
+        assert!(report.is_healthy(), "{report:?}");
+    }
+    let calls = host.calls.lock().unwrap();
+    assert!(
+        calls
+            .iter()
+            .all(|(name, _)| name == "pkg-config" || name == "rustup")
+    );
 }

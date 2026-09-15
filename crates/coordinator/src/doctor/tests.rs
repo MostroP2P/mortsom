@@ -222,6 +222,7 @@ async fn offline_doctor_reports_every_missing_secret_and_tool() {
         &DesktopDoctorOptions {
             platform: mortsom_desktop_driver::Platform::Linux,
             artifact: None,
+            source: Default::default(),
             no_network: true,
         },
         &host,
@@ -269,6 +270,7 @@ async fn offline_doctor_passes_on_a_configured_host() {
         &DesktopDoctorOptions {
             platform: mortsom_desktop_driver::Platform::Web,
             artifact: Some(PathBuf::from("/prebuilt/web")),
+            source: Default::default(),
             no_network: true,
         },
         &host,
@@ -302,6 +304,7 @@ async fn missing_config_file_fails_config_and_skips_network() {
         &DesktopDoctorOptions {
             platform: mortsom_desktop_driver::Platform::Linux,
             artifact: None,
+            source: Default::default(),
             no_network: false,
         },
         &FakeHost::full(),
@@ -589,6 +592,7 @@ async fn desktop_offline_doctor_checks_only_its_platform_and_never_calls_stack()
             &DesktopDoctorOptions {
                 platform,
                 artifact: None,
+                source: Default::default(),
                 no_network: true,
             },
             &host,

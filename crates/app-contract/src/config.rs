@@ -18,9 +18,12 @@ pub struct MobileConfig {
     /// Named application profile: `mobile-v2`.
     #[serde(default = "default_profile")]
     pub profile: String,
-    /// Source checkout the Linux and Web clients are built from.
+    /// Explicit local checkout; empty selects managed upstream source.
     #[serde(default)]
     pub source_dir: String,
+    /// Managed branch or GitHub PR URL; omitted selects main.
+    #[serde(default)]
+    pub app_ref: Option<String>,
     /// Public key of the daemon under test (hex or npub). Not a secret.
     pub mostro_pubkey: String,
     /// Seconds after creation every order the test build creates asks the
@@ -45,8 +48,8 @@ impl MobileConfig {
                 KNOWN_PROFILES.join(", ")
             ));
         }
-        if self.source_dir.is_empty() {
-            errors.push("mobile.source_dir must name the app checkout".to_owned());
+        if !self.source_dir.is_empty() && self.app_ref.is_some() {
+            errors.push("mobile.source_dir and mobile.app_ref are mutually exclusive".to_owned());
         }
         if PublicKey::from_str(&self.mostro_pubkey).is_err() {
             errors.push("mobile.mostro_pubkey is not a valid hex or npub public key".to_owned());
@@ -70,6 +73,7 @@ mod tests {
         MobileConfig {
             profile: DEFAULT_PROFILE.into(),
             source_dir: "../mobilev2".into(),
+            app_ref: None,
             mostro_pubkey: HEX.into(),
             order_expiry_secs: None,
         }
@@ -112,11 +116,18 @@ mod tests {
     }
 
     #[test]
-    fn missing_source_is_rejected() {
+    fn missing_source_selects_managed_default() {
         let mut config = valid();
         config.source_dir.clear();
 
-        assert!(errors_of(&config).iter().any(|e| e.contains("source_dir")));
+        assert!(errors_of(&config).is_empty());
+        config.app_ref = Some("main".into());
+        config.source_dir = "../mobilev2".into();
+        assert!(
+            errors_of(&config)
+                .iter()
+                .any(|e| e.contains("mutually exclusive"))
+        );
     }
 
     #[test]

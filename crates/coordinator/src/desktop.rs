@@ -39,17 +39,68 @@ pub async fn prepare(
     runner: &dyn CommandRunner,
     host: &dyn crate::doctor::HostProbe,
 ) -> Result<DesktopOptions, String> {
-    let (artifact, provenance) = match artifact {
+    let (config, managed) =
+        resolve_source(config, platform, artifact.is_none(), &xvfb, runner, host).await?;
+    let (artifact, mut provenance) = match artifact {
         Some(path) => (
             path.canonicalize().map_err(|e| e.to_string())?,
             crate::provenance::BuildProvenance::prebuilt(),
         ),
         None => {
-            crate::doctor::require_build_prerequisites(config, platform, &xvfb, host).await?;
-            build_artifact(config, platform, runner, host).await?
+            crate::doctor::require_build_prerequisites(&config, platform, &xvfb, host).await?;
+            build_artifact(&config, platform, runner, host).await?
         }
     };
+    if let Some(source) = &managed {
+        if provenance
+            .source_before
+            .as_ref()
+            .is_none_or(|identity| identity.revision != source.selection.revision || identity.dirty)
+        {
+            return Err("managed app source changed before the build".into());
+        }
+        provenance.remote_selection = Some(source.selection.clone());
+    }
     validate_artifact(platform, &artifact, host)?;
+    capture_options(platform, artifact, provenance, xvfb, host).await
+}
+
+async fn resolve_source(
+    config: &Config,
+    platform: Platform,
+    needs_build: bool,
+    xvfb: &Path,
+    runner: &dyn CommandRunner,
+    host: &dyn crate::doctor::HostProbe,
+) -> Result<(Config, Option<crate::app_source::PreparedSource>), String> {
+    let mut config = config.clone();
+    let managed = if needs_build && config.mobile.source_dir.is_empty() {
+        crate::doctor::desktop::require_tools(platform, xvfb, host)?;
+        let selector =
+            crate::app_source::Selector::parse(config.mobile.app_ref.as_deref().unwrap_or("main"))
+                .map_err(|error| error.to_string())?;
+        Some(
+            crate::app_source::prepare(&selector, runner)
+                .await
+                .map_err(|error| error.to_string())?,
+        )
+    } else {
+        None
+    };
+    if let Some(source) = &managed {
+        config.mobile.source_dir = source.path.display().to_string();
+        config.mobile.app_ref = None;
+    }
+    Ok((config, managed))
+}
+
+async fn capture_options(
+    platform: Platform,
+    artifact: PathBuf,
+    provenance: crate::provenance::BuildProvenance,
+    xvfb: PathBuf,
+    host: &dyn crate::doctor::HostProbe,
+) -> Result<DesktopOptions, String> {
     let bundle_root = if platform == Platform::Linux {
         artifact
             .parent()
@@ -139,10 +190,13 @@ fn build_plan(
             .extend(args.iter().map(|arg| (*arg).to_owned()));
         command
     };
-    let mut commands = vec![(
-        script(&["./scripts/frb-generate.sh"]),
-        Duration::from_secs(600),
-    )];
+    let mut commands = vec![
+        (script(&["flutter", "pub", "get"]), Duration::from_secs(600)),
+        (
+            script(&["./scripts/frb-generate.sh"]),
+            Duration::from_secs(600),
+        ),
+    ];
     if platform == Platform::Web {
         commands.push((
             script(&["./scripts/build-web.sh", "--release"]),

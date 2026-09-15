@@ -3,6 +3,15 @@
 Read [spec.md](../spec.md) first; it is normative. This file says where the work is and what comes next.
 Repository content is English; the operator conversation is Spanish.
 
+## Managed app preparation (2026-09-15)
+
+The default source is now managed `MostroP2P/app` main. `run --app-ref <branch-or-PR-URL>` resolves and
+builds its exact head once for the selected scenarios; `--app-source <path>` preserves explicit developer
+checkouts and `--app-artifact <path>` bypasses source preparation. Git objects are cached in ignored
+`.mortsom/app/repository.git`; disposable clean build checkouts are removed after capture. README and
+spec section 7 describe the current workflow. The environment and local artifact paths below are
+historical observations, not assumptions about the machine today: recheck `stack status` before live work.
+
 ## Where things stand (2026-09-10)
 
 **Five families are implemented and accepted live on Linux (20/20), the first four also on Web (17/20):
@@ -113,8 +122,12 @@ cargo run -p mortsom-coordinator --example prepare_client -- linux
 cargo run -p mortsom-coordinator --example prepare_client -- web
 ```
 
-They land at `/home/negrunch/dev/mobilev2/build/linux/x64/release/bundle/mostro` and
-`/home/negrunch/dev/mobilev2/build/web`, and create no order and no payment.
+With the current default configuration these examples fetch managed main, build and verify a temporary
+captured bundle, then remove the checkout/build and capture. They leave no reusable app artifact and
+create no order/payment. They honor `MORTSOM_STACK_DIR` and accept an optional branch/PR URL after the
+platform. The historical `/home/negrunch/dev/mobilev2/build/...` paths apply only to builds explicitly
+configured with `mobile.source_dir = "/home/negrunch/dev/mobilev2"`; verify those artifacts still exist
+and match the stack before using the historical commands below.
 
 Web on this host uses the Chromium snap. Mortsom detects the confined `/snap/bin/chromium` wrapper and
 runs the unconfined `chrome` and `chromedriver` inside the snap by itself; `MORTSOM_BROWSER` and

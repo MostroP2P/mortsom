@@ -4,12 +4,17 @@ use super::*;
 pub(super) async fn run_command(
     config_path: &std::path::Path,
     stack_dir: &std::path::Path,
-    scenarios: Vec<String>,
-    tag: Option<String>,
-    platform: mortsom_desktop_driver::Platform,
-    artifact: Option<PathBuf>,
-    xvfb: PathBuf,
+    selection: RunSelection,
 ) -> ExitCode {
+    let RunSelection {
+        scenarios,
+        tag,
+        platform,
+        artifact,
+        source,
+        xvfb,
+    } = selection;
+    let mut prepared = super::prepared::InvocationBuild::default();
     mortsom_scenarios::link();
     let selected = match mortsom_scenario_kit::registry::select(&scenarios, tag.as_deref()) {
         Ok(selected) => selected,
@@ -27,8 +32,10 @@ pub(super) async fn run_command(
                 tag,
                 platform,
                 artifact,
+                source,
                 xvfb,
             },
+            &mut prepared,
         )
         .await
         .code;
@@ -46,8 +53,10 @@ pub(super) async fn run_command(
                 tag: None,
                 platform,
                 artifact: artifact.clone(),
+                source: source.clone(),
                 xvfb: xvfb.clone(),
             },
+            &mut prepared,
         )
         .await;
         let started = attempt.summary.is_some();
@@ -65,12 +74,13 @@ pub(super) async fn run_command(
 }
 
 /// What one `run` invocation was asked to do.
-struct RunSelection {
-    scenarios: Vec<String>,
-    tag: Option<String>,
-    platform: mortsom_desktop_driver::Platform,
-    artifact: Option<PathBuf>,
-    xvfb: PathBuf,
+pub(super) struct RunSelection {
+    pub scenarios: Vec<String>,
+    pub tag: Option<String>,
+    pub platform: mortsom_desktop_driver::Platform,
+    pub artifact: Option<PathBuf>,
+    pub xvfb: PathBuf,
+    pub source: SourceOverrides,
 }
 
 /// How one run ended: its exit code, and its summary when it ran at all.
@@ -215,19 +225,21 @@ async fn run_once(
     config_path: &std::path::Path,
     stack_dir: &std::path::Path,
     selection: RunSelection,
+    prepared: &mut super::prepared::InvocationBuild,
 ) -> Attempt {
     let RunSelection {
         scenarios,
         tag,
         platform,
         artifact,
+        source,
         xvfb,
     } = selection;
     if let Err(error) = mortsom_scenario_kit::registry::select(&scenarios, tag.as_deref()) {
         eprintln!("{error}");
         return Attempt::refused(2);
     }
-    let (config, stack) =
+    let (mut config, stack) =
         match crate::desktop::load(config_path, stack_dir, &TokioRunner, &RealHost).await {
             Ok(loaded) => loaded,
             Err(e) => {
@@ -235,6 +247,7 @@ async fn run_once(
                 return Attempt::refused(2);
             }
         };
+    source.apply(&mut config);
     let pending = RealHost
         .env("HOME")
         .ok_or("HOME is required for desktop recovery".to_string())
@@ -256,16 +269,25 @@ async fn run_once(
         );
         return Attempt::refused(2);
     }
-    let desktop =
-        match crate::desktop::prepare(&config, platform, artifact, xvfb, &TokioRunner, &RealHost)
-            .await
-        {
-            Ok(options) => options,
-            Err(error) => {
-                eprintln!("{error}");
-                return Attempt::refused(2);
-            }
-        };
+    let fingerprint = match stack.fingerprint() {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("{error}");
+            return Attempt::refused(2);
+        }
+    };
+    let desktop = match prepared
+        .get_or_prepare(fingerprint, || {
+            crate::desktop::prepare(&config, platform, artifact, xvfb, &TokioRunner, &RealHost)
+        })
+        .await
+    {
+        Ok(options) => options,
+        Err(error) => {
+            eprintln!("{error}");
+            return Attempt::refused(2);
+        }
+    };
     let docker = DockerCli::default();
     let adapter = select_adapter();
     let env = |name: &str| std::env::var(name).ok();

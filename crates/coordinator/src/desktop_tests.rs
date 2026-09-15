@@ -117,7 +117,13 @@ async fn binding_failure_stops_the_build_and_redacts_child_output() {
     config.mobile.source_dir = root.path().display().to_string();
     let runner = FakeRunner::default();
     let credential = "nostr+walletconnect://wallet?relay=wss://relay&secret=private";
-    runner.script_failure("env", credential);
+    runner.script_failure(
+        &format!(
+            "env --chdir={} ./scripts/frb-generate.sh",
+            root.path().display()
+        ),
+        credential,
+    );
     let error = prepare(
         &config,
         Platform::Web,
@@ -129,8 +135,8 @@ async fn binding_failure_stops_the_build_and_redacts_child_output() {
     .await
     .unwrap_err();
     assert!(!error.contains(credential));
-    assert_eq!(runner.calls().len(), 1);
-    assert!(runner.calls()[0].ends_with("./scripts/frb-generate.sh"));
+    assert_eq!(runner.calls().len(), 2);
+    assert!(runner.calls()[1].ends_with("./scripts/frb-generate.sh"));
 }
 
 #[tokio::test]
@@ -153,10 +159,11 @@ async fn successful_build_command_without_outputs_is_rejected() {
             .is_err()
         );
         let calls = runner.calls();
-        assert!(calls[0].ends_with("./scripts/frb-generate.sh"));
-        assert_eq!(calls.len(), if platform == Platform::Web { 3 } else { 2 });
+        assert!(calls[0].ends_with("flutter pub get"));
+        assert!(calls[1].ends_with("./scripts/frb-generate.sh"));
+        assert_eq!(calls.len(), if platform == Platform::Web { 4 } else { 3 });
         if platform == Platform::Web {
-            assert!(calls[1].ends_with("./scripts/build-web.sh --release"));
+            assert!(calls[2].ends_with("./scripts/build-web.sh --release"));
         }
     }
 }
@@ -210,7 +217,7 @@ async fn a_custom_xvfb_path_satisfies_runtime_checks_before_the_build() {
         assert!(result.is_err(), "fake build has no outputs");
         assert_eq!(
             runner.calls().len(),
-            2,
+            3,
             "the selected {executable} permits generation/build"
         );
     }

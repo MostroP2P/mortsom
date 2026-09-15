@@ -6,20 +6,22 @@ use mortsom_desktop_driver::Platform;
 use super::{CheckStatus, DoctorReport, HostProbe};
 
 pub(super) async fn check(
-    source: &Path,
+    source: Option<&Path>,
     platform: Platform,
     host: &dyn HostProbe,
     report: &mut DoctorReport,
 ) {
-    report.push(
-        "app executable codegen script",
-        if host.is_executable(&source.join("scripts/frb-generate.sh")) {
-            CheckStatus::Pass
-        } else {
-            CheckStatus::Fail
-        },
-        "the app-owned codegen script must be executable",
-    );
+    if let Some(source) = source {
+        report.push(
+            "app executable codegen script",
+            if host.is_executable(&source.join("scripts/frb-generate.sh")) {
+                CheckStatus::Pass
+            } else {
+                CheckStatus::Fail
+            },
+            "the app-owned codegen script must be executable",
+        );
+    }
     for tool in [
         "env",
         "bash",
@@ -27,22 +29,26 @@ pub(super) async fn check(
         "head",
         "grep",
         "flutter_rust_bridge_codegen",
+        "cargo-expand",
+        "rustc",
     ] {
         check_tool(tool, host, report);
     }
-    probe(
-        "app codegen pin",
-        "env",
-        &[
-            &format!("--chdir={}", source.display()),
-            "bash",
-            "./scripts/frb-generate.sh",
-            "--check",
-        ],
-        host,
-        report,
-    )
-    .await;
+    if let Some(source) = source {
+        probe(
+            "app codegen pin",
+            "env",
+            &[
+                &format!("--chdir={}", source.display()),
+                "bash",
+                "./scripts/frb-generate.sh",
+                "--check",
+            ],
+            host,
+            report,
+        )
+        .await;
+    }
     match platform {
         Platform::Linux => {
             for tool in ["clang", "cmake", "ninja", "pkg-config"] {
@@ -111,19 +117,21 @@ async fn probe(
     value
 }
 
-async fn check_web(source: &Path, host: &dyn HostProbe, report: &mut DoctorReport) {
+async fn check_web(source: Option<&Path>, host: &dyn HostProbe, report: &mut DoctorReport) {
     for tool in ["wasm-pack", "rustup", "python3"] {
         check_tool(tool, host, report);
     }
-    report.push(
-        "app scripts/build-web.sh",
-        if host.is_executable(&source.join("scripts/build-web.sh")) {
-            CheckStatus::Pass
-        } else {
-            CheckStatus::Fail
-        },
-        "the app-owned Web build script must be executable",
-    );
+    if let Some(source) = source {
+        report.push(
+            "app scripts/build-web.sh",
+            if host.is_executable(&source.join("scripts/build-web.sh")) {
+                CheckStatus::Pass
+            } else {
+                CheckStatus::Fail
+            },
+            "the app-owned Web build script must be executable",
+        );
+    }
     // `rustup run` without --install never installs a missing toolchain.
     let root = probe(
         "Web nightly toolchain",
