@@ -787,5 +787,21 @@ fn the_compose_file_publishes_exactly_the_ports_the_spec_fixes() {
     assert!(compose.contains(&format!("name: {PROJECT}")));
 }
 
+#[test]
+fn the_relay_keeps_its_events_in_a_file_database() {
+    // Arrange
+    let config: toml::Value =
+        toml::from_str(include_str!("../../../../stack/relay-config.toml")).unwrap();
+    let database = &config["database"];
+
+    // Assert
+    assert_ne!(
+        database.get("in_memory").and_then(toml::Value::as_bool),
+        Some(true),
+        "an in-memory relay database vanishes once its connections go idle"
+    );
+    assert_eq!(database["data_directory"].as_str(), Some("/usr/src/app/db"));
+}
+
 #[path = "source_load_tests.rs"]
 mod source_load_tests;

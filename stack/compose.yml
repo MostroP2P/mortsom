@@ -1,8 +1,9 @@
 # Mortsom's regtest world: one chain, three Lightning nodes, one relay and the
 # daemon under test (spec section 5). Nothing here reaches mainnet and nothing
 # needs a secret from outside: bitcoind mines its own coins, the nodes run
-# with --noseedbackup, the relay keeps its events in memory, and the daemon's
-# identity is minted by `mortsom stack up` for this stack alone.
+# with --noseedbackup, the relay keeps its events in an unmounted container
+# file, and the daemon's identity is minted by `mortsom stack up` for this
+# stack alone.
 #
 # Roles never overlap: lnd-alice and lnd-bob are the two actors, lnd-carol is
 # the daemon's escrow node and is never driven as an actor.

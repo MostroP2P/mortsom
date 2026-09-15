@@ -127,7 +127,7 @@ merges its optional `<name>.local.toml` overlay.
 ```
 
 The stack is the Compose project in [stack/](stack/): a regtest `bitcoind`, LND nodes for Alice, Bob and
-Carol (the daemon's escrow node), an in-memory Nostr relay on `127.0.0.1:7000` and `mostrod`. Nothing else is
+Carol (the daemon's escrow node), an ephemeral Nostr relay on `127.0.0.1:7000` and `mostrod`. Nothing else is
 needed: the chain mines its own coins.
 
 `stack up` pulls the pinned daemon release (`mostrop2p/mostro:v0.18.7`, the version the accepted cells ran
