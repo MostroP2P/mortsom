@@ -13,6 +13,8 @@ pub struct DesktopDoctorOptions {
     pub platform: Platform,
     /// Existing native executable or Web bundle, avoiding source/build checks.
     pub artifact: Option<PathBuf>,
+    /// CLI overrides of the configured source mode.
+    pub source: crate::cli::SourceOverrides,
     /// Suppress stack, relay and wallet network queries.
     pub no_network: bool,
 }
@@ -48,12 +50,16 @@ pub async fn run_desktop_doctor(
             }
         }
     };
-    let mut diagnosis = Config::diagnose(config_path, |name| {
-        stack
-            .as_ref()
-            .and_then(|s| s.lookup(name))
-            .or_else(|| host.env(name))
-    });
+    let mut diagnosis = Config::diagnose_with_source(
+        config_path,
+        |name| {
+            stack
+                .as_ref()
+                .and_then(|s| s.lookup(name))
+                .or_else(|| host.env(name))
+        },
+        options.source.selection().as_ref(),
+    );
     if let (Some(stack), Some(config)) = (&stack, &mut diagnosis.config) {
         stack.configure_relay(config);
         match stack.snapshot().validate_config(config) {
@@ -76,7 +82,8 @@ pub async fn run_desktop_doctor(
         );
         if options.artifact.is_none() {
             super::desktop_build::check(
-                Path::new(&config.mobile.source_dir),
+                (!config.mobile.source_dir.is_empty())
+                    .then(|| Path::new(&config.mobile.source_dir)),
                 options.platform,
                 host,
                 &mut report,
@@ -187,6 +194,23 @@ fn check_app(
             ),
             Err(error) => report.push("app-artifact", CheckStatus::Fail, error),
         }
+        return;
+    }
+    if config.mobile.source_dir.is_empty() {
+        report.push(
+            "app source",
+            CheckStatus::Pass,
+            format!(
+                "managed {} at {}; run fetches a fresh head before building",
+                crate::app_source::REPOSITORY,
+                config.mobile.app_ref.as_deref().unwrap_or("main")
+            ),
+        );
+        report.push(
+            "app source contract",
+            CheckStatus::Skip,
+            "checked after fetch by run; doctor does not fetch or build source",
+        );
         return;
     }
     for file in [
@@ -314,7 +338,7 @@ pub(crate) async fn require_build_prerequisites(
     check_tools(platform, true, xvfb, host, &mut report);
     check_app(config, platform, None, host, &mut report);
     super::desktop_build::check(
-        Path::new(&config.mobile.source_dir),
+        Some(Path::new(&config.mobile.source_dir)),
         platform,
         host,
         &mut report,
@@ -327,5 +351,23 @@ pub(crate) async fn require_build_prerequisites(
             "desktop build prerequisites failed before generation:\n{}",
             report.render_with_color(false)
         )))
+    }
+}
+
+/// Checks installed tools before fetching remote source.
+pub(crate) fn require_tools(
+    platform: Platform,
+    xvfb: &Path,
+    host: &dyn HostProbe,
+) -> Result<(), String> {
+    let mut report = DoctorReport::default();
+    check_tools(platform, true, xvfb, host, &mut report);
+    if report.is_healthy() {
+        Ok(())
+    } else {
+        Err(format!(
+            "app preparation prerequisites failed:\n{}",
+            report.render_with_color(false)
+        ))
     }
 }

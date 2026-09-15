@@ -132,3 +132,50 @@ fn web_prebuilt_doctor_does_not_require_build_tools() {
         "offline doctor must not query stack"
     );
 }
+
+#[test]
+fn doctor_source_overrides_replace_invalid_configured_modes_before_diagnosis() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = example_config(&dir);
+    for configured in [
+        "source_dir = '/stale/app'\napp_ref = 'main'",
+        "app_ref = 'https://github.com/other/app/pull/1'",
+        "source_dir = 'env:UNUSED_SOURCE'\napp_ref = 'env:UNUSED_REF'",
+    ] {
+        std::fs::write(
+            dir.path().join("mortsom.local.toml"),
+            format!("[mobile]\n{configured}\n"),
+        )
+        .unwrap();
+        for selection in [["--app-ref", "main"], ["--app-source", "/app"]] {
+            let output = Command::cargo_bin("mortsom")
+                .unwrap()
+                .args([
+                    "--config",
+                    config.to_str().unwrap(),
+                    "doctor",
+                    "--no-network",
+                    "--json",
+                ])
+                .args(selection)
+                .env_clear()
+                .env("PATH", "/nonexistent")
+                .assert()
+                .failure();
+            let report: serde_json::Value =
+                serde_json::from_slice(&output.get_output().stdout).unwrap();
+            for check in report["checks"].as_array().unwrap() {
+                let detail = check["detail"].as_str().unwrap();
+                assert!(
+                    !detail.contains("mutually exclusive")
+                        && !detail.contains("invalid app selector"),
+                    "{selection:?}: {check}"
+                );
+                assert!(!check["name"].as_str().unwrap().contains("UNUSED_"));
+            }
+            assert!(report["checks"].as_array().unwrap().iter().any(|check| {
+                check["name"] == "env MORTSOM_ALICE_NWC" && check["status"] == "fail"
+            }));
+        }
+    }
+}

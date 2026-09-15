@@ -186,3 +186,26 @@ async fn compiler_and_metadata_queries_use_the_same_checkout_as_the_build() {
         .unwrap();
     record.finish(Path::new("/app"), &host).await.unwrap();
 }
+
+#[test]
+fn remote_selection_round_trips_and_old_recovery_provenance_still_loads() {
+    let mut build = BuildProvenance::prebuilt();
+    let old = serde_json::to_value(&build).unwrap();
+    let mut old = old.as_object().unwrap().clone();
+    old.remove("remote_selection");
+    assert_eq!(
+        serde_json::from_value::<BuildProvenance>(old.into()).unwrap(),
+        build
+    );
+    build.origin = ArtifactOrigin::Source;
+    build.remote_selection = Some(crate::app_source::RemoteSelection {
+        repository: crate::app_source::REPOSITORY.into(),
+        requested: "https://github.com/MostroP2P/app/pull/42".into(),
+        git_ref: "refs/pull/42/head".into(),
+        revision: "a".repeat(40),
+    });
+    assert_eq!(
+        serde_json::from_slice::<BuildProvenance>(&serde_json::to_vec(&build).unwrap()).unwrap(),
+        build
+    );
+}

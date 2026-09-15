@@ -19,6 +19,8 @@ Linux cells were re-run against it on 2026-09-09.
 ## Quick start
 
 ```sh
+git clone https://github.com/MostroP2P/mortsom.git
+cd mortsom
 cargo build -p mortsom-coordinator --bin mortsom
 
 ./target/debug/mortsom stack up          # regtest chain, LND alice/bob/carol, relay, mostrod
@@ -38,25 +40,53 @@ report at the end. Results land in `artifacts/<run-id>/`. The exit status is non
 
 ## Requirements
 
-Default layout:
-
-```text
-~/dev/
-  mortsom/     this repository
-  mobilev2/    checkout of MostroP2P/app with the automation contract
-```
+A fresh installation needs only this repository. App source is fetched automatically into the ignored
+`.mortsom/app/` directory; a sibling `mobilev2` checkout is optional.
 
 | For | Requirements |
 |---|---|
-| Harness | Rust stable (MSRV 1.89), Cargo, Git, Docker Engine and Compose with permission to use them |
-| Source builds | Flutter on PATH, the app's `scripts/frb-generate.sh` and matching `flutter_rust_bridge_codegen` |
-| Linux build | clang, CMake, Ninja, pkg-config, GTK 3 and libsecret >= 0.18.4 development files |
+| Harness | Rust stable (MSRV 1.89), Cargo, Git, C/C++ linker, `protoc`, Docker Engine and Compose with permission to use them |
+| Source builds | Flutter/Dart on PATH, Bash and standard Unix tools, `flutter_rust_bridge_codegen` matching the app's pin, `cargo-expand` |
+| Linux build | clang/libclang, CMake, Ninja, pkg-config, GTK 3 and libsecret >= 0.18.4 development files |
 | Linux runtime | Xvfb, D-Bus, GNOME Keyring, AT-SPI bus and registry, ImageMagick `import` |
-| Web build | The app's `scripts/build-web.sh`, wasm-pack, Python 3, rustup nightly with rust-src |
+| Web build | wasm-pack, Python 3, rustup nightly with rust-src and the wasm32 target |
 | Web runtime | Matching Chromium and ChromeDriver |
 
-`doctor` reports what is missing for the selected platform; it installs nothing. Runs never open windows on
-your desktop: Linux clients live on private virtual displays, Web clients in headless browser profiles.
+For Debian/Ubuntu, install the native build and Linux runtime dependencies:
+
+```sh
+sudo apt-get update
+sudo apt-get install build-essential git curl unzip xz-utils zip protobuf-compiler \
+  clang libclang-dev cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev \
+  xvfb dbus gnome-keyring at-spi2-core imagemagick python3
+```
+
+Install [Rust with rustup](https://www.rust-lang.org/tools/install),
+[Flutter](https://docs.flutter.dev/install) and [Docker Engine with Compose](https://docs.docker.com/engine/install/)
+using their supported instructions. Put Flutter's `bin` and Cargo's `bin` on `PATH`, then:
+
+```sh
+rustup update stable
+cargo install cargo-expand --locked
+# Match the app's pubspec.yaml pin. Current app builds use 2.11.1.
+cargo install flutter_rust_bridge_codegen --version 2.11.1 --locked
+
+# Additional Web build tools:
+cargo install wasm-pack --locked
+rustup toolchain install nightly --component rust-src --target wasm32-unknown-unknown
+```
+
+The supported app pipeline currently uses Flutter 3.41.9; the selected branch's `pubspec.yaml`,
+`.github/workflows/ci.yml` and `.github/workflows/web-build.yml` own its tool versions. Mortsom runs
+`scripts/frb-generate.sh --check` after fetching and reports the exact codegen install command if its pin
+has changed. It installs no system tools. Install matching Chromium/ChromeDriver packages for Web runs;
+`MORTSOM_BROWSER` and `MORTSOM_CHROMEDRIVER` can point to explicit executables.
+
+`doctor` reports missing tools for the selected platform without creating orders or paying. For managed
+source, it defers app-file and codegen-pin checks to `run`, so it works before the first checkout exists.
+`--no-network` also skips stack, relay and wallet connections. Builds need Internet access for Git and
+Dart/Rust dependencies, and several GiB of free disk space. Linux clients use private virtual displays;
+Web clients use headless browser profiles.
 
 ## Configuration
 
@@ -72,7 +102,9 @@ Key settings:
 ```toml
 [mobile]
 profile = "mobile-v2"
-source_dir = "../mobilev2"
+# Both omitted: managed upstream main.
+# app_ref = "main"           # branch or GitHub PR URL
+# source_dir = "../mobilev2" # alternative: local developer checkout
 
 [run]
 amount_sats = 1000
@@ -83,7 +115,7 @@ settle_timeout_secs = 120
 ```
 
 Caps are mandatory. Secrets are `env:` references resolved in memory; never paste macaroons, keys or
-credentials into TOML. `*.local.toml`, `mortsom.toml`, `.env*` and `artifacts/` are gitignored. A config also
+credentials into TOML. `*.local.toml`, `mortsom.toml`, `.env*`, `.mortsom/` and `artifacts/` are gitignored. A config also
 merges its optional `<name>.local.toml` overlay.
 
 ## Stack
@@ -134,25 +166,70 @@ export MORTSOM_STACK_DIR=~/dev/mortsom/stack
 
 ## Building the app
 
-Without `--app-artifact`, `run` builds the selected target from `mobile.source_dir`. To build and verify
-without launching clients:
+### Remote branch or pull request
+
+With the default configuration, `run` fetches `main` from `MostroP2P/app`, builds it for the selected
+platform and executes the scenarios. Use one selector flag for a branch or a pasted GitHub PR URL:
 
 ```sh
-cargo run -p mortsom-coordinator --example prepare_client -- linux
-cargo run -p mortsom-coordinator --example prepare_client -- web
+./target/debug/mortsom run happy_sell --app-ref main
+./target/debug/mortsom run happy_buy --platform web --app-ref main
+./target/debug/mortsom run happy_sell --app-ref https://github.com/MostroP2P/app/pull/410
+./target/debug/mortsom run --tag happy-path --platform web \
+  --app-ref https://github.com/MostroP2P/app/pull/410
+# Replace the example with any branch that exists in MostroP2P/app:
+./target/debug/mortsom run --tag cancellation --app-ref feature/my-fix
 ```
 
-Build Linux and Web sequentially: bridge generation writes shared source files. Then reuse the outputs:
+PR selectors fetch the **PR head commit**, including contributions from forks. They never test the base or
+GitHub's synthetic merge. Only URLs for `https://github.com/MostroP2P/app/pull/<number>` are accepted
+(an optional trailing slash is allowed); copy the PR's main page URL, without `/files`, query or fragment.
+A branch selector names a branch in `MostroP2P/app`, not a tag or arbitrary Git expression.
+
+Every invocation fetches again and resolves an exact commit. A missing ref or network/fetch failure stops
+with an error; Mortsom never silently falls back to cached source. `.mortsom/app/repository.git` retains Git
+objects to avoid downloading them again, while each build uses a new clean detached checkout under
+`.mortsom/app/build-*/source`. Dart/Rust package caches are reused normally. Disposable checkouts and build
+outputs are removed after bundle capture or failure; a hard-killed process can leave ignored build
+directories. This directory contains no trader recovery profiles and must never be committed.
+
+The entire invocation, including a family selected with `--tag`, builds and captures **one bundle** and
+uses it for every scenario. Reports preserve the requested selector, full ref and exact commit in
+`app_build.remote_selection`, alongside before/after source state, commands, tool versions and bundle
+fingerprint. A moving branch cannot change a family's code halfway through. Recovery uses the retained
+captured bundle, without fetching again. Changing the daemon/stack still requires a new app build.
+
+Builds run `flutter pub get`, `scripts/frb-generate.sh`, the Web WASM script when applicable, and Flutter's
+build with the Mortsom entrypoint and isolated stack defines. Linux and Web builds must run sequentially.
+The selected app code must provide `lib/main_mortsom.dart` and the automation contract needed by the
+selected scenarios; an older or incompatible PR reports the missing file/control or build failure.
+
+### Local source and prebuilt alternatives
 
 ```sh
+./target/debug/mortsom run happy_sell --app-source ../mobilev2
+./target/debug/mortsom doctor --platform web --app-source ../mobilev2
 ./target/debug/mortsom run happy_sell --platform linux \
   --app-artifact ../mobilev2/build/linux/x64/release/bundle/mostro
 ./target/debug/mortsom run happy_buy --platform web --app-artifact ../mobilev2/build/web
 ```
 
-For Linux, point at the executable inside the complete bundle. For Web, point at the complete output
-directory. Mortsom hashes the whole bundle and records it. Rebuild after any app change or a changed daemon
-identity.
+`mobile.source_dir` also preserves the explicit local-checkout workflow and its intentional local changes.
+`mobile.app_ref` selects managed source instead; these config keys conflict. CLI `--app-ref` or
+`--app-source` overrides the configured source mode. `--app-artifact` bypasses fetching and building;
+the three CLI choices are mutually exclusive. Relative paths are resolved from the current directory.
+
+For Linux, point `--app-artifact` at the executable inside the complete bundle; for Web, at the output
+directory. Mortsom hashes and captures the whole bundle. Prebuilt source history is explicitly unknown.
+To compile and verify without launching clients, use the preparation example (optional branch/PR argument):
+
+```sh
+cargo run -p mortsom-coordinator --example prepare_client -- linux main
+cargo run -p mortsom-coordinator --example prepare_client -- web https://github.com/MostroP2P/app/pull/410
+```
+
+These commands use the default config and the stack selected by `MORTSOM_STACK_DIR` (or `stack`). They
+remove their temporary captured bundle on completion and create no order/payment.
 
 ## What it tests
 

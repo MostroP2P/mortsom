@@ -8,6 +8,11 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         let mut errors = Vec::new();
         self.mobile.validate(&mut errors);
+        if let Some(value) = &self.mobile.app_ref
+            && let Err(error) = crate::app_source::Selector::parse(value)
+        {
+            errors.push(error.to_string());
+        }
         if self.ui.timeout_secs == Some(0) {
             errors.push("ui.timeout_secs must be greater than zero".into());
         }

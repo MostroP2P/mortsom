@@ -2,11 +2,11 @@
 
 **Version:** 1.0
 
-**Updated:** 2026-09-10
+**Updated:** 2026-09-15
 
 **Status:** normative for all new work
 
-**Target app:** Mostro app v2 (`MostroP2P/app`, local checkout `../mobilev2`)
+**Target app:** Mostro app v2 (`MostroP2P/app`)
 
 **Default client platform:** Linux
 
@@ -92,6 +92,13 @@ mortsom run happy_sell --platform web
 mortsom run happy_buy --platform linux
 mortsom run happy_buy --platform web
 
+# Select a remote branch or paste a GitHub PR URL; use its exact head.
+mortsom run happy_sell --app-ref main
+mortsom run --tag happy-path --platform web --app-ref https://github.com/MostroP2P/app/pull/123
+
+# Explicit developer checkout (including local changes).
+mortsom run happy_sell --app-source ../mobilev2
+
 # Reuse a build instead of compiling from source.
 mortsom run happy_sell --platform linux --app-artifact /path/to/bundle/mostro
 mortsom run happy_sell --platform web   --app-artifact /path/to/build/web
@@ -101,7 +108,7 @@ mortsom cleanup <run-id>
 ```
 
 `run` attaches to an already ready stack and fails with instructions when it is absent. It never creates or
-destroys the stack. One invocation runs one scenario with fresh actors. Unknown platforms, `android`
+destroys the stack. One invocation runs the selected scenarios sequentially, each with fresh actors. Unknown platforms, `android`
 included, fail before anything is built or launched.
 
 ## 5. Stack
@@ -187,11 +194,32 @@ through user actions, and wait for interactability with bounded predicates inste
 
 ## 7. Client builds and automation contract
 
+Without an explicit local source or prebuilt artifact, Mortsom fetches `main` from
+`https://github.com/MostroP2P/app.git`. `--app-ref` accepts a branch name or a canonical
+`https://github.com/MostroP2P/app/pull/<number>` URL (optional trailing slash). The matching
+`refs/heads/<branch>` or `refs/pull/<number>/head` is fetched on every invocation; PRs use the proposal's
+head, including fork PRs, never the base branch or synthetic merge. Invalid selectors and missing or
+unreachable remote refs fail before building; cached source is never a fallback for a failed fetch.
+
+Reusable Git objects and disposable clean detached build checkouts live under the ignored `.mortsom/app/`
+working directory. The requested selector, repository, full ref and fetched commit ID are recorded in build,
+run and recovery provenance. One invocation resolves, builds and captures its bundle once; every selected
+scenario uses that exact bundle and provenance. A changed stack fingerprint refuses reuse. Linux and Web
+source preparation/builds remain sequential. Normal completion or failure removes the disposable checkout;
+a killed process may leave ignored build files, never trader recovery state, there.
+
+`mobile.app_ref` configures the same selector; omitting it selects `main`. `mobile.source_dir` selects an
+explicit developer checkout and conflicts with `mobile.app_ref`. `--app-source` and `--app-ref` override the
+configured source mode. They conflict with each other and with `--app-artifact`. Prebuilt artifacts bypass
+source fetching/building. Existing local-source configurations remain supported, including their dirty state.
+`doctor` checks installed tools without fetching or building remote source and marks source-contract checks
+as deferred until `run` fetches it. Neither command changes the daemon version or stack lifecycle.
+
 Mortsom builds app v2 from `lib/main_mortsom.dart` with a test-environment marker, the daemon's public
 identity and the local relay seeds. Production relay fallback is disabled before any subscription starts.
 Advertised relay addresses are validated from the client's own network namespace.
 
-Builds follow the app's supported scripts. Flutter Rust Bridge bindings are regenerated with
+Builds resolve Dart packages with `flutter pub get` and follow the app's supported scripts. Flutter Rust Bridge bindings are regenerated with
 `scripts/frb-generate.sh` before a source build; generated bindings are never edited by hand. Linux and Web
 builds run sequentially because binding generation writes shared source files.
 

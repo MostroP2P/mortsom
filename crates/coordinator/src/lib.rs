@@ -2,6 +2,7 @@
 //! reporting and the `mortsom` command-line interface.
 
 pub mod accounting;
+pub mod app_source;
 pub mod artifacts;
 pub mod banner;
 pub mod bootstrap;
