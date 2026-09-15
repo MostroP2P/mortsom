@@ -124,7 +124,7 @@ channels, a Nostr relay and a `mostrod` with an identity minted for this stack. 
 | `lnd-alice` | Alice's wallet | 10001 |
 | `lnd-bob` | Bob's wallet | 10002 |
 | `lnd-carol` | The daemon's escrow node | 10003 |
-| `relay` | In-memory Nostr relay reachable only from this host | 7000 |
+| `relay` | Nostr relay reachable only from this host; its SQLite database is an unmounted file in the container, so it lives and dies with the stack | 7000 |
 | `mostro` | The daemon under test | none |
 
 Topology: Alice and Bob each open one channel to Carol, funded at 1,000,000 sats with 500,000 pushed across,
