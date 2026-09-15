@@ -425,7 +425,13 @@ pub async fn run(cli: Cli) -> ExitCode {
         } => {
             // The daemon probe waits for events republished on the daemon's
             // own cycle, so it uses the configured health timeout.
-            let net = match Config::diagnose(&cli.config, |name| RealHost.env(name)).config {
+            let net = match Config::diagnose_with_source(
+                &cli.config,
+                |name| RealHost.env(name),
+                source.selection().as_ref(),
+            )
+            .config
+            {
                 Some(config) => RealNet::with_daemon_timeout(std::time::Duration::from_secs(
                     config.mostro.health_timeout_secs,
                 )),

@@ -239,15 +239,21 @@ async fn run_once(
         eprintln!("{error}");
         return Attempt::refused(2);
     }
-    let (mut config, stack) =
-        match crate::desktop::load(config_path, stack_dir, &TokioRunner, &RealHost).await {
-            Ok(loaded) => loaded,
-            Err(e) => {
-                eprintln!("{e}");
-                return Attempt::refused(2);
-            }
-        };
-    source.apply(&mut config);
+    let (config, stack) = match crate::desktop::load_with_source(
+        config_path,
+        stack_dir,
+        &TokioRunner,
+        &RealHost,
+        source.selection().as_ref(),
+    )
+    .await
+    {
+        Ok(loaded) => loaded,
+        Err(e) => {
+            eprintln!("{e}");
+            return Attempt::refused(2);
+        }
+    };
     let pending = RealHost
         .env("HOME")
         .ok_or("HOME is required for desktop recovery".to_string())

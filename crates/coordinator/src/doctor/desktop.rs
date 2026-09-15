@@ -50,15 +50,16 @@ pub async fn run_desktop_doctor(
             }
         }
     };
-    let mut diagnosis = Config::diagnose(config_path, |name| {
-        stack
-            .as_ref()
-            .and_then(|s| s.lookup(name))
-            .or_else(|| host.env(name))
-    });
-    if let Some(config) = &mut diagnosis.config {
-        options.source.apply(config);
-    }
+    let mut diagnosis = Config::diagnose_with_source(
+        config_path,
+        |name| {
+            stack
+                .as_ref()
+                .and_then(|s| s.lookup(name))
+                .or_else(|| host.env(name))
+        },
+        options.source.selection().as_ref(),
+    );
     if let (Some(stack), Some(config)) = (&stack, &mut diagnosis.config) {
         stack.configure_relay(config);
         match stack.snapshot().validate_config(config) {

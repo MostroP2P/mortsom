@@ -9,7 +9,7 @@ use mortsom_common::env_resolve::{ENV_PREFIX, resolve_env_lenient, resolve_env_w
 use mortsom_environment::config::ENV_ONLY_KEYS;
 use toml::Value;
 
-use super::{Config, ConfigError};
+use super::{AppSource, Config, ConfigError};
 
 /// Suffix of the gitignored overlay merged on top of the baseline file:
 /// `mortsom.toml` + `mortsom.local.toml`.
@@ -39,8 +39,20 @@ impl Config {
     where
         F: Fn(&str) -> Option<String>,
     {
+        Self::load_with_source(path, lookup, None)
+    }
+
+    /// Loads and validates after replacing the configured source mode, if selected.
+    pub fn load_with_source<F>(
+        path: &Path,
+        lookup: F,
+        source: Option<&AppSource>,
+    ) -> Result<Self, ConfigError>
+    where
+        F: Fn(&str) -> Option<String>,
+    {
         let raw = read_layered(path)?;
-        Self::from_toml_value(raw, lookup)
+        Self::from_toml_value(raw, lookup, source)
     }
 
     /// Parses a complete configuration from TOML text; the injectable path
@@ -50,18 +62,28 @@ impl Config {
         F: Fn(&str) -> Option<String>,
     {
         let raw: Value = toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
-        Self::from_toml_value(raw, lookup)
+        Self::from_toml_value(raw, lookup, None)
     }
 
-    fn from_toml_value<F>(raw: Value, lookup: F) -> Result<Self, ConfigError>
+    fn from_toml_value<F>(
+        mut raw: Value,
+        lookup: F,
+        source: Option<&AppSource>,
+    ) -> Result<Self, ConfigError>
     where
         F: Fn(&str) -> Option<String>,
     {
         reject_literal_secrets(&raw)?;
+        if let Some(source) = source {
+            source.remove_configured(&mut raw);
+        }
         let resolved = resolve_env_with(raw, lookup)?;
-        let config: Config = resolved
+        let mut config: Config = resolved
             .try_into()
             .map_err(|e: toml::de::Error| ConfigError::Parse(e.to_string()))?;
+        if let Some(source) = source {
+            source.apply(&mut config);
+        }
         config.validate()?;
         Ok(config)
     }
@@ -72,7 +94,20 @@ impl Config {
     where
         F: Fn(&str) -> Option<String>,
     {
-        let raw = match read_layered(path) {
+        Self::diagnose_with_source(path, lookup, None)
+    }
+
+    /// Diagnoses the effective source selection, retaining every unrelated problem.
+    /// Never use the returned configuration to start anything.
+    pub fn diagnose_with_source<F>(
+        path: &Path,
+        lookup: F,
+        source: Option<&AppSource>,
+    ) -> ConfigDiagnosis
+    where
+        F: Fn(&str) -> Option<String>,
+    {
+        let mut raw = match read_layered(path) {
             Ok(raw) => raw,
             Err(e) => {
                 return ConfigDiagnosis {
@@ -86,9 +121,15 @@ impl Config {
         if let Err(e) = reject_literal_secrets(&raw) {
             problems.push(e.to_string());
         }
+        if let Some(source) = source {
+            source.remove_configured(&mut raw);
+        }
         let (resolved, missing_env) = resolve_env_lenient(raw, lookup);
         let config = match resolved.try_into::<Config>() {
-            Ok(config) => {
+            Ok(mut config) => {
+                if let Some(source) = source {
+                    source.apply(&mut config);
+                }
                 if let Err(ConfigError::Invalid(errors)) = config.validate() {
                     problems.extend(errors);
                 }
@@ -466,7 +507,7 @@ mod lane_examples {
             app_ref: Some(Selector::parse("feature/fix").unwrap()),
             app_source: None,
         };
-        remote.apply(&mut config);
+        remote.selection().unwrap().apply(&mut config);
         assert!(config.mobile.source_dir.is_empty());
         assert_eq!(config.mobile.app_ref.as_deref(), Some("feature/fix"));
         assert!(config.validate().is_ok());
@@ -474,6 +515,8 @@ mod lane_examples {
             app_ref: None,
             app_source: Some("/developer/app".into()),
         }
+        .selection()
+        .unwrap()
         .apply(&mut config);
         assert_eq!(config.mobile.source_dir, "/developer/app");
         assert!(config.mobile.app_ref.is_none());

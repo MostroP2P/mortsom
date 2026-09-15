@@ -22,15 +22,12 @@ fn local_source(value: &str) -> Result<PathBuf, &'static str> {
 }
 
 impl SourceOverrides {
-    /// Explicit CLI source selection replaces the configured source mode.
-    pub fn apply(&self, config: &mut crate::Config) {
-        if let Some(selector) = &self.app_ref {
-            config.mobile.source_dir.clear();
-            config.mobile.app_ref = Some(selector.to_string());
-        } else if let Some(source) = &self.app_source {
-            config.mobile.source_dir = source.display().to_string();
-            config.mobile.app_ref = None;
-        }
+    /// Typed selection passed into configuration loading before validation.
+    pub fn selection(&self) -> Option<crate::config::AppSource> {
+        self.app_ref
+            .clone()
+            .map(crate::config::AppSource::Remote)
+            .or_else(|| self.app_source.clone().map(crate::config::AppSource::Local))
     }
 }
 

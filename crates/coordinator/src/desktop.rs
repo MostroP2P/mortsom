@@ -12,12 +12,26 @@ pub async fn load(
     runner: &dyn CommandRunner,
     host: &dyn crate::doctor::HostProbe,
 ) -> Result<(Config, crate::stack::StackSnapshot), String> {
+    load_with_source(config, stack_dir, runner, host, None).await
+}
+
+/// Loads an explicit source selection before configuration resolution and validation.
+pub async fn load_with_source(
+    config: &Path,
+    stack_dir: &Path,
+    runner: &dyn CommandRunner,
+    host: &dyn crate::doctor::HostProbe,
+    source: Option<&crate::config::AppSource>,
+) -> Result<(Config, crate::stack::StackSnapshot), String> {
     let stack = StackContext::resolve(stack_dir, runner)
         .await
         .map_err(|e| e.to_string())?;
-    let mut config =
-        Config::load_with(config, |name| stack.lookup(name).or_else(|| host.env(name)))
-            .map_err(|e| e.to_string())?;
+    let mut config = Config::load_with_source(
+        config,
+        |name| stack.lookup(name).or_else(|| host.env(name)),
+        source,
+    )
+    .map_err(|e| e.to_string())?;
     stack.configure_relay(&mut config);
     config.validate().map_err(|e| e.to_string())?;
     stack

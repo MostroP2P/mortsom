@@ -787,17 +787,5 @@ fn the_compose_file_publishes_exactly_the_ports_the_spec_fixes() {
     assert!(compose.contains(&format!("name: {PROJECT}")));
 }
 
-#[test]
-fn credential_references_live_under_the_stack_directory() {
-    // Act / Assert
-    assert_eq!(
-        credential_reference(Path::new("/s"), "MORTSOM_ALICE_LND_CERT").unwrap(),
-        Path::new("/s/local/creds/alice/tls.cert")
-    );
-    assert_eq!(
-        credential_reference(Path::new("/s"), "MORTSOM_BOB_LND_MACAROON").unwrap(),
-        Path::new("/s/local/creds/bob/admin.macaroon")
-    );
-    assert!(credential_reference(Path::new("/s"), "MORTSOM_CAROL_LND_CERT").is_none());
-    assert!(credential_reference(Path::new("/s"), "MORTSOM_MOSTRO_PUBKEY").is_none());
-}
+#[path = "source_load_tests.rs"]
+mod source_load_tests;
