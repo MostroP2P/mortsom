@@ -1,5 +1,7 @@
 [workspace]
 resolver = "3"
+# Managed app checkouts keep their own Rust workspace and dependency graph.
+exclude = [".mortsom/app"]
 members = [
     "crates/common",
     "crates/coordinator",

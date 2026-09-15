@@ -2,6 +2,48 @@
 use super::*;
 use mortsom_ui_driver::process::TokioRunner;
 
+#[tokio::test]
+async fn managed_app_metadata_is_independent_of_the_harness_workspace() {
+    let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let managed = workspace.join(WORK_DIR);
+    std::fs::create_dir_all(&managed).unwrap();
+    let build = tempfile::Builder::new()
+        .prefix("metadata-test-")
+        .tempdir_in(managed)
+        .unwrap();
+    let package = build.path().join("source/rust");
+    std::fs::create_dir_all(package.join("src")).unwrap();
+    std::fs::write(package.join("src/lib.rs"), "").unwrap();
+    let manifest = package.join("Cargo.toml");
+    std::fs::write(
+        &manifest,
+        "[package]\nname = \"managed-app-fixture\"\nversion = \"2.0.0\"\nedition = \"2024\"\n",
+    )
+    .unwrap();
+    let output = run_ok(
+        &TokioRunner,
+        &Command::new(
+            "cargo",
+            &[
+                "metadata",
+                "--offline",
+                "--no-deps",
+                "--format-version=1",
+                "--manifest-path",
+                manifest.to_str().unwrap(),
+            ],
+        ),
+        Duration::from_secs(30),
+    )
+    .await
+    .unwrap();
+    let metadata: serde_json::Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        metadata["workspace_root"].as_str().unwrap(),
+        package.canonicalize().unwrap().to_str().unwrap()
+    );
+}
+
 #[test]
 fn branch_and_pull_request_select_only_the_requested_head() {
     assert_eq!(
