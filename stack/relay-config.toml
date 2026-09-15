@@ -1,8 +1,14 @@
 # nostr-rs-relay for Mortsom's regtest stack.
 #
-# In memory and unthrottled on purpose: the relay lives and dies with one
+# Ephemeral and unthrottled on purpose: the relay lives and dies with one
 # stack, is reachable only from this host, and carries nothing but regtest
 # test traffic. A throttled relay would read as a daemon that never answered.
+#
+# The database is an SQLite file in the container's own filesystem, never
+# `in_memory`: an in-memory database is dropped once its pooled connections
+# go idle, after which every write fails with "no such table: event" while
+# the relay keeps answering HTTP. No volume backs the file, so a fresh stack
+# still starts empty.
 
 [info]
 name = "mortsom-regtest"
@@ -10,7 +16,7 @@ description = "Ephemeral relay for Mortsom's regtest stack."
 relay_url = "ws://localhost:7000/"
 
 [database]
-in_memory = true
+data_directory = "/usr/src/app/db"
 
 [network]
 address = "0.0.0.0"
