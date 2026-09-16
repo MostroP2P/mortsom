@@ -316,6 +316,7 @@ async fn run_once(
         tag,
         desktop,
         stack: Some(stack),
+        stack_dir: stack_dir.canonicalize().ok(),
     };
     match run_scenarios(&config, &options, &deps).await {
         Ok(summary) => {

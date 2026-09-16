@@ -76,6 +76,10 @@ pub struct RecoveryStatus {
     pub retained: bool,
     /// Whether order and wallet resolution was durably verified.
     pub resolution_verified: bool,
+    /// The journal's state (`pending`, `resolved`, `abandoned_regtest`);
+    /// absent in historical reports.
+    #[serde(default)]
+    pub outcome: Option<String>,
 }
 
 /// Persists public build/stack facts and cleanup routing before clients can start.

@@ -85,6 +85,9 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
         // The run id alone would not say which artifact tree was searched:
         // it is a directory under the config's `artifacts_dir`.
         Command::Cleanup { run, .. } => format!("cleanup · run {run} · {config}"),
+        Command::Recovery {
+            action: crate::cli::RecoveryAction::Abandon { run, .. },
+        } => format!("recovery abandon · run {run} · {}", stack_dir.display()),
         Command::Publish { run, .. } => format!("publish · run {run} · {config}"),
         Command::Parity { run_a, run_b, .. } => format!("parity · {run_a} vs {run_b} · {config}"),
         Command::Accounting { lane } => match lane {

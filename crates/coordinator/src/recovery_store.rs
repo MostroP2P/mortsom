@@ -1,4 +1,7 @@
 //! Operator-private recovery metadata; actor credentials never enter artifacts.
+pub use crate::recovery_outcome::{
+    AbandonReason, RecoveryEnvironment, RecoveryOutcome, WalletBackend,
+};
 use crate::{fingerprint::BundleFingerprint, provenance::BuildProvenance, stack::StackFingerprint};
 use mortsom_common::RunId;
 use mortsom_desktop_driver::Platform;
@@ -36,6 +39,37 @@ pub struct RecoveryManifest {
     /// Orders, wallets and process shutdown were verified before profile deletion.
     #[serde(default)]
     pub resolution_verified: bool,
+    /// Terminal state; `None` only in manifests written before outcomes
+    /// existed, where `closed` decides. Changed only by journal transitions.
+    #[serde(default)]
+    pub outcome: Option<RecoveryOutcome>,
+    /// Recorded ownership, lane and wallet facts; `None` in older manifests,
+    /// which therefore can never be abandoned.
+    #[serde(default)]
+    pub environment: Option<RecoveryEnvironment>,
+}
+
+impl RecoveryManifest {
+    /// The journal's state, deriving it from `closed` for older manifests.
+    pub fn state(&self) -> RecoveryOutcome {
+        self.outcome.clone().unwrap_or(if self.closed {
+            RecoveryOutcome::Resolved
+        } else {
+            RecoveryOutcome::Pending
+        })
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        if self.state().is_pending() == self.closed {
+            return Err("recovery manifest outcome contradicts its closed flag".into());
+        }
+        if matches!(self.outcome, Some(RecoveryOutcome::AbandonedRegtest { .. }))
+            && self.resolution_verified
+        {
+            return Err("an abandoned recovery cannot claim verified resolution".into());
+        }
+        Ok(())
+    }
 }
 
 /// Why a new desktop scenario cannot start yet.
@@ -89,19 +123,27 @@ impl FileJournal {
     }
     /// Refuse new work while any previous protected identity needs recovery.
     pub fn refuse_pending(base: &Path) -> Result<(), PendingRecovery> {
-        if !base.exists() {
-            return Ok(());
+        match Self::pending(base).map_err(PendingRecovery::Io)?.first() {
+            Some(manifest) => Err(PendingRecovery::Unresolved(manifest.run_id.clone())),
+            None => Ok(()),
         }
-        for entry in std::fs::read_dir(base).map_err(|e| PendingRecovery::Io(e.to_string()))? {
-            let entry = entry.map_err(|e| PendingRecovery::Io(e.to_string()))?;
-            let journal = Self::open(&entry.path()).map_err(PendingRecovery::Io)?;
-            if !journal.snapshot().closed {
-                return Err(PendingRecovery::Unresolved(
-                    journal.snapshot().run_id.clone(),
-                ));
+    }
+    /// Read-only inventory of every journal that still blocks new work,
+    /// oldest run first. Any unreadable journal fails the whole inventory.
+    pub fn pending(base: &Path) -> Result<Vec<RecoveryManifest>, String> {
+        if !base.exists() {
+            return Ok(Vec::new());
+        }
+        let mut pending = Vec::new();
+        for entry in std::fs::read_dir(base).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let manifest = Self::open(&entry.path())?.snapshot();
+            if manifest.state().is_pending() {
+                pending.push(manifest);
             }
         }
-        Ok(())
+        pending.sort_by(|a, b| a.run_id.as_str().cmp(b.run_id.as_str()));
+        Ok(pending)
     }
     /// Create metadata before actor startup; no overwrite of an existing run.
     pub fn create(base: &Path, manifest: RecoveryManifest) -> Result<Self, String> {
@@ -128,6 +170,7 @@ impl FileJournal {
         if root.file_name().and_then(|s| s.to_str()) != Some(manifest.run_id.as_str()) {
             return Err("recovery run identity does not match its directory".into());
         }
+        manifest.validate()?;
         Ok(Self {
             root: root.to_path_buf(),
             manifest: Mutex::new(manifest),
@@ -173,12 +216,64 @@ impl FileJournal {
     }
     /// Change the completion record only after caller verification.
     pub fn close(&self) -> Result<(), String> {
-        self.update(|manifest| manifest.closed = true)
+        self.transition(|manifest| match manifest.state() {
+            RecoveryOutcome::AbandonedRegtest { .. } => {
+                Err("an abandoned recovery cannot be marked resolved".into())
+            }
+            _ => {
+                manifest.closed = true;
+                manifest.outcome = Some(RecoveryOutcome::Resolved);
+                Ok(())
+            }
+        })
+    }
+    /// Close a pending journal whose regtest stack was destroyed. The caller
+    /// proves every safety gate first; this only enforces the transition.
+    pub fn abandon(
+        &self,
+        reason: AbandonReason,
+        abandoned_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), String> {
+        self.transition(|manifest| {
+            if !manifest.state().is_pending() {
+                return Err(format!(
+                    "recovery is already {}; it cannot be abandoned",
+                    manifest.state().as_str()
+                ));
+            }
+            manifest.closed = true;
+            manifest.outcome = Some(RecoveryOutcome::AbandonedRegtest {
+                reason,
+                abandoned_at,
+            });
+            Ok(())
+        })
+    }
+    /// Record the network each actor's node reported for itself.
+    pub fn record_node_networks(&self, networks: BTreeMap<String, String>) -> Result<(), String> {
+        self.transition(|manifest| {
+            let environment = manifest
+                .environment
+                .as_mut()
+                .ok_or("recovery manifest records no environment")?;
+            environment.node_networks = networks;
+            Ok(())
+        })
     }
     fn update(&self, action: impl FnOnce(&mut RecoveryManifest)) -> Result<(), String> {
+        self.transition(|manifest| {
+            action(manifest);
+            Ok(())
+        })
+    }
+    fn transition(
+        &self,
+        action: impl FnOnce(&mut RecoveryManifest) -> Result<(), String>,
+    ) -> Result<(), String> {
         let mut current = self.manifest.lock().unwrap_or_else(|p| p.into_inner());
         let mut next = current.clone();
-        action(&mut next);
+        action(&mut next)?;
+        next.validate()?;
         self.save(&next)?;
         *current = next;
         Ok(())

@@ -190,3 +190,45 @@ fn a_leak_discards_the_partial_bundle_but_other_errors_keep_it() {
     assert!(matches!(error, PublishError::Io { .. }));
     assert!(out.exists(), "other errors keep the bundle for inspection");
 }
+
+#[test]
+fn an_abandoned_recovery_is_published_as_a_failed_run_with_its_evidence() {
+    let world = world();
+    let dir = run_dir(&world, "r2");
+    std::fs::write(
+        dir.join(files::SUMMARY),
+        SUMMARY.replace(r#""passed": false"#, r#""passed": true"#),
+    )
+    .unwrap();
+    crate::recovery_abandon::write_test_artifact(&dir);
+    let out = world.dir.path().join("bundle-abandoned");
+
+    let manifest = publish_run(&world.config, "r2", &out, PublishOptions::default()).unwrap();
+
+    assert!(manifest.recovery_abandoned);
+    assert_eq!(manifest.passed, Some(false));
+    assert!(manifest.render().contains("RECOVERY ABANDONED"));
+    let evidence = crate::recovery_abandon::read_artifact(&out).expect("evidence is published");
+    assert!(!evidence.resolution_verified);
+    assert!(evidence.statement.contains("NOT verified"));
+}
+
+#[test]
+fn a_prepared_or_unreadable_abandonment_record_publishes_a_failed_run() {
+    for corrupt in [false, true] {
+        let world = world();
+        let dir = run_dir(&world, "r3");
+        std::fs::write(
+            dir.join(files::SUMMARY),
+            SUMMARY.replace(r#""passed": false"#, r#""passed": true"#),
+        )
+        .unwrap();
+        crate::recovery_abandon::write_incomplete_test_artifacts(&dir, corrupt);
+        let out = world.dir.path().join("bundle-incomplete");
+
+        let manifest = publish_run(&world.config, "r3", &out, PublishOptions::default()).unwrap();
+
+        assert!(manifest.recovery_abandoned, "corrupt={corrupt}");
+        assert_eq!(manifest.passed, Some(false));
+    }
+}

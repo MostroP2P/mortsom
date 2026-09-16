@@ -453,6 +453,27 @@ closed manifest is authoritative.
 A killed run leaves active-runtime markers and later invocations fail closed. Markers are never removed just
 to bypass that refusal.
 
+`stack up` and `stack down` are refused while a pending journal's original stack still exists or cannot be
+proved gone; `--replace` is never permission to destroy recoverable state. The journal records, at creation,
+the facts a later abandonment is checked against: lane, mainnet permission, the Mortsom-owned stack
+directory, the artifacts directory the run wrote to, whether both actors used the stack's own LND nodes, and
+the network each node reported. Nothing is inferred from the lane name.
+
+`mortsom recovery abandon <run-id> --reason stack-destroyed --confirm-run <run-id>` is the only terminal path
+for a journal whose Mortsom-owned regtest stack is provably destroyed. It requires a pending journal, a
+recorded environment that is not canary, never allowed mainnet, attached to a Mortsom-owned stack and used
+the stack's own regtest nodes, and live proof that the original stack identity is recorded nowhere: not in
+the recorded directory, the selected directory or the Compose project. Anything unreadable or unowned fails
+closed. Only a journal that recorded these facts and its artifact directory can be abandoned; journals
+written before they were recorded are refused, and the selected configuration is never a substitute.
+Sanitized evidence is written in a fixed order: a prepared `recovery-abandonment.json` in the run's recorded
+artifact directory, `abandonment.json` in the journal, the journal turning terminal, the public record
+finalized, and retained storage removed last, with every removal reported even when a later one fails.
+Reports, accounting, parity, publish and offline cleanup treat any present record, prepared, finalized or
+unreadable, as abandonment, so an interrupted abandonment fails closed from its first write; rerunning the
+command finishes it, and cleanup that verifies resolution instead discards only a prepared record. Abandonment verifies no order and no payment: the run is
+failed, is never reported as cleaned up, never reaches parity, and is counted as a leftover in accounting.
+
 ## 12. Evidence and reports
 
 Each run writes to ignored `artifacts/<run-id>/`: summary, timeline, per-actor screenshots and accessibility
