@@ -15,6 +15,9 @@ pub struct StackSnapshot {
     /// Actual container image identity.
     pub daemon_image: DaemonImage,
     /// How that image was selected, and the exact commit when built here.
+    /// Summaries written before this field existed read as
+    /// [`DaemonProvenance::Unrecorded`].
+    #[serde(default)]
     pub daemon_source: DaemonProvenance,
     /// Expectations which still require scenario verification.
     pub declared_limits: DeclaredLimits,
@@ -75,7 +78,7 @@ impl DaemonImage {
 
 /// How the daemon image was selected. Together with [`DaemonImage`] this
 /// names exactly which daemon a run tested.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum DaemonProvenance {
     /// Mortsom's pinned release, pulled by tag and pinned by digest.
@@ -87,13 +90,21 @@ pub enum DaemonProvenance {
     },
     /// A Mostro branch or pull request built here with `--mostro-ref`.
     GitRef(crate::git_source::RemoteSelection),
+    /// Read from a record another Mortsom version wrote: one from before
+    /// provenance was recorded, or one with a kind this version does not
+    /// know. Never written by this version.
+    #[default]
+    #[serde(other)]
+    Unrecorded,
 }
 
 impl DaemonProvenance {
     /// Rejects a record whose source and image identity disagree: a pulled
-    /// image carries an official digest, a built one its commit tag.
+    /// image carries an official digest, a built one its commit tag. A
+    /// record without provenance is only ever read, never written.
     pub(crate) fn validate(&self, image: &DaemonImage) -> Result<(), StackError> {
         let consistent = match self {
+            Self::Unrecorded => false,
             Self::PinnedImage => image.repository_digest.is_some(),
             Self::Image { requested } => {
                 !requested.is_empty()
@@ -117,6 +128,7 @@ impl std::fmt::Display for DaemonProvenance {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::PinnedImage => formatter.write_str("pinned release"),
+            Self::Unrecorded => formatter.write_str("not recorded"),
             Self::Image { requested } => write!(formatter, "image {requested}"),
             Self::GitRef(selection) => write!(
                 formatter,
@@ -233,6 +245,53 @@ mod tests {
             serde_json::from_value::<DaemonProvenance>(encoded).unwrap(),
             source
         );
+    }
+
+    #[test]
+    fn a_snapshot_written_before_provenance_existed_still_reads_and_says_so() {
+        // Arrange: the `stack` object of a summary.json from an earlier
+        // Mortsom, which never recorded how its daemon was selected.
+        let legacy = serde_json::json!({
+            "daemon_pubkey": "f17567fc60819e74b8536649ea9a5782ec63133c32ec9101402c8b72f66a90c5",
+            "relay_url": "ws://127.0.0.1:7000",
+            "wallet_endpoints": {"alice": "https://127.0.0.1:10001"},
+            "daemon_image": {
+                "image_id": format!("sha256:{}", "a".repeat(64)),
+                "reference": format!("mostrop2p/mostro@sha256:{}", "b".repeat(64)),
+                "repository_digest": format!("sha256:{}", "b".repeat(64))
+            },
+            "declared_limits": {
+                "order_expiration_secs": 300, "hold_invoice_expiry_secs": 120,
+                "buyer_invoice_deadline_secs": 120, "fiat_window_secs": null,
+                "payout_invoice_min_expiry_secs": 300,
+                "max_inflight_payouts_per_destination": 2, "payout_dispatch_permits": 8
+            }
+        });
+
+        // Act
+        let snapshot: StackSnapshot = serde_json::from_value(legacy).unwrap();
+
+        // Assert: readable, and the gap is stated rather than invented.
+        assert_eq!(snapshot.daemon_source, DaemonProvenance::Unrecorded);
+        assert_eq!(snapshot.daemon_source.to_string(), "not recorded");
+        assert_eq!(
+            serde_json::to_value(&snapshot.daemon_source).unwrap(),
+            serde_json::json!({"kind": "unrecorded"})
+        );
+        assert!(
+            snapshot
+                .daemon_source
+                .validate(&snapshot.daemon_image)
+                .is_err(),
+            "a new record must never be written without provenance"
+        );
+    }
+
+    #[test]
+    fn a_provenance_kind_this_version_does_not_know_reads_as_unrecorded() {
+        let newer = serde_json::json!({"kind": "oci-artifact", "reference": "x"});
+        let source: DaemonProvenance = serde_json::from_value(newer).unwrap();
+        assert_eq!(source, DaemonProvenance::Unrecorded);
     }
 
     #[test]
