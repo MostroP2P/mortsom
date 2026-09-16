@@ -1,10 +1,24 @@
 //! `stack status`: what runs, what each node holds, which identity answers.
 use mortsom_ui_driver::process::CommandRunner;
 
+#[cfg(test)]
+#[path = "status_tests.rs"]
+mod status_tests;
+
 use super::compose::{BASE_SERVICES, Compose, DAEMON_SERVICE, attempt};
 use super::descriptor::Descriptor;
 use super::layout::Layout;
 use super::{StackError, image, nodes};
+
+/// Left margin every line of the report is written from.
+const INDENT: &str = "  ";
+/// SGR parameters: green for what is up, red for what is not, grey for the
+/// rules, and a bold pair for the verdict.
+const GREEN: &str = "32";
+const RED: &str = "31";
+const DIM: &str = "2";
+const BOLD_GREEN: &str = "1;32";
+const BOLD_RED: &str = "1;31";
 
 /// One Lightning node as `lncli` reports it, or unreachable.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,56 +126,143 @@ impl Status {
             && self.daemon_matches_image
     }
 
-    /// Human report; one line per service and node, then the verdict.
+    /// Plain-text report, one line per service and node, then the verdict.
+    /// This is what goes into an error message and what scripts read, so it
+    /// never carries escape sequences.
     pub fn render(&self) -> String {
-        let mut out = String::from("services\n");
+        self.render_with_color(false)
+    }
+
+    /// [`render`](Self::render), optionally styled for a terminal.
+    ///
+    /// A badge is what the eye finds in a screenful of output, so the state
+    /// of every service and node leads its line. Colour wraps the badges and
+    /// the verdict only: the words themselves — and anything grepping for
+    /// them — are the same either way.
+    pub fn render_with_color(&self, color: bool) -> String {
+        let paint = |code: &str, text: &str| {
+            if color {
+                format!("\u{1b}[{code}m{text}\u{1b}[0m")
+            } else {
+                text.to_owned()
+            }
+        };
+        // No fixed width fits this report: a daemon image pinned by digest
+        // is longer than any number worth hard-coding, and a stack that is
+        // down prints nothing but short lines. The frame is measured off
+        // the unpainted body, since escape sequences occupy no columns.
+        let bare = |_: &str, text: &str| text.to_owned();
+        let rule_width = self
+            .body(&bare)
+            .lines()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or_default()
+            .saturating_sub(INDENT.len());
+        let rule = format!("{INDENT}{}\n", paint(DIM, &"─".repeat(rule_width)));
+        let mut out = String::new();
+        out.push_str(&rule);
+        out.push_str(&format!("{INDENT}stack\n"));
+        out.push_str(&rule);
+        out.push_str(&self.body(&paint));
+        out
+    }
+
+    /// Everything under the heading: what runs, what each node holds, the
+    /// identity in effect and the verdict.
+    fn body(&self, paint: &impl Fn(&str, &str) -> String) -> String {
+        let mut out = self.services_block(paint);
+        out.push_str(&self.nodes_block(paint));
+        out.push_str(&self.daemon_block(paint));
+        out.push_str(&self.verdict_line(paint));
+        out
+    }
+
+    /// One line per expected service. A container that was removed rather
+    /// than stopped is absent from `ps` entirely, so it reads as gone rather
+    /// than being silently left off the report.
+    fn services_block(&self, paint: &impl Fn(&str, &str) -> String) -> String {
+        let mut out = String::new();
         for name in BASE_SERVICES
             .into_iter()
             .chain(std::iter::once(DAEMON_SERVICE))
         {
-            let state = self
-                .services
-                .iter()
-                .find(|service| service.name == name)
-                .map_or("absent", |service| service.state.as_str());
-            out.push_str(&format!("  {name:<10} {state}\n"));
+            let line = match self.services.iter().find(|service| service.name == name) {
+                Some(service) if service.is_running() => {
+                    format!("{} {name} ({})", paint(GREEN, "[UP]"), service.state)
+                }
+                Some(service) => {
+                    format!("{} {name} ({})", paint(RED, "[DOWN]"), service.state)
+                }
+                None => format!("{} {name} (no container)", paint(RED, "[GONE]")),
+            };
+            out.push_str(&format!("{INDENT}{line}\n"));
         }
-        out.push_str("nodes\n");
+        out
+    }
+
+    /// One line per node. A node answering about channels but holding none
+    /// is up and idle; rounding that to "unreachable" would hide which half
+    /// is wrong.
+    fn nodes_block(&self, paint: &impl Fn(&str, &str) -> String) -> String {
+        let mut out = String::new();
         for node in &self.nodes {
-            let line = match (node.active_channels, node.confirmed_sats) {
+            let detail = match (node.active_channels, node.confirmed_sats) {
                 (Some(channels), Some(sats)) => {
                     format!("{channels} active channel(s), {sats} confirmed sats")
                 }
                 _ => "unreachable".to_owned(),
             };
-            out.push_str(&format!("  {:<10} {line}\n", node.name));
-        }
-        match &self.descriptor {
-            Some(descriptor) => {
-                out.push_str(&format!("daemon      {}\n", descriptor.daemon_pubkey));
-                out.push_str(&format!(
-                    "image       {}\n",
-                    descriptor.daemon_image.reference
-                ));
-                if !self.daemon_matches_image {
-                    out.push_str("            the running container is not this image\n");
-                }
-            }
-            None => {
-                out.push_str("daemon      no identity; `mortsom stack up` has not completed here\n")
-            }
-        }
-        let missing = self.missing_services();
-        if self.is_ready() {
-            out.push_str("stack       ready\n");
-        } else if missing.is_empty() {
-            out.push_str("stack       not ready\n");
-        } else {
-            out.push_str(&format!(
-                "stack       not ready; not running: {}\n",
-                missing.join(", ")
-            ));
+            let badge = if node.active_channels.is_some_and(|count| count > 0) {
+                paint(GREEN, "[OK]")
+            } else {
+                paint(RED, "[--]")
+            };
+            out.push_str(&format!("{INDENT}{badge} lnd-{}: {detail}\n", node.name));
         }
         out
+    }
+
+    /// The identity and image in effect: which build is running decides what
+    /// a result means, and a container that is not the recorded image makes
+    /// every result meaningless.
+    fn daemon_block(&self, paint: &impl Fn(&str, &str) -> String) -> String {
+        match &self.descriptor {
+            Some(descriptor) => {
+                let mut out = format!(
+                    "{INDENT}daemon identity: {}\n{INDENT}daemon image: {}\n",
+                    descriptor.daemon_pubkey, descriptor.daemon_image.reference
+                );
+                if !self.daemon_matches_image {
+                    out.push_str(&format!(
+                        "{INDENT}{} the running container is not this image\n",
+                        paint(RED, "[--]")
+                    ));
+                }
+                out
+            }
+            None => format!(
+                "{INDENT}{} no daemon identity on disk: run `mortsom stack up`\n",
+                paint(RED, "[--]")
+            ),
+        }
+    }
+
+    /// The line a tired operator looks at first; it still names what is not
+    /// running.
+    fn verdict_line(&self, paint: &impl Fn(&str, &str) -> String) -> String {
+        let missing = self.missing_services();
+        if self.is_ready() {
+            return format!("{INDENT}stack: {}\n", paint(BOLD_GREEN, "ready"));
+        }
+        let verdict = paint(BOLD_RED, "not ready");
+        if missing.is_empty() {
+            format!("{INDENT}stack: {verdict}\n")
+        } else {
+            format!(
+                "{INDENT}stack: {verdict}; not running: {}\n",
+                missing.join(", ")
+            )
+        }
     }
 }
