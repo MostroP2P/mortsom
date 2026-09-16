@@ -301,7 +301,8 @@ pub(crate) fn remove_storage(journal: &FileJournal) -> Result<(), String> {
     std::fs::File::open(journal.root())
         .and_then(|file| file.sync_all())
         .map_err(|e| e.to_string())?;
-    journal.close()
+    journal.close()?;
+    crate::recovery_abandon::discard_prepared(&journal.snapshot())
 }
 
 /// Internal cleanup narrative; never registered as an accepted scenario.

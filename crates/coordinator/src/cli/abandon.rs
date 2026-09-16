@@ -19,7 +19,6 @@ fn journal_base() -> Result<PathBuf, String> {
 }
 
 pub(super) async fn abandon_command(
-    config_path: &Path,
     stack_dir: &Path,
     run: &str,
     reason: AbandonReason,
@@ -27,21 +26,13 @@ pub(super) async fn abandon_command(
 ) -> ExitCode {
     let prepared = journal_base().and_then(|base| {
         let run_id: mortsom_common::RunId = run.parse()?;
-        let config =
-            crate::config::MaintenanceConfig::load(config_path).map_err(|e| e.to_string())?;
         let journal = base.join(run_id.as_str());
         if !journal.is_dir() {
             return Err(format!("no recovery journal is retained for run {run_id}"));
         }
-        let artifacts = std::path::absolute(&config.run.artifacts_dir).map_err(|e| {
-            format!(
-                "cannot resolve artifacts_dir {}: {e}",
-                config.run.artifacts_dir
-            )
-        })?;
-        Ok((run_id, journal, artifacts))
+        Ok((run_id, journal))
     });
-    let (run_id, journal, artifacts) = match prepared {
+    let (run_id, journal) = match prepared {
         Ok(prepared) => prepared,
         Err(error) => {
             eprintln!("{error}");
@@ -55,7 +46,6 @@ pub(super) async fn abandon_command(
     };
     let paths = AbandonPaths {
         journal: &journal,
-        artifacts_dir: &artifacts,
         selected_stack: stack_dir,
     };
     let inspector = LiveStacks {

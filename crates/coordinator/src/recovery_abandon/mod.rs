@@ -11,7 +11,7 @@ mod live;
 
 pub use assess::{LiveFacts, StackInspector, StackPresence, gate, presence};
 pub use guard::{LifecycleOperation, abandon_hint, lifecycle_guard};
-pub use live::{LiveStacks, RealStorage};
+pub use live::{LiveStacks, RealStorage, Removal};
 
 use std::path::{Path, PathBuf};
 
@@ -61,6 +61,41 @@ pub struct AbandonmentEvidence {
     pub resolution_verified: bool,
     /// [`NOT_VERIFIED`].
     pub statement: String,
+    /// False in the record prepared before the journal turns terminal, true
+    /// once it has. A missing field is read as prepared.
+    #[serde(default)]
+    pub finalized: bool,
+}
+
+/// What a run's artifact directory says about abandonment. Anything but
+/// [`Abandonment::None`] makes the run failed and never clean: a prepared
+/// record belongs to an abandonment that may still be in progress, and an
+/// unreadable one is treated as abandonment rather than ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Abandonment {
+    /// No record.
+    None,
+    /// The record written before the journal turned terminal.
+    Prepared(AbandonmentEvidence),
+    /// The record written after the journal turned terminal.
+    Finalized(AbandonmentEvidence),
+    /// A record is present but cannot be read; holds why.
+    Unreadable(String),
+}
+
+impl Abandonment {
+    /// Whether the run must be reported as abandoned.
+    pub fn is_abandoned(&self) -> bool {
+        !matches!(self, Self::None)
+    }
+
+    /// The readable record, prepared or finalized.
+    pub fn evidence(&self) -> Option<&AbandonmentEvidence> {
+        match self {
+            Self::Prepared(evidence) | Self::Finalized(evidence) => Some(evidence),
+            Self::None | Self::Unreadable(_) => None,
+        }
+    }
 }
 
 /// What `abandon` did.
@@ -121,17 +156,15 @@ impl AbandonReport {
 
 /// Removal of the retained client profiles and captured bundle.
 pub trait RetainedStorage {
-    /// Removes what remains under `root` and names what it removed.
-    fn remove(&self, root: &Path) -> Result<Vec<PathBuf>, String>;
+    /// Removes what remains under `root`, naming what it removed even when
+    /// it stopped early.
+    fn remove(&self, root: &Path) -> Removal;
 }
 
 /// Where abandonment reads and writes.
 pub struct AbandonPaths<'a> {
     /// The journal's directory.
     pub journal: &'a Path,
-    /// The configured artifacts directory; used only when the journal did
-    /// not record the directory the run wrote to.
-    pub artifacts_dir: &'a Path,
     /// The stack directory the operator selected.
     pub selected_stack: &'a Path,
 }
@@ -162,25 +195,31 @@ pub async fn abandon(
             ));
         }
     };
-    let evidence = if already_abandoned {
+    let prepared = if already_abandoned {
         read_evidence(&paths.journal.join(JOURNAL_FILE))?
     } else {
         prove(request, &manifest, paths, inspector, now).await?
     };
-    let run_artifacts = run_artifacts(&manifest, paths.artifacts_dir)?;
+    let run_artifacts = run_artifacts(&manifest)?;
     if !already_abandoned {
-        // The protected record is durable before the journal turns
-        // terminal; the public copy only ever exists after it, so an
-        // interrupted abandonment never leaves a pending journal that
-        // reports and accounting read as abandoned.
-        write_evidence(paths.journal, JOURNAL_FILE, &evidence)?;
+        // Reports fail closed from the prepared public record on: a
+        // coordinator killed anywhere after this leaves a run that is
+        // never clean, whether its journal is still pending (the operator
+        // reruns this command, or cleanup resolves it and discards the
+        // record) or already terminal (a rerun finalizes the record).
+        write_evidence(&run_artifacts, ARTIFACT_FILE, &prepared)?;
+        write_evidence(paths.journal, JOURNAL_FILE, &prepared)?;
         journal.abandon(request.reason, now)?;
     }
-    write_evidence(&run_artifacts, ARTIFACT_FILE, &evidence)?;
-    let (removed, removal_error) = match storage.remove(paths.journal) {
-        Ok(removed) => (removed, None),
-        Err(error) => (Vec::new(), Some(error)),
+    let evidence = AbandonmentEvidence {
+        finalized: true,
+        ..prepared
     };
+    write_evidence(&run_artifacts, ARTIFACT_FILE, &evidence)?;
+    let Removal {
+        removed,
+        error: removal_error,
+    } = storage.remove(paths.journal);
     Ok(AbandonReport {
         evidence,
         already_abandoned,
@@ -232,6 +271,7 @@ async fn prove(
         abandoned_at: now,
         resolution_verified: false,
         statement: NOT_VERIFIED.to_owned(),
+        finalized: false,
     })
 }
 
@@ -243,23 +283,27 @@ fn recorded_dir(manifest: &RecoveryManifest) -> Result<PathBuf, String> {
         .ok_or_else(|| "the journal records no Mortsom-owned stack directory".to_owned())
 }
 
-/// The run's own artifact directory: the one the journal recorded, else the
-/// configured one. It must already exist; evidence is never written to a
-/// directory the run's reports do not live in.
-fn run_artifacts(manifest: &RecoveryManifest, configured: &Path) -> Result<PathBuf, String> {
-    let base = manifest
+/// The run's own artifact directory, as the journal recorded it. A journal
+/// that recorded none cannot be abandoned: the selected configuration is
+/// no proof of where the run's reports live. The directory must exist.
+fn run_artifacts(manifest: &RecoveryManifest) -> Result<PathBuf, String> {
+    let run = &manifest.run_id;
+    let Some(base) = manifest
         .environment
         .as_ref()
         .and_then(|environment| environment.artifacts_dir.as_deref())
-        .unwrap_or(configured);
-    let run_dir = base.join(manifest.run_id.as_str());
+    else {
+        return Err(format!(
+            "recovery {run} predates the recorded artifact directory; it cannot be abandoned"
+        ));
+    };
+    let run_dir = base.join(run.as_str());
     if run_dir.is_dir() {
         return Ok(run_dir);
     }
     Err(format!(
-        "the artifact directory of run {} is missing at {}; restore it or select the \
-         configuration the run used, so the abandonment is recorded next to its reports",
-        manifest.run_id,
+        "the artifact directory of run {run} is missing at {}; restore it so the abandonment \
+         is recorded next to the run's reports",
         run_dir.display()
     ))
 }
@@ -282,10 +326,54 @@ fn read_evidence(path: &Path) -> Result<AbandonmentEvidence, String> {
     serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
-/// The abandonment record a run directory holds, if any.
+/// What `run_dir` records about abandonment. Only a missing file means
+/// none; every other outcome marks the run abandoned.
+pub fn abandonment(run_dir: &Path) -> Abandonment {
+    let path = run_dir.join(ARTIFACT_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Abandonment::None,
+        Err(error) => return Abandonment::Unreadable(format!("{}: {error}", path.display())),
+    };
+    match serde_json::from_str::<AbandonmentEvidence>(&text) {
+        Ok(evidence) if evidence.finalized => Abandonment::Finalized(evidence),
+        Ok(evidence) => Abandonment::Prepared(evidence),
+        Err(error) => Abandonment::Unreadable(format!("{}: {error}", path.display())),
+    }
+}
+
+/// The readable abandonment record a run directory holds, if any.
 pub fn read_artifact(run_dir: &Path) -> Option<AbandonmentEvidence> {
-    let text = std::fs::read_to_string(run_dir.join(ARTIFACT_FILE)).ok()?;
-    serde_json::from_str(&text).ok()
+    abandonment(run_dir).evidence().cloned()
+}
+
+/// Removes the prepared record an abandonment interrupted before its journal
+/// turned terminal left behind, once that journal is verified resolved
+/// instead. A finalized or unreadable record is never removed: next to a
+/// resolved journal it is a contradiction to investigate, and the run keeps
+/// failing closed until someone does.
+pub fn discard_prepared(manifest: &RecoveryManifest) -> Result<(), String> {
+    if manifest.state() != RecoveryOutcome::Resolved {
+        return Ok(());
+    }
+    let Some(base) = manifest
+        .environment
+        .as_ref()
+        .and_then(|environment| environment.artifacts_dir.as_deref())
+    else {
+        return Ok(());
+    };
+    let run_dir = base.join(manifest.run_id.as_str());
+    if !matches!(abandonment(&run_dir), Abandonment::Prepared(_)) {
+        return Ok(());
+    }
+    let path = run_dir.join(ARTIFACT_FILE);
+    std::fs::remove_file(&path).map_err(|error| {
+        format!(
+            "recovery is resolved but its prepared abandonment record {} cannot be removed: {error}",
+            path.display()
+        )
+    })
 }
 
 /// The command that closes `run_id`, as printed to operators.
@@ -293,10 +381,30 @@ pub fn command_for(run_id: &RunId) -> String {
     format!("mortsom recovery abandon {run_id} --reason stack-destroyed --confirm-run {run_id}")
 }
 
-/// A valid evidence document, for report tests elsewhere in the crate.
+/// A valid finalized evidence document, for report tests elsewhere in the
+/// crate.
+#[cfg(test)]
+pub(crate) fn write_test_artifact(run_dir: &Path) {
+    write_test_artifact_with(run_dir, true);
+}
+
+/// A record that consumers must still read as abandonment: prepared but
+/// never finalized, or unreadable.
 #[cfg(test)]
 #[allow(clippy::expect_used)]
-pub(crate) fn write_test_artifact(run_dir: &Path) {
+pub(crate) fn write_incomplete_test_artifacts(run_dir: &Path, corrupt: bool) {
+    if corrupt {
+        std::fs::create_dir_all(run_dir).expect("run dir");
+        std::fs::write(run_dir.join(ARTIFACT_FILE), b"{\"run_id\": \"truncated")
+            .expect("evidence file");
+    } else {
+        write_test_artifact_with(run_dir, false);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+fn write_test_artifact_with(run_dir: &Path, finalized: bool) {
     let evidence = AbandonmentEvidence {
         run_id: RunId::new(),
         reason: AbandonReason::StackDestroyed,
@@ -309,6 +417,7 @@ pub(crate) fn write_test_artifact(run_dir: &Path) {
         abandoned_at: Utc::now(),
         resolution_verified: false,
         statement: NOT_VERIFIED.to_owned(),
+        finalized,
     };
     std::fs::create_dir_all(run_dir).expect("run dir");
     std::fs::write(

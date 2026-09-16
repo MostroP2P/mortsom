@@ -212,3 +212,23 @@ fn an_abandoned_recovery_is_published_as_a_failed_run_with_its_evidence() {
     assert!(!evidence.resolution_verified);
     assert!(evidence.statement.contains("NOT verified"));
 }
+
+#[test]
+fn a_prepared_or_unreadable_abandonment_record_publishes_a_failed_run() {
+    for corrupt in [false, true] {
+        let world = world();
+        let dir = run_dir(&world, "r3");
+        std::fs::write(
+            dir.join(files::SUMMARY),
+            SUMMARY.replace(r#""passed": false"#, r#""passed": true"#),
+        )
+        .unwrap();
+        crate::recovery_abandon::write_incomplete_test_artifacts(&dir, corrupt);
+        let out = world.dir.path().join("bundle-incomplete");
+
+        let manifest = publish_run(&world.config, "r3", &out, PublishOptions::default()).unwrap();
+
+        assert!(manifest.recovery_abandoned, "corrupt={corrupt}");
+        assert_eq!(manifest.passed, Some(false));
+    }
+}

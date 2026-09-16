@@ -78,7 +78,7 @@ pub fn cleanup_run(config: &Config, run_id: &RunId) -> CleanupRunSummary {
     let (cleanup_report_found, unresolved_orders) = read_unresolved(&run_dir);
     // Orders count as verified only when the run's own sweep reported them;
     // a run that died before its sweep leaves them unknown, not clean.
-    let recovery_abandoned = crate::recovery_abandon::read_artifact(&run_dir).is_some();
+    let recovery_abandoned = crate::recovery_abandon::abandonment(&run_dir).is_abandoned();
     let clean = cleanup_report_found && unresolved_orders.is_empty() && !recovery_abandoned;
     let summary = CleanupRunSummary {
         run_id: run_id.to_owned(),

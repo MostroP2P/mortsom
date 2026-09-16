@@ -187,7 +187,7 @@ fn read_run(dir: &Path) -> Option<Option<RunLine>> {
         .map_err(|e| warn!(path = %path.display(), error = %e, "unreadable run summary"))
         .ok()?;
     let budget = summary.budget.as_ref();
-    let recovery_abandoned = crate::recovery_abandon::read_artifact(dir).is_some();
+    let recovery_abandoned = crate::recovery_abandon::abandonment(dir).is_abandoned();
     Some(Some(RunLine {
         run_id: summary.run_id.as_str().to_owned(),
         lane: summary.lane,
@@ -325,6 +325,24 @@ mod tests {
         assert_eq!(report.runs_abandoned, 1);
         assert_eq!(report.runs_with_leftovers, 1);
         assert!(report.render().contains("FAIL (recovery abandoned)"));
+    }
+
+    #[test]
+    fn a_prepared_or_unreadable_abandonment_record_is_still_a_failed_run() {
+        for corrupt in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let id = "20260815T100000Z-aaaaaa";
+            let run = dir.path().join(id);
+            std::fs::create_dir_all(&run).unwrap();
+            std::fs::write(run.join(files::SUMMARY), summary(id, "local", true, 0, "")).unwrap();
+            crate::recovery_abandon::write_incomplete_test_artifacts(&run, corrupt);
+
+            let report = build_accounting(dir.path(), None).unwrap();
+
+            assert!(report.runs[0].recovery_abandoned, "corrupt={corrupt}");
+            assert!(!report.runs[0].passed);
+            assert_eq!(report.runs_abandoned, 1);
+        }
     }
 
     #[test]

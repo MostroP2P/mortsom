@@ -125,3 +125,17 @@ fn an_abandoned_recovery_is_never_clean() {
     assert!(text.contains("recovery ABANDONED"), "{text}");
     assert!(text.contains("result: NOT clean"));
 }
+
+#[test]
+fn a_prepared_or_unreadable_abandonment_record_is_never_clean() {
+    for corrupt in [false, true] {
+        let world = world();
+        let run_dir = write_cleanup(&world, "run-incomplete", &[]);
+        crate::recovery_abandon::write_incomplete_test_artifacts(&run_dir, corrupt);
+
+        let summary = cleanup_run(&world.config, &"run-incomplete".parse().unwrap());
+
+        assert!(summary.recovery_abandoned, "corrupt={corrupt}");
+        assert!(!summary.clean);
+    }
+}

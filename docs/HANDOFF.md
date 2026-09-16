@@ -5,13 +5,20 @@ Repository content is English; the operator conversation is Spanish.
 
 ## Recovery abandonment (2026-09-16)
 
-Branch `feat/recovery-abandon` adds `mortsom recovery abandon <run-id> --reason stack-destroyed
+PR #45 (`feat/recovery-abandon`) adds `mortsom recovery abandon <run-id> --reason stack-destroyed
 --confirm-run <run-id>`, the only terminal path for a journal whose Mortsom-owned regtest stack was
 destroyed (spec section 11, runbook section 5). The journal now records `RecoveryEnvironment` at creation
-(lane, mainnet permission, stack directory, wallet backend, node networks) and `stack up`/`stack down` are
-guarded by pending journals. Abandonment is a failed run everywhere: `cleanup`, `accounting`, `parity` and
-`publish` read `recovery-abandonment.json`. Code lives in `crates/coordinator/src/recovery_abandon/` and
-`cli/abandon.rs`. The adapter test `selectors_match_the_v2_app_contract` reads the sibling `../mobilev2`
+(lane, mainnet permission, stack directory, artifacts directory, wallet backend, node networks) and
+`stack up`/`stack down` are refused while a pending journal's stack exists or cannot be proved gone.
+Abandonment is a failed run everywhere: `cleanup`, `accounting`, `parity` and `publish` treat any
+`recovery-abandonment.json`, prepared, finalized or unreadable, as abandonment. Code lives in
+`crates/coordinator/src/recovery_abandon/` and `cli/abandon.rs`.
+
+**Scope: journals created after this change only.** The retained legacy journal that motivated issue #43
+predates the recorded environment and is still refused; its stored evidence does not record the original
+stack directory, mainnet permission, wallet-to-stack binding, node networks or artifact directory, and no
+trustworthy source for them exists, so no backfill was attempted. Issue #43 stays open for that incident.
+A live acceptance of the abandon path on a newly recorded journal is still to be run. The adapter test `selectors_match_the_v2_app_contract` reads the sibling `../mobilev2`
 checkout and fails there for a missing `node.use_default` id; it is unrelated to this branch.
 
 ## Managed app preparation (2026-09-15)

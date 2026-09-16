@@ -180,10 +180,13 @@ impl ParityReport {
                 self.abandoned_runs.join(", ")
             ));
         }
+        let unexplained = self.scenarios.iter().any(|s| !s.findings.is_empty());
         out.push_str(if self.parity {
             "\nresult: parity (every difference is intentional)\n"
-        } else {
+        } else if unexplained {
             "\nresult: FINDINGS (unexplained differences above)\n"
+        } else {
+            "\nresult: FINDINGS (a run's recovery was abandoned; its cleanup was never verified)\n"
         });
         out
     }
@@ -288,7 +291,7 @@ fn load_run(dir: &Path) -> Result<LoadedRun, String> {
     Ok(LoadedRun {
         summary,
         timeline,
-        abandoned: crate::recovery_abandon::read_artifact(dir).is_some(),
+        abandoned: crate::recovery_abandon::abandonment(dir).is_abandoned(),
     })
 }
 
@@ -556,6 +559,60 @@ mod tests {
         assert!(report.render().contains("ABANDONED recovery"));
         let findings = compare_runs(dir.path(), "a", "b", &[]).unwrap();
         assert_eq!(findings.scenarios[0].findings, vec![Aspect::Cleanup]);
+    }
+
+    #[test]
+    fn the_result_line_names_abandonment_when_it_is_the_only_reason() {
+        let dir = tempfile::tempdir().unwrap();
+        let states = [("alice", "pending")];
+        for (id, profile) in [("a", "profile-b"), ("b", "mobile-v2")] {
+            write_run(
+                dir.path(),
+                id,
+                &summary(id, profile, &[("happy_sell", "passed")]),
+                &timeline(&states, &["pending"], false),
+            );
+        }
+        crate::recovery_abandon::write_test_artifact(&dir.path().join("b"));
+        let accepted = [Intentional {
+            scenario: "happy_sell".into(),
+            aspect: Aspect::Cleanup,
+            reason: "accepted".into(),
+        }];
+
+        let only_abandonment = compare_runs(dir.path(), "a", "b", &accepted)
+            .unwrap()
+            .render();
+        let with_findings = compare_runs(dir.path(), "a", "b", &[]).unwrap().render();
+
+        assert!(only_abandonment.contains("result: FINDINGS (a run's recovery was abandoned"));
+        assert!(!only_abandonment.contains("unexplained differences"));
+        assert!(with_findings.contains("result: FINDINGS (unexplained differences above)"));
+    }
+
+    #[test]
+    fn a_prepared_or_unreadable_abandonment_record_never_reaches_parity() {
+        for corrupt in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let states = [("alice", "pending")];
+            for (id, profile) in [("a", "profile-b"), ("b", "mobile-v2")] {
+                write_run(
+                    dir.path(),
+                    id,
+                    &summary(id, profile, &[("happy_sell", "passed")]),
+                    &timeline(&states, &["pending"], false),
+                );
+            }
+            crate::recovery_abandon::write_incomplete_test_artifacts(
+                &dir.path().join("b"),
+                corrupt,
+            );
+
+            let report = compare_runs(dir.path(), "a", "b", &[]).unwrap();
+
+            assert!(!report.parity, "corrupt={corrupt}");
+            assert_eq!(report.abandoned_runs, vec!["b".to_owned()]);
+        }
     }
 
     #[test]

@@ -428,9 +428,7 @@ pub async fn run(cli: Cli) -> ExitCode {
                     reason,
                     confirm_run,
                 },
-        } => {
-            abandon::abandon_command(&cli.config, &cli.stack_dir, &run, reason, &confirm_run).await
-        }
+        } => abandon::abandon_command(&cli.stack_dir, &run, reason, &confirm_run).await,
         Command::Publish {
             run,
             out,

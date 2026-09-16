@@ -218,7 +218,7 @@ pub fn publish_artifacts(
         skipped: Vec::new(),
         scenarios: Vec::new(),
         redacted_here: 0,
-        recovery_abandoned: crate::recovery_abandon::read_artifact(&run_dir).is_some(),
+        recovery_abandoned: crate::recovery_abandon::abandonment(&run_dir).is_abandoned(),
     };
     let mut paths = Vec::new();
     collect(&run_dir, &run_dir, &mut paths)?;

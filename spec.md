@@ -446,10 +446,14 @@ for a journal whose Mortsom-owned regtest stack is provably destroyed. It requir
 recorded environment that is not canary, never allowed mainnet, attached to a Mortsom-owned stack and used
 the stack's own regtest nodes, and live proof that the original stack identity is recorded nowhere: not in
 the recorded directory, the selected directory or the Compose project. Anything unreadable or unowned fails
-closed. Sanitized evidence is written in a fixed order: `abandonment.json` in the journal before the journal
-turns terminal, then `recovery-abandonment.json` in the run's recorded artifact directory, which must exist,
-then retained storage is removed. An interrupted abandonment therefore never leaves a pending journal whose
-artifacts read as abandoned; rerunning the command finishes the copy and the removal. Abandonment verifies no order and no payment: the run is
+closed. Only a journal that recorded these facts and its artifact directory can be abandoned; journals
+written before they were recorded are refused, and the selected configuration is never a substitute.
+Sanitized evidence is written in a fixed order: a prepared `recovery-abandonment.json` in the run's recorded
+artifact directory, `abandonment.json` in the journal, the journal turning terminal, the public record
+finalized, and retained storage removed last, with every removal reported even when a later one fails.
+Reports, accounting, parity, publish and offline cleanup treat any present record, prepared, finalized or
+unreadable, as abandonment, so an interrupted abandonment fails closed from its first write; rerunning the
+command finishes it, and cleanup that verifies resolution instead discards only a prepared record. Abandonment verifies no order and no payment: the run is
 failed, is never reported as cleaned up, never reaches parity, and is counted as a leftover in accounting.
 
 ## 12. Evidence and reports

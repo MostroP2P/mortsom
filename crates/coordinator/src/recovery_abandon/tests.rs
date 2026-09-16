@@ -119,26 +119,9 @@ impl Fixture {
         inspector: &dyn StackInspector,
         storage: &dyn RetainedStorage,
     ) -> Result<AbandonReport, String> {
-        self.abandon_from(
-            &self.dir.path().join("artifacts"),
-            request,
-            inspector,
-            storage,
-        )
-        .await
-    }
-
-    async fn abandon_from(
-        &self,
-        configured_artifacts: &Path,
-        request: &AbandonRequest,
-        inspector: &dyn StackInspector,
-        storage: &dyn RetainedStorage,
-    ) -> Result<AbandonReport, String> {
         let selected = self.selected();
         let paths = AbandonPaths {
             journal: &self.journal,
-            artifacts_dir: configured_artifacts,
             selected_stack: &selected,
         };
         abandon(request, &paths, inspector, storage, chrono::Utc::now()).await
@@ -190,7 +173,7 @@ struct FakeStorage {
 }
 
 impl RetainedStorage for FakeStorage {
-    fn remove(&self, root: &Path) -> Result<Vec<PathBuf>, String> {
+    fn remove(&self, root: &Path) -> Removal {
         let journal = FileJournal::open(root).unwrap().snapshot();
         let evidence = root.join(JOURNAL_FILE).is_file()
             && self
@@ -204,7 +187,10 @@ impl RetainedStorage for FakeStorage {
             .unwrap()
             .push((evidence, !journal.state().is_pending()));
         if self.fail {
-            return Err("injected removal failure".into());
+            return Removal {
+                removed: Vec::new(),
+                error: Some("injected removal failure".into()),
+            };
         }
         let mut removed = Vec::new();
         for name in ["actors", "bundle"] {
@@ -214,7 +200,10 @@ impl RetainedStorage for FakeStorage {
                 removed.push(path);
             }
         }
-        Ok(removed)
+        Removal {
+            removed,
+            error: None,
+        }
     }
 }
 
@@ -397,6 +386,10 @@ async fn an_evidence_write_failure_leaves_the_journal_pending_and_storage_intact
     assert!(storage.observed.lock().unwrap().is_empty());
     let base = fixture.journal.parent().unwrap();
     assert!(FileJournal::refuse_pending(base).is_err());
+    assert!(
+        matches!(abandonment(&fixture.artifacts()), Abandonment::Prepared(_)),
+        "the prepared public record already fails reports closed"
+    );
 }
 
 #[tokio::test]
@@ -469,11 +462,14 @@ async fn a_resolved_journal_cannot_be_abandoned() {
 fn real_storage_removes_the_bundle_and_refuses_an_unverified_profile() {
     let fixture = Fixture::new(|_| {});
     std::fs::remove_dir_all(fixture.journal.join("actors")).unwrap();
-    let removed = RealStorage.remove(&fixture.journal).unwrap();
-    assert_eq!(removed, vec![fixture.journal.join("bundle")]);
+    let removal = RealStorage.remove(&fixture.journal);
+    assert_eq!(removal.removed, vec![fixture.journal.join("bundle")]);
+    assert_eq!(removal.error, None);
 
     let fixture = Fixture::new(|_| {});
-    assert!(RealStorage.remove(&fixture.journal).is_err());
+    let refused = RealStorage.remove(&fixture.journal);
+    assert!(refused.error.is_some());
+    assert!(refused.removed.is_empty());
     assert!(fixture.storage_intact());
 }
 
@@ -574,27 +570,48 @@ async fn stack_lifecycle_refuses_while_a_pending_journal_cannot_be_proved_gone()
 }
 
 #[tokio::test]
-async fn evidence_lands_in_the_recorded_artifact_directory_not_the_configured_one() {
+async fn evidence_lands_only_in_the_recorded_artifact_directory() {
     let fixture = Fixture::new(|_| {});
-    let elsewhere = fixture.dir.path().join("elsewhere");
-
     let report = fixture
-        .abandon_from(
-            &elsewhere,
+        .abandon_with(
             &fixture.request(),
             &FakeInspector(nothing_left()),
             &FakeStorage::default(),
         )
         .await
         .unwrap();
-
-    assert!(read_artifact(&fixture.artifacts()).is_some());
-    assert!(!elsewhere.exists());
+    assert!(matches!(
+        abandonment(&fixture.artifacts()),
+        Abandonment::Finalized(_)
+    ));
+    assert!(report.evidence.finalized);
     assert!(
         report
             .preserved
             .contains(&fixture.artifacts().join(ARTIFACT_FILE))
     );
+
+    // A journal that never recorded where its run wrote is refused: the
+    // selected configuration proves nothing about the original tree.
+    let legacy = Fixture::new(|e| e.artifacts_dir = None);
+    let error = legacy
+        .abandon_with(
+            &legacy.request(),
+            &FakeInspector(nothing_left()),
+            &FakeStorage::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(
+        error.contains("predates the recorded artifact directory"),
+        "{error}"
+    );
+    assert!(legacy.state().is_pending());
+    assert!(!legacy.journal.join(JOURNAL_FILE).exists());
+    assert!(matches!(
+        abandonment(&legacy.artifacts()),
+        Abandonment::None
+    ));
 }
 
 #[tokio::test]
@@ -617,34 +634,74 @@ async fn a_missing_run_artifact_directory_refuses_before_the_journal_changes() {
     assert!(fixture.storage_intact());
 }
 
+/// A coordinator killed after the journal turned terminal but before the
+/// public record was finalized: reports already fail closed on the prepared
+/// record, and a rerun finalizes it without re-proving anything.
 #[tokio::test]
-async fn a_public_copy_that_fails_after_the_terminal_record_is_restored_on_rerun() {
+async fn a_terminal_journal_with_a_prepared_record_is_finalized_on_rerun() {
     let fixture = Fixture::new(|_| {});
-    let artifact = fixture.artifacts().join(ARTIFACT_FILE);
-    // A directory where the file must go makes only the public copy fail.
-    std::fs::create_dir(&artifact).unwrap();
+    write_incomplete_test_artifacts(&fixture.artifacts(), false);
+    let journal = FileJournal::open(&fixture.journal).unwrap();
+    let prepared = read_artifact(&fixture.artifacts()).unwrap();
+    std::fs::write(
+        fixture.journal.join(JOURNAL_FILE),
+        serde_json::to_string(&prepared).unwrap(),
+    )
+    .unwrap();
+    journal
+        .abandon(AbandonReason::StackDestroyed, chrono::Utc::now())
+        .unwrap();
+    assert!(abandonment(&fixture.artifacts()).is_abandoned());
 
-    let error = fixture
+    let live = LiveFacts {
+        recorded: ("/stack".into(), RecordedIdentity::Present(fingerprint('a'))),
+        ..replaced()
+    };
+    let report = fixture
         .abandon_with(
             &fixture.request(),
-            &FakeInspector(nothing_left()),
+            &FakeInspector(live),
+            &FakeStorage::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(report.already_abandoned);
+    assert!(report.evidence.finalized);
+    assert!(matches!(
+        abandonment(&fixture.artifacts()),
+        Abandonment::Finalized(_)
+    ));
+    assert!(!fixture.storage_intact());
+}
+
+/// A coordinator killed after the prepared record but before the journal
+/// turned terminal: the run fails closed meanwhile, and a rerun proves the
+/// gates again before finishing.
+#[tokio::test]
+async fn a_pending_journal_with_a_prepared_record_is_reproved_on_rerun() {
+    let fixture = Fixture::new(|_| {});
+    write_incomplete_test_artifacts(&fixture.artifacts(), false);
+    assert!(fixture.state().is_pending());
+
+    let live = LiveFacts {
+        recorded: ("/stack".into(), RecordedIdentity::Present(fingerprint('a'))),
+        ..replaced()
+    };
+    let refused = fixture
+        .abandon_with(
+            &fixture.request(),
+            &FakeInspector(live),
             &FakeStorage::default(),
         )
         .await
         .unwrap_err();
+    assert!(refused.contains("still exists"), "{refused}");
+    assert!(matches!(
+        abandonment(&fixture.artifacts()),
+        Abandonment::Prepared(_)
+    ));
 
-    assert!(error.contains(ARTIFACT_FILE), "{error}");
-    assert!(
-        !fixture.state().is_pending(),
-        "the protected record is terminal"
-    );
-    assert!(fixture.journal.join(JOURNAL_FILE).is_file());
-    assert!(
-        fixture.storage_intact(),
-        "nothing is removed before the copy exists"
-    );
-
-    std::fs::remove_dir(&artifact).unwrap();
     let report = fixture
         .abandon_with(
             &fixture.request(),
@@ -653,9 +710,65 @@ async fn a_public_copy_that_fails_after_the_terminal_record_is_restored_on_rerun
         )
         .await
         .unwrap();
-    assert!(report.already_abandoned);
-    assert!(read_artifact(&fixture.artifacts()).is_some());
-    assert!(!fixture.storage_intact());
+    assert!(!report.already_abandoned);
+    assert!(matches!(
+        abandonment(&fixture.artifacts()),
+        Abandonment::Finalized(_)
+    ));
+}
+
+#[test]
+fn every_present_record_counts_as_abandonment_and_only_a_missing_one_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    let run = dir.path().join("run");
+    assert_eq!(abandonment(&run), Abandonment::None);
+    std::fs::create_dir_all(&run).unwrap();
+    assert_eq!(abandonment(&run), Abandonment::None);
+
+    write_incomplete_test_artifacts(&run, false);
+    assert!(matches!(abandonment(&run), Abandonment::Prepared(_)));
+    write_test_artifact(&run);
+    assert!(matches!(abandonment(&run), Abandonment::Finalized(_)));
+    write_incomplete_test_artifacts(&run, true);
+    let unreadable = abandonment(&run);
+    assert!(
+        matches!(unreadable, Abandonment::Unreadable(_)),
+        "{unreadable:?}"
+    );
+    assert!(unreadable.is_abandoned());
+    assert!(unreadable.evidence().is_none());
+}
+
+/// Cleanup that verifies resolution after an abandonment died before its
+/// journal turned terminal discards the prepared record; anything else next
+/// to a resolved journal stays, so the contradiction is investigated.
+#[test]
+fn a_resolved_journal_discards_only_a_prepared_record() {
+    let fixture = Fixture::new(|_| {});
+    let journal = FileJournal::open(&fixture.journal).unwrap();
+    write_incomplete_test_artifacts(&fixture.artifacts(), false);
+    assert!(discard_prepared(&journal.snapshot()).is_ok());
+    assert!(
+        abandonment(&fixture.artifacts()).is_abandoned(),
+        "a pending journal discards nothing"
+    );
+
+    journal.close().unwrap();
+    discard_prepared(&journal.snapshot()).unwrap();
+    assert_eq!(abandonment(&fixture.artifacts()), Abandonment::None);
+
+    for corrupt in [false, true] {
+        if corrupt {
+            write_incomplete_test_artifacts(&fixture.artifacts(), true);
+        } else {
+            write_test_artifact(&fixture.artifacts());
+        }
+        discard_prepared(&journal.snapshot()).unwrap();
+        assert!(
+            abandonment(&fixture.artifacts()).is_abandoned(),
+            "{corrupt}"
+        );
+    }
 }
 
 #[test]

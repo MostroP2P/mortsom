@@ -96,14 +96,20 @@ when, and only when, every gate below is met. The command refuses otherwise:
 - the original stack identity is recorded nowhere on the host (recorded directory, selected directory,
   Compose project). An unreadable identity or a Compose project without one fails closed;
 - `--confirm-run` repeats the run id exactly;
-- the run's artifact directory still exists where the journal recorded it (or, for older journals, under
-  the configured `artifacts_dir`). Restore it or select the run's configuration; evidence is never written
-  next to some other run's reports.
+- the journal recorded its artifact directory and that directory still exists. Journals written before
+  Mortsom recorded these facts are refused; the selected configuration is never proof of where a run's
+  reports live. Such a journal stays pending and blocks new runs until a trustworthy record of the missing
+  facts exists (issue #43).
 
-`abandonment.json` is written in the journal directory first, then the journal turns terminal, then
-`recovery-abandonment.json` is copied into the run's artifact directory, then the retained profiles are
-removed. If any later step fails, rerun the same command; it finishes the copy and the removal without
-re-proving the gates. The run stays failed:
+The command writes a prepared `recovery-abandonment.json` into the run's artifact directory, then
+`abandonment.json` into the journal directory, then turns the journal terminal, then finalizes the public
+record, then removes the retained profiles and bundle, printing every path it removed even when a later
+removal fails. From the first write on, `cleanup`, `accounting`, `parity` and `publish` treat the run as
+abandoned, whether the record is prepared, finalized or unreadable; a present record is never ignored. If
+the command dies at any point, rerun it: a pending journal is proved again, a terminal one only finishes
+the record and the removal. If instead `cleanup` verifies resolution of a journal whose abandonment died
+before it turned terminal, cleanup discards the prepared record; a finalized or unreadable record next to a
+resolved journal is left for investigation and keeps the run failed. The run stays failed:
 `cleanup` reports it as abandoned with exit code 1, `accounting` counts it as a leftover, `parity` never
 accepts it and `publish` marks it failed. Abandonment never verifies an order or a payment and never counts
 as a clean cleanup. Never delete or edit journals by hand.
