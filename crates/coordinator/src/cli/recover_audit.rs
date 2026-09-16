@@ -59,6 +59,30 @@ impl RelayAudit {
     }
 }
 
+/// Where and how to fetch the daemon's order events for a run's window, so
+/// the same audit can be repeated later, after the retained clients ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayAuditSource {
+    pub relay_url: String,
+    pub daemon_pubkey: String,
+    /// Unix seconds; the run's start.
+    pub since: u64,
+    pub timeout: Duration,
+}
+
+impl RelayAuditSource {
+    /// A fresh audit of the window, as of now.
+    pub async fn fetch(&self) -> Result<RelayAudit, String> {
+        fetch(
+            &self.relay_url,
+            &self.daemon_pubkey,
+            self.since,
+            self.timeout,
+        )
+        .await
+    }
+}
+
 /// Fetches the daemon's order events since `since` (unix seconds) from
 /// `relay_url`. One entry per order, its newest status.
 pub async fn fetch(

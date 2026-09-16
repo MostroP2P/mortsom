@@ -5,7 +5,7 @@ mod isolation;
 mod maintenance;
 mod prepared;
 mod recover;
-mod recover_audit;
+pub(crate) mod recover_audit;
 mod run;
 mod source;
 use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};

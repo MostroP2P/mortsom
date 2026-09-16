@@ -1,5 +1,6 @@
 //! Durable desktop ownership and public UI recovery, separate from scenario narratives.
 use super::*;
+use crate::cli::recover_audit::{AuditedOrder, RelayAudit};
 use crate::recovery_store::{FileJournal, RecoveryEnvironment, RecoveryManifest, WalletBackend};
 use mortsom_common::Actor;
 use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
@@ -203,21 +204,48 @@ pub(crate) fn found_orders(journal: &FileJournal) -> Vec<String> {
         .collect()
 }
 
-/// Records as abandoned the submissions of `actors` that UI discovery left
-/// open. Discovery ran first, so an order the app lists always wins over the
-/// relay audit that ruled the submission out. Returns the actors recorded.
+/// Every open submission with the orders the daemon published in the run's
+/// window that neither the submission nor the journal already knows.
+pub(crate) fn candidates<'a>(
+    journal: &FileJournal,
+    audit: &'a RelayAudit,
+) -> Vec<(Actor, Vec<&'a AuditedOrder>)> {
+    let found = found_orders(journal);
+    open_submissions(journal)
+        .into_iter()
+        .map(|(actor, known_orders)| {
+            let known: Vec<String> = known_orders
+                .into_iter()
+                .chain(found.iter().cloned())
+                .collect();
+            (actor, audit.unknown(&known))
+        })
+        .collect()
+}
+
+/// Actors whose open submission the relay rules out: the daemon's public
+/// record shows no order the journal does not already know for the window.
+pub(crate) fn relay_ruled_out(journal: &FileJournal, audit: &RelayAudit) -> Vec<Actor> {
+    candidates(journal, audit)
+        .into_iter()
+        .filter_map(|(actor, unknown)| unknown.is_empty().then_some(actor))
+        .collect()
+}
+
+/// Records as abandoned every submission still open after UI discovery that
+/// a fresh relay `audit` rules out. Discovery ran first, so an order the app
+/// lists always wins; the audit is taken after the retained clients ran, so
+/// a request they finished late has had its chance to appear. Returns the
+/// actors recorded.
 pub(crate) fn abandon_ruled_out(
     journal: &FileJournal,
-    actors: &[Actor],
+    audit: &RelayAudit,
 ) -> Result<Vec<Actor>, String> {
-    let mut abandoned = Vec::new();
-    for (actor, _) in open_submissions(journal) {
-        if actors.contains(&actor) {
-            journal.record(RecoveryEvent::SubmissionAbandoned { actor })?;
-            abandoned.push(actor);
-        }
+    let ruled_out = relay_ruled_out(journal, audit);
+    for actor in &ruled_out {
+        journal.record(RecoveryEvent::SubmissionAbandoned { actor: *actor })?;
     }
-    Ok(abandoned)
+    Ok(ruled_out)
 }
 
 pub(crate) fn unresolved_submissions(journal: &FileJournal) -> bool {

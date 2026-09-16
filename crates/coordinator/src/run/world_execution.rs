@@ -83,20 +83,32 @@ impl World<'_> {
         let result =
             execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()).await;
         if let Some(journal) = self.desktop.recovery.as_ref() {
-            let discovered = recovery::discover(&ctx, journal).await;
-            // Only a completed discovery may let the relay audit close a
-            // submission: an order the app lists always wins.
-            let abandoned = match &discovered {
-                Ok(()) => recovery::abandon_ruled_out(journal, &self.desktop.relay_ruled_out),
-                Err(_) => Ok(Vec::new()),
-            };
-            for actor in abandoned.as_deref().unwrap_or_default() {
-                tracing::info!(actor = %actor, "submission produced no order: app lists none and the relay published none");
-            }
-            if let Err(error) = discovered.and(abandoned.map(drop)) {
+            if let Err(error) = recovery::discover(&ctx, journal).await {
                 summary
                     .checks
                     .push("recovery-discovery", CheckStatus::Fail, error);
+            } else if let Some(source) = self.desktop.relay_audit.as_ref()
+                && recovery::unresolved_submissions(journal)
+            {
+                // Only after discovery, and against the relay as of now: an
+                // order the app lists wins, and a request the restarted
+                // client finished late has had its chance to appear.
+                let abandoned = match source.fetch().await {
+                    Ok(audit) => recovery::abandon_ruled_out(journal, &audit),
+                    Err(error) => Err(error),
+                };
+                match abandoned {
+                    Ok(actors) => {
+                        for actor in actors {
+                            tracing::info!(actor = %actor, "submission produced no order: the app lists none and the relay shows none");
+                        }
+                    }
+                    Err(error) => summary.checks.push(
+                        "recovery-relay-audit",
+                        CheckStatus::Fail,
+                        format!("cannot rule the open submission out: {error}"),
+                    ),
+                }
             }
         }
         execute::sweep_cleanup(&ctx).await;

@@ -159,7 +159,7 @@ pub(super) fn options(journal: Arc<FileJournal>) -> RunOptions {
             provenance: saved.build,
             xvfb: "unused".into(),
             browser: "unused".into(),
-            relay_ruled_out: Vec::new(),
+            relay_audit: None,
             chromedriver: "unused".into(),
         },
         stack: Some(stack()),

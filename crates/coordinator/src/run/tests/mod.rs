@@ -144,7 +144,7 @@ fn desktop_options(world: &World) -> DesktopOptions {
         bundle: Arc::new(bundle),
         xvfb: "unused-Xvfb".into(),
         browser: "unused-browser".into(),
-        relay_ruled_out: Vec::new(),
+        relay_audit: None,
         chromedriver: "unused-driver".into(),
     }
 }

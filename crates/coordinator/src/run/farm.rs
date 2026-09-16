@@ -38,10 +38,10 @@ pub struct DesktopOptions {
     pub chromedriver: PathBuf,
     /// Chromium executable.
     pub browser: PathBuf,
-    /// Actors whose started submission the relay audit ruled out before this
-    /// invocation: the daemon published no order the journal does not know.
-    /// Recorded as abandoned only after UI discovery found nothing either.
-    pub relay_ruled_out: Vec<mortsom_common::Actor>,
+    /// Relay audit of the run's window, repeated after UI discovery: a
+    /// started submission is recorded as abandoned only when the app lists
+    /// no order and the daemon published none the journal does not know.
+    pub relay_audit: Option<crate::cli::recover_audit::RelayAuditSource>,
 }
 
 impl DesktopOptions {

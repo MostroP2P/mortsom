@@ -146,7 +146,7 @@ async fn capture_options(
         xvfb,
         chromedriver: web_tools.chromedriver.path,
         browser: web_tools.browser.path,
-        relay_ruled_out: Vec::new(),
+        relay_audit: None,
     })
 }
 
