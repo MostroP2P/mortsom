@@ -349,9 +349,11 @@ A healthy checks table above a failed scenario is still a failed run.
 ```
 
 A submission the app never listed (a failure before or right after the create tap) is checked against the
-daemon's order events on the relay for the run's window. When the app lists no order for it and a relay audit
-taken after the retained clients ran shows no order the journal does not already know, cleanup records that
-the submission produced nothing and finishes on its own. When the relay does show
+daemon's order events on the relay for the run's window. The run itself performs that audit after the
+scenario, even when the app is stuck on a screen from which its trade list cannot be read: when the relay
+shows no order the journal does not already know, the run records that the submission produced nothing and
+releases its own profiles, so no cleanup is needed. A retained journal gets the same audit from cleanup,
+taken again after the retained clients ran. When the relay does show
 candidates, cleanup lists them with the exact commands: name the order with `--attribute-order alice=<order-id>`,
 or state `alice=none` when the daemon created none. An id must have been published in the window and not be
 known before the submission, and `none` is refused while any unknown order from that window is still open.

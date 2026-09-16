@@ -211,18 +211,11 @@ async fn recover(
     let mut hints = Vec::new();
     let mut relay_audit = None;
     if !attributions.is_empty() || crate::run::recovery::unresolved_submissions(&journal) {
-        let since = manifest
-            .run_id
-            .started_at()
-            .ok_or("cannot audit the relay: the run id carries no start time")?
-            .timestamp()
-            .max(0) as u64;
-        let source = super::recover_audit::RelayAuditSource {
-            relay_url: stack.relay_url.clone(),
-            daemon_pubkey: stack.daemon_pubkey.clone(),
-            since,
-            timeout: std::time::Duration::from_secs(config.mostro.health_timeout_secs),
-        };
+        let source = super::recover_audit::RelayAuditSource::for_run(
+            &stack,
+            &manifest.run_id,
+            std::time::Duration::from_secs(config.mostro.health_timeout_secs),
+        )?;
         let audit = source.fetch().await?;
         attribute_orders(&journal, attributions, &audit)?;
         for actor in crate::run::recovery::relay_ruled_out(&journal, &audit) {
@@ -328,13 +321,8 @@ mod tests {
     use mortsom_common::Actor;
     use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
 
-    fn journal_with(events: Vec<RecoveryEvent>) -> (tempfile::TempDir, FileJournal) {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source");
-        std::fs::create_dir(&source).unwrap();
-        std::fs::write(source.join("index.html"), b"fixture").unwrap();
-        let bundle = crate::fingerprint::CapturedBundle::capture(&source).unwrap();
-        let stack: crate::stack::StackSnapshot = serde_json::from_value(serde_json::json!({
+    fn stack_snapshot() -> crate::stack::StackSnapshot {
+        serde_json::from_value(serde_json::json!({
             "daemon_pubkey": "8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51",
             "relay_url": "ws://127.0.0.1:7000", "wallet_endpoints": {},
             "daemon_image": {"image_id": format!("sha256:{}", "a".repeat(64)),
@@ -344,7 +332,16 @@ mod tests {
             "declared_limits": {"order_expiration_secs": 300, "hold_invoice_expiry_secs": 120,
                 "buyer_invoice_deadline_secs": 120, "payout_invoice_min_expiry_secs": 300}
         }))
-        .unwrap();
+        .unwrap()
+    }
+
+    fn journal_with(events: Vec<RecoveryEvent>) -> (tempfile::TempDir, FileJournal) {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(source.join("index.html"), b"fixture").unwrap();
+        let bundle = crate::fingerprint::CapturedBundle::capture(&source).unwrap();
+        let stack = stack_snapshot();
         let journal = FileJournal::create(
             &dir.path().join("recovery"),
             RecoveryManifest {
@@ -662,5 +659,150 @@ mod tests {
             "{hint}"
         );
         assert!(operator_hints(&journal, &audit(&[])).is_empty());
+    }
+
+    /// The run itself audits the relay after every desktop scenario, from
+    /// the same stack facts and window the cleanup command uses later.
+    #[test]
+    fn a_run_builds_its_relay_audit_from_the_stack_and_its_own_start_time() {
+        let (_dir, journal) = journal_with(vec![]);
+        let stack = stack_snapshot();
+        let run = "20260916T211043Z-0d814df0105c"
+            .parse::<mortsom_common::RunId>()
+            .unwrap();
+        let source = super::super::recover_audit::RelayAuditSource::for_run(
+            &stack,
+            &run,
+            std::time::Duration::from_secs(7),
+        )
+        .unwrap();
+        assert_eq!(source.relay_url, stack.relay_url);
+        assert_eq!(source.daemon_pubkey, stack.daemon_pubkey);
+        assert_eq!(source.since, run.started_at().unwrap().timestamp() as u64);
+        assert_eq!(source.timeout, std::time::Duration::from_secs(7));
+        drop(journal);
+        let legacy = "legacy-0d814df0105c"
+            .parse::<mortsom_common::RunId>()
+            .unwrap();
+        let refused = super::super::recover_audit::RelayAuditSource::for_run(
+            &stack,
+            &legacy,
+            std::time::Duration::from_secs(7),
+        )
+        .unwrap_err();
+        assert!(refused.contains("start time"), "{refused}");
+    }
+
+    /// A scenario that dies on the order form leaves the app unable to reach
+    /// its order book, so UI discovery fails. The relay is still the daemon's
+    /// record: when it shows nothing for the window, the submission is
+    /// abandoned anyway and the profiles are not retained for it.
+    #[test]
+    fn a_failed_ui_discovery_does_not_stop_the_relay_from_ruling_a_submission_out() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![],
+        }]);
+        let mut checks = mortsom_common::check::DoctorReport::default();
+        crate::run::recovery::settle_after_scenario(
+            &journal,
+            Err("could not return to the order book".into()),
+            Some(Ok(audit(&[]))),
+            &mut checks,
+        );
+        assert!(!crate::run::recovery::unresolved_submissions(&journal));
+        assert!(journal.events().iter().any(|e| matches!(
+            e,
+            RecoveryEvent::SubmissionAbandoned {
+                actor: Actor::Alice
+            }
+        )));
+        // The relay showed nothing the journal does not know, so the failed
+        // discovery hid no order: it is reported, but keeps the run healthy.
+        let names: Vec<(&str, mortsom_common::check::CheckStatus)> = checks
+            .checks
+            .iter()
+            .map(|c| (c.name.as_str(), c.status))
+            .collect();
+        assert_eq!(
+            names,
+            [(
+                "recovery-discovery",
+                mortsom_common::check::CheckStatus::Warn
+            )],
+            "{checks:?}"
+        );
+        assert!(checks.is_healthy());
+    }
+
+    /// A failed discovery stays fatal while the relay shows an order the
+    /// journal does not know: the app may own it and nobody looked.
+    #[test]
+    fn a_failed_ui_discovery_stays_fatal_when_the_relay_shows_an_unknown_order() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![],
+        }]);
+        let mut checks = mortsom_common::check::DoctorReport::default();
+        crate::run::recovery::settle_after_scenario(
+            &journal,
+            Err("could not return to the order book".into()),
+            Some(Ok(audit(&[(ORDER, "pending")]))),
+            &mut checks,
+        );
+        assert!(crate::run::recovery::unresolved_submissions(&journal));
+        assert!(!checks.is_healthy(), "{checks:?}");
+        let mut checks = mortsom_common::check::DoctorReport::default();
+        crate::run::recovery::settle_after_scenario(
+            &journal,
+            Err("could not return to the order book".into()),
+            Some(Err("relay audit: fetch failed".into())),
+            &mut checks,
+        );
+        assert_eq!(checks.count(mortsom_common::check::CheckStatus::Fail), 2);
+    }
+
+    /// An unknown order in the window still needs the operator, whatever
+    /// discovery said; and a failed audit is reported, not treated as empty.
+    #[test]
+    fn settling_keeps_a_submission_open_when_the_relay_cannot_rule_it_out() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![],
+        }]);
+        let mut checks = mortsom_common::check::DoctorReport::default();
+        crate::run::recovery::settle_after_scenario(
+            &journal,
+            Ok(()),
+            Some(Ok(audit(&[(ORDER, "pending")]))),
+            &mut checks,
+        );
+        assert!(crate::run::recovery::unresolved_submissions(&journal));
+        assert!(checks.is_healthy(), "{checks:?}");
+
+        crate::run::recovery::settle_after_scenario(
+            &journal,
+            Ok(()),
+            Some(Err("relay audit: fetch failed".into())),
+            &mut checks,
+        );
+        assert!(crate::run::recovery::unresolved_submissions(&journal));
+        assert!(
+            checks
+                .checks
+                .iter()
+                .any(|c| c.name == "recovery-relay-audit" && c.detail.contains("fetch failed")),
+            "{checks:?}"
+        );
+
+        // No audit source at all: nothing is inferred.
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![],
+        }]);
+        let mut checks = mortsom_common::check::DoctorReport::default();
+        crate::run::recovery::settle_after_scenario(&journal, Ok(()), None, &mut checks);
+        assert!(crate::run::recovery::unresolved_submissions(&journal));
+        assert!(checks.is_healthy());
     }
 }

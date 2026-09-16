@@ -71,6 +71,26 @@ pub struct RelayAuditSource {
 }
 
 impl RelayAuditSource {
+    /// The audit of `run`'s window against the stack it runs on: what a run
+    /// checks after each desktop scenario and what a later cleanup repeats.
+    pub fn for_run(
+        stack: &crate::stack::StackSnapshot,
+        run: &mortsom_common::RunId,
+        timeout: Duration,
+    ) -> Result<Self, String> {
+        let since = run
+            .started_at()
+            .ok_or("cannot audit the relay: the run id carries no start time")?
+            .timestamp()
+            .max(0) as u64;
+        Ok(Self {
+            relay_url: stack.relay_url.clone(),
+            daemon_pubkey: stack.daemon_pubkey.clone(),
+            since,
+            timeout,
+        })
+    }
+
     /// A fresh audit of the window, as of now.
     pub async fn fetch(&self) -> Result<RelayAudit, String> {
         fetch(
