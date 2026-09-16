@@ -34,7 +34,7 @@ pub async fn enter(
             let Some(node) = boundary.find(id).await? else {
                 continue;
             };
-            if boundary.text(&node).await? == value {
+            if shows(&boundary.text(&node).await?, value) {
                 return Ok(());
             }
             let identity = (node.destination.clone(), node.path.clone());
@@ -57,6 +57,35 @@ pub async fn enter(
     result.map_err(|cause: UiError| error(redactor.redact(&cause.to_string())))
 }
 
+/// Marks a locale thousands formatter may insert into a typed integer.
+const GROUP_SEPARATORS: [char; 6] = ['.', ',', ' ', '\u{a0}', '\u{202f}', '\''];
+
+/// Whether the public value shows the requested text.
+///
+/// A purely numeric request also matches the same integer regrouped in
+/// threes by one locale separator: an amount field typed `1000` under a
+/// Spanish locale shows `1.000`, which is the requested value, not a failed
+/// edit. Anything else must match exactly.
+pub(crate) fn shows(public: &str, requested: &str) -> bool {
+    public == requested
+        || (!requested.is_empty()
+            && requested.bytes().all(|b| b.is_ascii_digit())
+            && ungrouped(public).as_deref() == Some(requested))
+}
+
+/// The digits of `public` when it is one integer grouped in threes.
+fn ungrouped(public: &str) -> Option<String> {
+    let separator = public.chars().find(|c| GROUP_SEPARATORS.contains(c))?;
+    let groups: Vec<&str> = public.split(separator).collect();
+    let (head, tail) = groups.split_first()?;
+    let well_formed = (1..=3).contains(&head.len())
+        && tail.iter().all(|group| group.len() == 3)
+        && groups
+            .iter()
+            .all(|group| group.bytes().all(|b| b.is_ascii_digit()));
+    well_formed.then(|| groups.concat())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -70,6 +99,8 @@ mod tests {
         writes: u32,
         requested_focus: bool,
         text: String,
+        /// Mimics a locale thousands formatter on the field (es: `1.000`).
+        grouped: bool,
     }
     struct Fake {
         state: Mutex<State>,
@@ -103,7 +134,11 @@ mod tests {
             assert_eq!(node.path, "/new");
             state.writes += 1;
             if !self.ignore_write && !(self.ignore_first && state.writes == 1) {
-                state.text = value.into();
+                state.text = if state.grouped {
+                    group_thousands(value)
+                } else {
+                    value.into()
+                };
             }
             Ok(())
         }
@@ -175,5 +210,74 @@ mod tests {
                 .is_ok()
         );
         assert_eq!(fake.state.lock().unwrap().writes, 2);
+    }
+
+    fn group_thousands(digits: &str) -> String {
+        let head = digits.len() % 3;
+        let mut out = digits[..head].to_owned();
+        for chunk in digits.as_bytes()[head..].chunks(3) {
+            if !out.is_empty() {
+                out.push('.');
+            }
+            out.push_str(std::str::from_utf8(chunk).unwrap());
+        }
+        out
+    }
+
+    #[tokio::test]
+    async fn accepts_a_numeric_entry_the_field_regroups_by_locale() {
+        let fake = Fake {
+            state: Mutex::new(State {
+                grouped: true,
+                ..State::default()
+            }),
+            ignore_write: false,
+            ignore_first: false,
+            error_text: None,
+        };
+        assert!(
+            enter(&fake, "input", "1000", Duration::from_secs(1))
+                .await
+                .is_ok()
+        );
+        assert_eq!(fake.state.lock().unwrap().writes, 1);
+    }
+
+    #[test]
+    fn locale_grouped_digits_show_the_requested_integer() {
+        for public in [
+            "1.000",
+            "1,000",
+            "1 000",
+            "1\u{a0}000",
+            "1\u{202f}000",
+            "1'000",
+        ] {
+            assert!(shows(public, "1000"), "{public:?}");
+        }
+        assert!(shows("1.234.567", "1234567"));
+        assert!(shows("999", "999"));
+    }
+
+    #[test]
+    fn anything_but_well_formed_grouping_of_the_same_digits_is_a_mismatch() {
+        for public in [
+            "1.001",
+            "10.00",
+            "1000.",
+            ".1000",
+            "1..000",
+            "1.000,000",
+            "1,0000",
+            "1000 ",
+            "",
+        ] {
+            assert!(!shows(public, "1000"), "{public:?}");
+        }
+        // Only purely numeric requests are compared loosely.
+        assert!(!shows("1.5", "15"));
+        assert!(!shows("a.bcd", "abcd"));
+        assert!(!shows("12.3", "12,3"));
+        assert!(shows("12,3", "12,3"));
     }
 }

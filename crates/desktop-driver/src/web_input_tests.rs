@@ -41,6 +41,21 @@ async fn editable_text_reads_the_value_property_instead_of_rendered_text() {
 }
 
 #[tokio::test]
+async fn a_field_already_showing_the_locale_grouped_amount_is_left_alone() {
+    let (server, session) = fixture().await;
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/property/value"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"value":"1.000"})))
+        .mount(&server)
+        .await;
+    enter(&session, "amount", "1000", Duration::from_millis(300))
+        .await
+        .unwrap();
+    let requests = server.received_requests().await.unwrap();
+    assert!(!requests.iter().any(|r| r.url.path().ends_with("/clear")));
+}
+
+#[tokio::test]
 async fn acknowledged_but_ignored_edits_fail_and_never_expose_the_submitted_value() {
     let (server, session) = fixture().await;
     Mock::given(method("GET"))
