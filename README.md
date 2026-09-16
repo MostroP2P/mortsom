@@ -348,10 +348,12 @@ A healthy checks table above a failed scenario is still a failed run.
 ./target/debug/mortsom cleanup <run-id>
 ```
 
-When the app never listed the order a submission created, name it with `--attribute-order alice=<order-id>`,
-or state `alice=none` when the daemon created none. Both are checked against the daemon's order events on the
-relay for the run's window: an id must have been published then and not be known before the submission, and
-`none` is refused while any unknown order from that window is still open.
+A submission the app never listed (a failure before or right after the create tap) is checked against the
+daemon's order events on the relay for the run's window. When the relay shows no order the journal does not
+already know, cleanup records that the submission produced nothing and finishes on its own. When it does show
+candidates, cleanup lists them with the exact commands: name the order with `--attribute-order alice=<order-id>`,
+or state `alice=none` when the daemon created none. An id must have been published in the window and not be
+known before the submission, and `none` is refused while any unknown order from that window is still open.
 
 Recovery reopens the same Alice and Bob identities from protected storage under
 `$HOME/.local/state/mortsom/recovery/<run-id>`, cancels through ordinary UI controls and deletes the profiles

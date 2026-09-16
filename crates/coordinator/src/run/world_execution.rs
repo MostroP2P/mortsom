@@ -82,12 +82,22 @@ impl World<'_> {
         }
         let result =
             execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()).await;
-        if let Some(journal) = self.desktop.recovery.as_ref()
-            && let Err(error) = recovery::discover(&ctx, journal).await
-        {
-            summary
-                .checks
-                .push("recovery-discovery", CheckStatus::Fail, error);
+        if let Some(journal) = self.desktop.recovery.as_ref() {
+            let discovered = recovery::discover(&ctx, journal).await;
+            // Only a completed discovery may let the relay audit close a
+            // submission: an order the app lists always wins.
+            let abandoned = match &discovered {
+                Ok(()) => recovery::abandon_ruled_out(journal, &self.desktop.relay_ruled_out),
+                Err(_) => Ok(Vec::new()),
+            };
+            for actor in abandoned.as_deref().unwrap_or_default() {
+                tracing::info!(actor = %actor, "submission produced no order: app lists none and the relay published none");
+            }
+            if let Err(error) = discovered.and(abandoned.map(drop)) {
+                summary
+                    .checks
+                    .push("recovery-discovery", CheckStatus::Fail, error);
+            }
         }
         execute::sweep_cleanup(&ctx).await;
         if let Some(journal) = self.desktop.recovery.as_ref()

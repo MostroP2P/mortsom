@@ -38,6 +38,10 @@ pub struct DesktopOptions {
     pub chromedriver: PathBuf,
     /// Chromium executable.
     pub browser: PathBuf,
+    /// Actors whose started submission the relay audit ruled out before this
+    /// invocation: the daemon published no order the journal does not know.
+    /// Recorded as abandoned only after UI discovery found nothing either.
+    pub relay_ruled_out: Vec<mortsom_common::Actor>,
 }
 
 impl DesktopOptions {

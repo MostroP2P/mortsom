@@ -165,19 +165,95 @@ pub(super) async fn discover(ctx: &Context, journal: &FileJournal) -> Result<(),
     Ok(())
 }
 
-pub(crate) fn unresolved_submissions(journal: &FileJournal) -> bool {
+/// Started submissions that no later order discovery or operator statement
+/// resolved, with the orders their actor already owned when they started.
+pub(crate) fn open_submissions(journal: &FileJournal) -> Vec<(Actor, Vec<String>)> {
     let events = journal.snapshot().events;
-    events.iter().enumerate().any(|(index, event)| {
-        if let RecoveryEvent::SubmissionStarted { actor, .. } = event {
-            !events[index + 1..].iter().any(|event| {
-                matches!(event,
+    events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| {
+            let RecoveryEvent::SubmissionStarted {
+                actor,
+                known_orders,
+            } = event
+            else {
+                return None;
+            };
+            let resolved = events[index + 1..].iter().any(|later| {
+                matches!(later,
                     RecoveryEvent::OrderFound { actor: found, .. }
                     | RecoveryEvent::SubmissionAbandoned { actor: found } if found == actor)
-            })
-        } else {
-            false
+            });
+            (!resolved).then(|| (*actor, known_orders.clone()))
+        })
+        .collect()
+}
+
+/// Every order the journal already attributes to an actor.
+pub(crate) fn found_orders(journal: &FileJournal) -> Vec<String> {
+    journal
+        .snapshot()
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            RecoveryEvent::OrderFound { order, .. } => Some(order.id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Records as abandoned the submissions of `actors` that UI discovery left
+/// open. Discovery ran first, so an order the app lists always wins over the
+/// relay audit that ruled the submission out. Returns the actors recorded.
+pub(crate) fn abandon_ruled_out(
+    journal: &FileJournal,
+    actors: &[Actor],
+) -> Result<Vec<Actor>, String> {
+    let mut abandoned = Vec::new();
+    for (actor, _) in open_submissions(journal) {
+        if actors.contains(&actor) {
+            journal.record(RecoveryEvent::SubmissionAbandoned { actor })?;
+            abandoned.push(actor);
         }
-    })
+    }
+    Ok(abandoned)
+}
+
+pub(crate) fn unresolved_submissions(journal: &FileJournal) -> bool {
+    !open_submissions(journal).is_empty()
+}
+
+/// Why the protected profiles stay, and what resolves it, for the operator.
+fn retained_reason(journal: &FileJournal, summary: &RunSummary) -> String {
+    let open = open_submissions(journal);
+    if !open.is_empty() {
+        let run = journal.snapshot().run_id;
+        let commands: Vec<String> = open
+            .iter()
+            .map(|(actor, _)| {
+                let actor = actor.as_str();
+                format!("`mortsom cleanup {run} --attribute-order {actor}=<order-id>` (or `{actor}=none`)")
+            })
+            .collect();
+        let actors: Vec<&str> = open.iter().map(|(actor, _)| actor.as_str()).collect();
+        return format!(
+            "protected profiles retained: {} started an order submission the app never listed \
+             and the relay could not rule out; rerun {}",
+            actors.join(" and "),
+            commands.join(" and ")
+        );
+    }
+    if summary
+        .cleanup
+        .as_ref()
+        .is_some_and(|cleanup| !cleanup.is_clean())
+    {
+        return "protected profiles retained: order cleanup did not finish; rerun `mortsom cleanup` \
+                once the stack is healthy"
+            .into();
+    }
+    "protected profiles retained; explicit recovery is required".into()
 }
 
 pub(super) async fn resume_actor(
@@ -277,11 +353,10 @@ pub(super) fn finish(journal: &FileJournal, summary: &mut RunSummary, artifacts:
         write_recovery_evidence(&manifest, summary, artifacts);
     }
     if !manifest.closed {
-        summary.checks.push(
-            "recovery-storage",
-            CheckStatus::Fail,
-            "protected profiles retained; explicit recovery is required",
-        );
+        let reason = retained_reason(journal, summary);
+        summary
+            .checks
+            .push("recovery-storage", CheckStatus::Fail, reason);
     }
 }
 

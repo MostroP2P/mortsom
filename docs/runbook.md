@@ -65,7 +65,10 @@ UI session.
 Otherwise cleanup opens the protected journal, checks that the current stack and captured bundle match,
 restarts private runtime services on the retained profiles, verifies the original Alice and Bob public
 identities, discovers uncertain submissions through their trade lists and cancels through ordinary UI
-controls. Completed orders require both clients' terminal state and exact wallet settlement proof.
+controls. A submission whose order the trade list never showed is checked against the daemon's order
+events on the relay for the run's window: no unknown order there resolves it as having produced nothing;
+otherwise cleanup prints the candidates and the `--attribute-order` commands that settle it. Completed
+orders require both clients' terminal state and exact wallet settlement proof.
 Cancelled orders require verified refund and cancellation of unused buyer invoices. Cleanup never retries a
 payment or releases escrow.
 

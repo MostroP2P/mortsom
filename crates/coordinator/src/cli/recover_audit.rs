@@ -33,6 +33,16 @@ pub struct RelayAudit {
 }
 
 impl RelayAudit {
+    /// Orders the daemon published in the window that the journal does not
+    /// already know, whatever their status: every candidate for what an
+    /// unresolved submission may have created.
+    pub fn unknown(&self, known: &[String]) -> Vec<&AuditedOrder> {
+        self.orders
+            .iter()
+            .filter(|order| !known.contains(&order.id))
+            .collect()
+    }
+
     /// Orders the daemon created in the window that the journal does not
     /// already know and that are not closed: exactly what an "it produced no
     /// order" statement would leave behind.
@@ -137,5 +147,11 @@ mod tests {
             .collect();
         assert_eq!(open, ["live", "fresh"]);
         assert!(audit.published("expired") && !audit.published("other"));
+        let unknown: Vec<&str> = audit
+            .unknown(&["known".to_owned()])
+            .iter()
+            .map(|o| o.id.as_str())
+            .collect();
+        assert_eq!(unknown, ["expired", "canceled", "done", "live", "fresh"]);
     }
 }
