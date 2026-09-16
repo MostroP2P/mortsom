@@ -1,5 +1,8 @@
 #![allow(clippy::unwrap_used)]
 use super::*;
+use crate::app_source::{App, REPOSITORY, WORK_DIR};
+
+type Selector = super::Selector<App>;
 use mortsom_ui_driver::process::TokioRunner;
 
 #[tokio::test]
@@ -81,7 +84,7 @@ fn branch_and_pull_request_select_only_the_requested_head() {
 }
 
 async fn git(dir: &Path, args: &[&str]) -> String {
-    run_git(&TokioRunner, dir, args).await.unwrap()
+    run_git::<App>(&TokioRunner, dir, args).await.unwrap()
 }
 
 #[tokio::test]

@@ -8,6 +8,10 @@ use super::StackError;
 use super::compose::{Compose, DAEMON_SERVICE};
 use super::layout::Layout;
 
+mod build;
+pub(super) use build::build;
+pub use build::{LOCAL_REPOSITORY, commit_tag};
+
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(30);
 const IMAGE_FORMAT: &str = r#"{"id":{{json .Id}},"digests":{{json .RepoDigests}}}"#;
 const CONTAINER_FORMAT: &str = r#"{"image":{{json .Image}},"running":{{json .State.Running}}}"#;

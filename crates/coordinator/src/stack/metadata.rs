@@ -14,6 +14,11 @@ pub struct StackSnapshot {
     pub wallet_endpoints: std::collections::BTreeMap<String, String>,
     /// Actual container image identity.
     pub daemon_image: DaemonImage,
+    /// How that image was selected, and the exact commit when built here.
+    /// Summaries written before this field existed read as
+    /// [`DaemonProvenance::Unrecorded`].
+    #[serde(default)]
+    pub daemon_source: DaemonProvenance,
     /// Expectations which still require scenario verification.
     pub declared_limits: DeclaredLimits,
 }
@@ -69,6 +74,80 @@ impl DaemonImage {
         }
         Ok(())
     }
+}
+
+/// How the daemon image was selected. Together with [`DaemonImage`] this
+/// names exactly which daemon a run tested.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum DaemonProvenance {
+    /// Mortsom's pinned release, pulled by tag and pinned by digest.
+    PinnedImage,
+    /// A published image the operator named with `--mostro-image`.
+    Image {
+        /// The reference as the operator gave it.
+        requested: String,
+    },
+    /// A Mostro branch or pull request built here with `--mostro-ref`.
+    GitRef(crate::git_source::RemoteSelection),
+    /// Read from a record another Mortsom version wrote: one from before
+    /// provenance was recorded, or one with a kind this version does not
+    /// know. Never written by this version.
+    #[default]
+    #[serde(other)]
+    Unrecorded,
+}
+
+impl DaemonProvenance {
+    /// Rejects a record whose source and image identity disagree: a pulled
+    /// image carries an official digest, a built one its commit tag. A
+    /// record without provenance is only ever read, never written.
+    pub(crate) fn validate(&self, image: &DaemonImage) -> Result<(), StackError> {
+        let consistent = match self {
+            Self::Unrecorded => false,
+            Self::PinnedImage => image.repository_digest.is_some(),
+            Self::Image { requested } => {
+                !requested.is_empty()
+                    && !requested.chars().any(char::is_whitespace)
+                    && image.repository_digest.is_some()
+            }
+            Self::GitRef(selection) => {
+                valid_selection(selection)
+                    && image.repository_digest.is_none()
+                    && image.reference == super::image::commit_tag(&selection.revision)
+            }
+        };
+        if !consistent {
+            return Err(invalid("daemon source provenance"));
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Display for DaemonProvenance {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::PinnedImage => formatter.write_str("pinned release"),
+            Self::Unrecorded => formatter.write_str("not recorded"),
+            Self::Image { requested } => write!(formatter, "image {requested}"),
+            Self::GitRef(selection) => write!(
+                formatter,
+                "{} ({} at {})",
+                selection.requested, selection.git_ref, selection.revision
+            ),
+        }
+    }
+}
+
+fn valid_selection(selection: &crate::git_source::RemoteSelection) -> bool {
+    selection.repository == crate::mostro_source::REPOSITORY
+        && selection.revision.len() == 40
+        && selection
+            .revision
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+        && crate::mostro_source::Selector::parse(&selection.requested)
+            .is_ok_and(|selector| selector.git_ref() == selection.git_ref)
 }
 
 /// Limits the stack declares in `stack/limits.toml`, never inferred from the daemon version.
@@ -130,8 +209,146 @@ fn invalid(field: &str) -> StackError {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::git_source::RemoteSelection;
+
+    const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    fn built() -> (DaemonImage, DaemonProvenance) {
+        let image = DaemonImage {
+            image_id: format!("sha256:{}", "a".repeat(64)),
+            reference: super::super::image::commit_tag(REVISION),
+            repository_digest: None,
+        };
+        let source = DaemonProvenance::GitRef(RemoteSelection {
+            repository: crate::mostro_source::REPOSITORY.into(),
+            requested: "https://github.com/MostroP2P/mostro/pull/963".into(),
+            git_ref: "refs/pull/963/head".into(),
+            revision: REVISION.into(),
+        });
+        (image, source)
+    }
+
+    #[test]
+    fn a_built_daemon_records_its_commit_under_its_own_tag_and_no_registry_digest() {
+        // Arrange
+        let (image, source) = built();
+
+        // Act / Assert
+        assert!(source.validate(&image).is_ok());
+        let encoded = serde_json::to_value(&source).unwrap();
+        assert_eq!(encoded["kind"], "git-ref");
+        assert_eq!(encoded["revision"], REVISION);
+        assert_eq!(
+            serde_json::from_value::<DaemonProvenance>(encoded).unwrap(),
+            source
+        );
+    }
+
+    #[test]
+    fn a_snapshot_written_before_provenance_existed_still_reads_and_says_so() {
+        // Arrange: the `stack` object of a summary.json from an earlier
+        // Mortsom, which never recorded how its daemon was selected.
+        let legacy = serde_json::json!({
+            "daemon_pubkey": "f17567fc60819e74b8536649ea9a5782ec63133c32ec9101402c8b72f66a90c5",
+            "relay_url": "ws://127.0.0.1:7000",
+            "wallet_endpoints": {"alice": "https://127.0.0.1:10001"},
+            "daemon_image": {
+                "image_id": format!("sha256:{}", "a".repeat(64)),
+                "reference": format!("mostrop2p/mostro@sha256:{}", "b".repeat(64)),
+                "repository_digest": format!("sha256:{}", "b".repeat(64))
+            },
+            "declared_limits": {
+                "order_expiration_secs": 300, "hold_invoice_expiry_secs": 120,
+                "buyer_invoice_deadline_secs": 120, "fiat_window_secs": null,
+                "payout_invoice_min_expiry_secs": 300,
+                "max_inflight_payouts_per_destination": 2, "payout_dispatch_permits": 8
+            }
+        });
+
+        // Act
+        let snapshot: StackSnapshot = serde_json::from_value(legacy).unwrap();
+
+        // Assert: readable, and the gap is stated rather than invented.
+        assert_eq!(snapshot.daemon_source, DaemonProvenance::Unrecorded);
+        assert_eq!(snapshot.daemon_source.to_string(), "not recorded");
+        assert_eq!(
+            serde_json::to_value(&snapshot.daemon_source).unwrap(),
+            serde_json::json!({"kind": "unrecorded"})
+        );
+        assert!(
+            snapshot
+                .daemon_source
+                .validate(&snapshot.daemon_image)
+                .is_err(),
+            "a new record must never be written without provenance"
+        );
+    }
+
+    #[test]
+    fn a_provenance_kind_this_version_does_not_know_reads_as_unrecorded() {
+        let newer = serde_json::json!({"kind": "oci-artifact", "reference": "x"});
+        let source: DaemonProvenance = serde_json::from_value(newer).unwrap();
+        assert_eq!(source, DaemonProvenance::Unrecorded);
+    }
+
+    #[test]
+    fn a_built_daemon_record_that_disagrees_with_itself_is_refused() {
+        let (image, source) = built();
+        let DaemonProvenance::GitRef(selection) = &source else {
+            unreachable!()
+        };
+        let mut invented_digest = image.clone();
+        invented_digest.repository_digest = Some(format!("sha256:{}", "b".repeat(64)));
+        invented_digest.reference = format!("mortsom/mostro@sha256:{}", "b".repeat(64));
+        let mut other_tag = image.clone();
+        other_tag.reference = "mortsom/mostro:latest".into();
+        for (image, selection) in [
+            (invented_digest, selection.clone()),
+            (other_tag, selection.clone()),
+            (
+                image.clone(),
+                RemoteSelection {
+                    repository: "https://github.com/someone/mostro.git".into(),
+                    ..selection.clone()
+                },
+            ),
+            (
+                image.clone(),
+                RemoteSelection {
+                    git_ref: "refs/heads/main".into(),
+                    ..selection.clone()
+                },
+            ),
+        ] {
+            assert!(
+                DaemonProvenance::GitRef(selection.clone())
+                    .validate(&image)
+                    .is_err(),
+                "{image:?} {selection:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pulled_daemon_must_carry_its_official_digest() {
+        let digest = format!("sha256:{}", "b".repeat(64));
+        let image = DaemonImage {
+            image_id: format!("sha256:{}", "a".repeat(64)),
+            reference: format!("mostrop2p/mostro@{digest}"),
+            repository_digest: Some(digest),
+        };
+        let requested = DaemonProvenance::Image {
+            requested: "mostrop2p/mostro:v0.18.8".into(),
+        };
+        assert!(DaemonProvenance::PinnedImage.validate(&image).is_ok());
+        assert!(requested.validate(&image).is_ok());
+        let (built, _) = built();
+        assert!(DaemonProvenance::PinnedImage.validate(&built).is_err());
+        assert!(requested.validate(&built).is_err());
+    }
 
     #[test]
     fn a_tag_cannot_claim_a_manifest_digest_and_an_immutable_reference_must_match() {

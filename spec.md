@@ -134,21 +134,39 @@ only let a payment succeed by accident. Carol exists so the daemon never escrows
 
 `stack up` must:
 
-1. Resolve the daemon image. The default is a pinned release recorded in configuration; `--mostro-image`
-   selects another. Pull it; a failed pull is an error, never permission to use a stale cached image.
+1. Resolve the daemon image from exactly one source:
+   - no option: the pinned release recorded in configuration, for ordinary app review;
+   - `--mostro-image <reference>`: a published image built elsewhere;
+   - `--mostro-ref <branch-or-pr-url>`: a branch of `MostroP2P/mostro` or a canonical
+     `https://github.com/MostroP2P/mostro/pull/<number>` URL, for protocol changes, coordinated app/daemon
+     pull requests and explicit compatibility testing. The two options are mutually exclusive.
+
+   A pulled image must carry exactly one official repository digest; a failed pull is an error, never
+   permission to use a stale cached image. A ref is fetched on every invocation into an owned bare cache
+   under `.mortsom/mostro` (branches from `refs/heads/<branch>`, pull requests from `refs/pull/<n>/head`,
+   so fork contributions resolve to the contributor's head), resolved to a full commit, checked out
+   detached and clean in a disposable directory and built with the repository's `docker/Dockerfile` as
+   `mortsom/mostro:git-<commit>`, labelled with that commit. The build runs every time, relying on the
+   layer cache for repeated commits; a failed fetch or build is an error and never starts an older image.
+   A built image has no registry digest; its identity is the inspected image ID plus the Git provenance.
 2. Start the chain, nodes and relay; wait for each to be usable; fund the nodes and open the channels above,
    skipping work already done so the command is re-runnable against a half-built stack.
 3. Mint the daemon identity for this stack, write its settings with the declared test limits, and start the
-   daemon as the invoking user so it can read owner-only files. Verify the running container matches the
-   pulled digest.
+   daemon as the invoking user so it can read owner-only files. Verify the running container is the
+   prepared image ID.
 4. Wait until the daemon publishes its info event on the relay, then validate regtest networks, advertised
    relay endpoints, channel liquidity and declared limits.
-5. Write the public connection references, daemon public identity, image digest and stack fingerprint to
-   Mortsom's ignored local overlay. Node credentials and the daemon's private key stay in owner-only files
+5. Write the public connection references, daemon public identity, image identity (image ID, container
+   creation reference and repository digest when one exists), daemon source provenance (kind
+   `pinned-image`, `image` or `git-ref`; the requested selector; for a ref, the repository, fetched ref and
+   full commit) and stack fingerprint to Mortsom's ignored local overlay (descriptor schema 2). Run
+   artifacts carry the same provenance, so a report names the exact app and daemon commits tested
+   together. Node credentials and the daemon's private key stay in owner-only files
    that are never echoed, logged or copied into artifacts.
 
 `stack status` exits non-zero until the stack is usable, so it can be waited on. It reports each service,
-each node's active channels and the daemon identity in effect.
+each node's active channels, the daemon identity, image and source in effect, and flags a running daemon
+container that is not the recorded image.
 
 `stack down` stops the services, removes their volumes and deletes the generated identity and credentials,
 so no public key is left that nothing answers on. Both `up` and `down` refuse to touch containers or volumes

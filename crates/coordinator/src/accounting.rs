@@ -256,6 +256,45 @@ mod tests {
     }
 
     #[test]
+    fn a_run_recorded_before_daemon_provenance_existed_is_still_counted() {
+        // Arrange: a summary whose `stack` object predates `daemon_source`.
+        let dir = tempfile::tempdir().unwrap();
+        let id = "20260815T100000Z-aaaaaa";
+        let legacy_stack = r#""stack": {
+            "daemon_pubkey": "f17567fc60819e74b8536649ea9a5782ec63133c32ec9101402c8b72f66a90c5",
+            "relay_url": "ws://127.0.0.1:7000",
+            "wallet_endpoints": {"alice": "https://127.0.0.1:10001", "bob": "https://127.0.0.1:10002"},
+            "daemon_image": {
+                "image_id": "sha256:277bce332c70a76bfc7ef04598bb6fbdfad6939a805031518efe9686129d3e36",
+                "reference": "mostrop2p/mostro@sha256:bff406d11fc90436c9f7da5186f5976a63ae7ee1d711a6636d36205421cbda31",
+                "repository_digest": "sha256:bff406d11fc90436c9f7da5186f5976a63ae7ee1d711a6636d36205421cbda31"
+            },
+            "declared_limits": {
+                "order_expiration_secs": 300, "hold_invoice_expiry_secs": 120,
+                "buyer_invoice_deadline_secs": 120, "fiat_window_secs": null,
+                "payout_invoice_min_expiry_secs": 300,
+                "max_inflight_payouts_per_destination": 2, "payout_dispatch_permits": 8
+            }
+        },"#;
+        let text = summary(id, "canary", true, 1000, "").replacen(
+            r#""app_version": "1.3.2","#,
+            &format!(r#""app_version": "1.3.2", {legacy_stack}"#),
+            1,
+        );
+        let run = dir.path().join(id);
+        std::fs::create_dir_all(&run).unwrap();
+        std::fs::write(run.join(files::SUMMARY), text).unwrap();
+
+        // Act
+        let report = build_accounting(dir.path(), None).unwrap();
+
+        // Assert
+        assert!(report.unreadable.is_empty(), "{:?}", report.unreadable);
+        assert_eq!(report.runs.len(), 1);
+        assert_eq!(report.total_settled_sats, 1000);
+    }
+
+    #[test]
     fn aggregates_run_summaries_and_reports_unreadable_ones() {
         let dir = tempfile::tempdir().unwrap();
         for (id, lane, passed, settled, unresolved) in [

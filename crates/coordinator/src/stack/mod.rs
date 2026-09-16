@@ -3,6 +3,7 @@
 
 mod compose;
 mod connections;
+mod daemon;
 mod descriptor;
 mod fingerprint;
 mod image;
@@ -16,10 +17,12 @@ mod up;
 
 pub use compose::Compose;
 pub use connections::credential_reference;
+pub use daemon::DaemonSource;
 pub use descriptor::Descriptor;
 pub use fingerprint::StackFingerprint;
+pub use image::{LOCAL_REPOSITORY, commit_tag};
 pub use layout::{Layout, PROJECT};
-pub use metadata::{DaemonImage, DeclaredLimits, StackSnapshot};
+pub use metadata::{DaemonImage, DaemonProvenance, DeclaredLimits, StackSnapshot};
 pub use ownership::ProjectOwner;
 pub use status::Status;
 pub use up::{Timing, UpOptions, up};
@@ -63,6 +66,9 @@ pub enum StackError {
     /// A Docker command failed.
     #[error(transparent)]
     Process(ProcessError),
+    /// The selected daemon source could not be fetched or verified.
+    #[error(transparent)]
+    Source(#[from] crate::git_source::SourceError),
 }
 
 /// The daemon release `stack up` installs unless the operator selects
@@ -105,6 +111,8 @@ pub struct StackContext {
     relay_port: u16,
     /// Image the daemon was started from and verified against.
     pub daemon_image: DaemonImage,
+    /// How that image was selected, and the commit when it was built here.
+    pub daemon_source: DaemonProvenance,
     /// Operator expectations; scenario observations must verify them.
     pub declared_limits: DeclaredLimits,
 }
@@ -140,6 +148,7 @@ impl StackContext {
             relay_url,
             relay_port: connections::RELAY_PORT,
             daemon_image: descriptor.daemon_image,
+            daemon_source: descriptor.daemon_source,
             declared_limits: descriptor.declared_limits,
         })
     }
@@ -157,6 +166,7 @@ impl StackContext {
                 })
                 .collect(),
             daemon_image: self.daemon_image.clone(),
+            daemon_source: self.daemon_source.clone(),
             declared_limits: self.declared_limits.clone(),
         }
     }

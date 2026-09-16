@@ -6,11 +6,12 @@ use serde::{Deserialize, Serialize};
 
 use super::connections::Connections;
 use super::layout::Layout;
-use super::metadata::{DaemonImage, DeclaredLimits, StackSnapshot};
+use super::metadata::{DaemonImage, DaemonProvenance, DeclaredLimits, StackSnapshot};
 use super::{StackError, fingerprint::StackFingerprint};
 
-/// Descriptor framing; bump when a field changes meaning.
-pub const SCHEMA_VERSION: u32 = 1;
+/// Descriptor framing; bump when a field changes meaning. Version 2 added
+/// the daemon's source provenance.
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Written to `stack/local/public.json` at the end of `up`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +24,8 @@ pub struct Descriptor {
     pub connections: Connections,
     /// The image the daemon was started from.
     pub daemon_image: DaemonImage,
+    /// How the image was selected, and the commit when it was built here.
+    pub daemon_source: DaemonProvenance,
     /// Limits declared in `stack/limits.toml` at `up` time.
     pub declared_limits: DeclaredLimits,
     /// Digest of the public snapshot, the same one runs record.
@@ -35,6 +38,7 @@ impl Descriptor {
         daemon_pubkey: String,
         connections: Connections,
         daemon_image: DaemonImage,
+        daemon_source: DaemonProvenance,
         declared_limits: DeclaredLimits,
     ) -> Result<Self, StackError> {
         let snapshot = StackSnapshot {
@@ -42,6 +46,7 @@ impl Descriptor {
             relay_url: connections.relay_url.clone(),
             wallet_endpoints: connections.wallet_endpoints(),
             daemon_image: daemon_image.clone(),
+            daemon_source: daemon_source.clone(),
             declared_limits: declared_limits.clone(),
         };
         let fingerprint = snapshot
@@ -52,6 +57,7 @@ impl Descriptor {
             daemon_pubkey,
             connections,
             daemon_image,
+            daemon_source,
             declared_limits,
             fingerprint,
         })
@@ -95,6 +101,9 @@ impl Descriptor {
             )));
         }
         descriptor.daemon_image.validate()?;
+        descriptor
+            .daemon_source
+            .validate(&descriptor.daemon_image)?;
         descriptor.declared_limits.validate()?;
         descriptor.connections.validate(layout.root())?;
         Ok(Some(descriptor))

@@ -241,8 +241,10 @@ impl Status {
         match &self.descriptor {
             Some(descriptor) => {
                 let mut out = format!(
-                    "{INDENT}daemon identity: {}\n{INDENT}daemon image: {}\n",
-                    descriptor.daemon_pubkey, descriptor.daemon_image.reference
+                    "{INDENT}daemon identity: {}\n{INDENT}daemon image: {}\n{INDENT}daemon source: {}\n",
+                    descriptor.daemon_pubkey,
+                    descriptor.daemon_image.reference,
+                    descriptor.daemon_source
                 );
                 if !self.daemon_matches_image {
                     out.push_str(&format!(

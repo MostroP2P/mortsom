@@ -206,7 +206,8 @@ fn scratch() -> (tempfile::TempDir, Layout) {
 
 fn quick() -> UpOptions {
     UpOptions {
-        image: DEFAULT_MOSTRO_IMAGE.into(),
+        daemon: DaemonSource::PinnedImage,
+        source_cache: PathBuf::from("unused-without-a-ref"),
         timing: Timing {
             wait: Duration::ZERO,
             poll: Duration::ZERO,
@@ -805,3 +806,6 @@ fn the_relay_keeps_its_events_in_a_file_database() {
 
 #[path = "source_load_tests.rs"]
 mod source_load_tests;
+
+#[path = "ref_tests.rs"]
+mod ref_tests;
