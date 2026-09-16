@@ -50,11 +50,18 @@ pub(super) fn prepare(
     } else {
         FileJournal::refuse_pending(&base)?;
     }
-    let stack = options
+    let snapshot = options
         .stack
         .as_ref()
-        .ok_or("recovery requires a verified stack")?
-        .fingerprint()?;
+        .ok_or("recovery requires a verified stack")?;
+    let stack = snapshot.fingerprint()?;
+    // The same audit the cleanup command repeats later: every desktop run
+    // rules its own empty submissions out before asking the operator.
+    desktop.relay_audit = Some(crate::cli::recover_audit::RelayAuditSource::for_run(
+        snapshot,
+        run,
+        std::time::Duration::from_secs(config.mostro.health_timeout_secs),
+    )?);
     let executable = (desktop.platform == mortsom_desktop_driver::Platform::Linux)
         .then(|| {
             desktop
@@ -250,6 +257,74 @@ pub(crate) fn abandon_ruled_out(
 
 pub(crate) fn unresolved_submissions(journal: &FileJournal) -> bool {
     !open_submissions(journal).is_empty()
+}
+
+/// The relay audit that decides an open submission, taken as a negative
+/// observation over `quiet_window`: a request the client sent before it died
+/// may still be processed and published a moment later, so one empty
+/// snapshot proves nothing. When the first audit already shows a candidate
+/// there is nothing to rule out and it is returned at once; otherwise the
+/// audit is repeated once the window has elapsed and that later view decides.
+pub(crate) async fn observe_relay_quiet<F, Fut>(
+    journal: &FileJournal,
+    quiet_window: std::time::Duration,
+    fetch: F,
+) -> Result<RelayAudit, String>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<RelayAudit, String>>,
+{
+    let first = fetch().await?;
+    if relay_ruled_out(journal, &first).is_empty() {
+        return Ok(first);
+    }
+    tokio::time::sleep(quiet_window).await;
+    fetch().await
+}
+
+/// Settles the journal once the scenario and UI discovery are over. A failed
+/// discovery is reported, never fatal on its own: the relay is the daemon's
+/// record, so when the fresh `audit` shows no order for the window the
+/// submission is abandoned whether or not the app could list its book, and
+/// the failed discovery hid nothing. An order the app did list was recorded
+/// by discovery first and always wins.
+pub(crate) fn settle_after_scenario(
+    journal: &FileJournal,
+    discovery: Result<(), String>,
+    audit: Option<Result<RelayAudit, String>>,
+    checks: &mut mortsom_common::check::DoctorReport,
+) {
+    let audited = audit.map(|audit| {
+        audit.and_then(|audit| abandon_ruled_out(journal, &audit).map(|actors| (audit, actors)))
+    });
+    let relay_shows_nothing = matches!(
+        &audited,
+        Some(Ok((audit, _))) if audit.unknown(&found_orders(journal)).is_empty()
+    );
+    if let Err(error) = discovery {
+        if relay_shows_nothing {
+            checks.push(
+                "recovery-discovery",
+                CheckStatus::Warn,
+                format!("{error}; the relay shows no order for the run, so nothing was missed"),
+            );
+        } else {
+            checks.push("recovery-discovery", CheckStatus::Fail, error);
+        }
+    }
+    match audited {
+        None => {}
+        Some(Ok((_, actors))) => {
+            for actor in actors {
+                tracing::info!(actor = %actor, "submission produced no order: the relay shows none for the run");
+            }
+        }
+        Some(Err(error)) => checks.push(
+            "recovery-relay-audit",
+            CheckStatus::Fail,
+            format!("cannot rule the open submission out: {error}"),
+        ),
+    }
 }
 
 /// Why the protected profiles stay, and what resolves it, for the operator.

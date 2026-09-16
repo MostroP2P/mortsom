@@ -83,33 +83,20 @@ impl World<'_> {
         let result =
             execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()).await;
         if let Some(journal) = self.desktop.recovery.as_ref() {
-            if let Err(error) = recovery::discover(&ctx, journal).await {
-                summary
-                    .checks
-                    .push("recovery-discovery", CheckStatus::Fail, error);
-            } else if let Some(source) = self.desktop.relay_audit.as_ref()
-                && recovery::unresolved_submissions(journal)
-            {
-                // Only after discovery, and against the relay as of now: an
-                // order the app lists wins, and a request the restarted
-                // client finished late has had its chance to appear.
-                let abandoned = match source.fetch().await {
-                    Ok(audit) => recovery::abandon_ruled_out(journal, &audit),
-                    Err(error) => Err(error),
-                };
-                match abandoned {
-                    Ok(actors) => {
-                        for actor in actors {
-                            tracing::info!(actor = %actor, "submission produced no order: the app lists none and the relay shows none");
-                        }
-                    }
-                    Err(error) => summary.checks.push(
-                        "recovery-relay-audit",
-                        CheckStatus::Fail,
-                        format!("cannot rule the open submission out: {error}"),
-                    ),
-                }
-            }
+            let discovery = recovery::discover(&ctx, journal).await;
+            // Audited only after discovery, so an order the app lists wins,
+            // and across the quiet window, so a request the client sent
+            // before it died has had its chance to be published.
+            let audit = match self.desktop.relay_audit.as_ref() {
+                Some(source) if recovery::unresolved_submissions(journal) => Some(
+                    recovery::observe_relay_quiet(journal, ctx.recovery.quiet_window, || {
+                        source.fetch()
+                    })
+                    .await,
+                ),
+                _ => None,
+            };
+            recovery::settle_after_scenario(journal, discovery, audit, &mut summary.checks);
         }
         execute::sweep_cleanup(&ctx).await;
         if let Some(journal) = self.desktop.recovery.as_ref()
