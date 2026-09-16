@@ -15,9 +15,10 @@ pub enum RecoveryEvent {
     },
     /// A newly discovered order shown by its owner's ordinary UI.
     OrderFound { actor: Actor, order: OrderReference },
-    /// The operator verified on the daemon and relay that a started
-    /// submission never produced an order; recorded through `cleanup`, never
-    /// inferred by the harness.
+    /// A started submission never produced an order: `cleanup` checked the
+    /// daemon's order events on the relay for the run's window, or the
+    /// operator attributed `none` against that same audit. Never inferred
+    /// from the app alone.
     SubmissionAbandoned { actor: Actor },
     /// Written before submitting an invoice or initiating its payment.
     PaymentExpected {

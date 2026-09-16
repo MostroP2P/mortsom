@@ -86,6 +86,7 @@ fn fixture() -> (DesktopOptions, Factory) {
         provenance: crate::provenance::BuildProvenance::prebuilt(),
         xvfb: "missing".into(),
         browser: "missing".into(),
+        relay_audit: None,
         chromedriver: "missing".into(),
     };
     let factory = Factory {

@@ -58,22 +58,9 @@ pub(super) fn attribute_orders(
                 "attribution `{spec}`: `{order_id}` is not an order id (or `none`)"
             ));
         }
-        let events = journal.events();
-        let open_submission = events.iter().enumerate().find_map(|(index, event)| {
-            let RecoveryEvent::SubmissionStarted {
-                actor: a,
-                known_orders,
-            } = event
-            else {
-                return None;
-            };
-            let resolved = events[index + 1..].iter().any(|later| {
-                matches!(later,
-                    RecoveryEvent::OrderFound { actor: a, .. }
-                    | RecoveryEvent::SubmissionAbandoned { actor: a } if *a == actor)
-            });
-            (*a == actor && !resolved).then(|| known_orders.clone())
-        });
+        let open_submission = crate::run::recovery::open_submissions(journal)
+            .into_iter()
+            .find_map(|(a, known_orders)| (a == actor).then_some(known_orders));
         let Some(known_orders) = open_submission else {
             return Err(format!(
                 "attribution `{spec}`: {} has no unresolved submission in this journal",
@@ -123,6 +110,37 @@ pub(super) fn attribute_orders(
         );
     }
     Ok(())
+}
+
+/// One operator-facing paragraph per submission the relay could not rule
+/// out, keyed by actor: the candidate orders and the exact commands that
+/// resolve it.
+pub(super) fn operator_hints(
+    journal: &FileJournal,
+    audit: &super::recover_audit::RelayAudit,
+) -> Vec<(mortsom_common::Actor, String)> {
+    let run = journal.snapshot().run_id;
+    crate::run::recovery::candidates(journal, audit)
+        .into_iter()
+        .filter_map(|(actor, unknown)| {
+            let first = unknown.first()?.id.clone();
+            let candidates: Vec<String> = unknown
+                .iter()
+                .map(|order| format!("{} ({})", order.id, order.status))
+                .collect();
+            let name = actor.as_str();
+            Some((
+                actor,
+                format!(
+                    "recovery: {name}'s order submission is still unresolved. The daemon published \
+                     these orders during the run that the journal does not know: {}.\n  If one is \
+                     {name}'s: mortsom cleanup {run} --attribute-order {name}={first}\n  If none \
+                     is:            mortsom cleanup {run} --attribute-order {name}=none",
+                    candidates.join(", ")
+                ),
+            ))
+        })
+        .collect()
 }
 
 fn is_uuid_like(value: &str) -> bool {
@@ -190,21 +208,33 @@ async fn recover(
         }
         return Err("recovery stack identity changed; preserve evidence and resolve the recorded environment first".into());
     }
-    if !attributions.is_empty() {
+    let mut hints = Vec::new();
+    let mut relay_audit = None;
+    if !attributions.is_empty() || crate::run::recovery::unresolved_submissions(&journal) {
         let since = manifest
             .run_id
             .started_at()
             .ok_or("cannot audit the relay: the run id carries no start time")?
             .timestamp()
             .max(0) as u64;
-        let audit = super::recover_audit::fetch(
-            &stack.relay_url,
-            &stack.daemon_pubkey,
+        let source = super::recover_audit::RelayAuditSource {
+            relay_url: stack.relay_url.clone(),
+            daemon_pubkey: stack.daemon_pubkey.clone(),
             since,
-            std::time::Duration::from_secs(config.mostro.health_timeout_secs),
-        )
-        .await?;
+            timeout: std::time::Duration::from_secs(config.mostro.health_timeout_secs),
+        };
+        let audit = source.fetch().await?;
         attribute_orders(&journal, attributions, &audit)?;
+        for actor in crate::run::recovery::relay_ruled_out(&journal, &audit) {
+            println!(
+                "recovery: the relay shows no order the daemon published for {}'s submission \
+                 since {}; it is closed once the app lists none and a fresh audit agrees",
+                actor.as_str(),
+                audit.since
+            );
+        }
+        hints = operator_hints(&journal, &audit);
+        relay_audit = Some(source);
     }
     let bundle = Arc::new(
         crate::fingerprint::CapturedBundle::resume(&root.join("bundle"), manifest.bundle)
@@ -233,7 +263,7 @@ async fn recover(
     };
     let web_tools = crate::web_tools::resolve(&RealHost);
     let desktop = crate::run::DesktopOptions {
-        recovery: Some(journal),
+        recovery: Some(Arc::clone(&journal)),
         resume: true,
         artifact,
         bundle,
@@ -242,6 +272,7 @@ async fn recover(
         xvfb: tool("MORTSOM_XVFB", "Xvfb"),
         chromedriver: web_tools.chromedriver.path,
         browser: web_tools.browser.path,
+        relay_audit,
     };
     let adapter = select_adapter();
     let env = |name: &str| std::env::var(name).ok();
@@ -268,6 +299,15 @@ async fn recover(
     };
     let summary = run_scenarios(&config, &options, &deps).await?;
     print!("{}", summary.checks.render_with_color(use_color()));
+    if !summary.passed {
+        // Only what the run left open: discovery may have found a candidate.
+        let still_open = crate::run::recovery::open_submissions(&journal);
+        for (actor, hint) in &hints {
+            if still_open.iter().any(|(open, _)| open == actor) {
+                println!("{hint}");
+            }
+        }
+    }
     println!(
         "cleanup evidence: {}/{}",
         config.run.artifacts_dir, summary.run_id
@@ -284,6 +324,7 @@ async fn recover(
 mod tests {
     use super::*;
     use crate::recovery_store::RecoveryManifest;
+    use crate::run::recovery::relay_ruled_out;
     use mortsom_common::Actor;
     use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
 
@@ -478,5 +519,148 @@ mod tests {
             attribute_orders(&fresh, &[format!("alice={ORDER}")], &audit(&[])).unwrap_err();
         assert!(refused.contains("published no order"), "{refused}");
         assert_eq!(fresh.events().len(), 1);
+    }
+
+    /// The relay is the daemon's public record. When it shows no order the
+    /// journal does not already know for the run's window, the started
+    /// submission is ruled out; the run records the abandonment once UI
+    /// discovery lists nothing either.
+    #[test]
+    fn an_empty_relay_window_rules_a_started_submission_out_and_the_run_abandons_it() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec!["known-before".into()],
+        }]);
+        let audit = audit(&[("known-before", "pending")]);
+        assert_eq!(relay_ruled_out(&journal, &audit), vec![Actor::Alice]);
+        assert_eq!(journal.events().len(), 1, "ruling out records nothing");
+        assert_eq!(
+            crate::run::recovery::abandon_ruled_out(&journal, &audit).unwrap(),
+            vec![Actor::Alice]
+        );
+        assert!(journal.events().iter().any(|e| matches!(
+            e,
+            RecoveryEvent::SubmissionAbandoned {
+                actor: Actor::Alice
+            }
+        )));
+        assert!(!crate::run::recovery::unresolved_submissions(&journal));
+        assert!(relay_ruled_out(&journal, &audit).is_empty());
+        assert!(
+            crate::run::recovery::abandon_ruled_out(&journal, &audit)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// An order the app lists after the relay audit wins: discovery resolved
+    /// the submission, so nothing contradictory is recorded.
+    #[test]
+    fn an_order_discovered_by_the_app_is_never_contradicted_by_the_relay_audit() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![],
+        }]);
+        assert_eq!(relay_ruled_out(&journal, &audit(&[])), vec![Actor::Alice]);
+        journal
+            .record(RecoveryEvent::OrderFound {
+                actor: Actor::Alice,
+                order: mortsom_app_contract::OrderReference::new(ORDER),
+            })
+            .unwrap();
+        assert!(
+            crate::run::recovery::abandon_ruled_out(&journal, &audit(&[]))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            !journal
+                .events()
+                .iter()
+                .any(|e| matches!(e, RecoveryEvent::SubmissionAbandoned { .. }))
+        );
+    }
+
+    /// A request the restarted client finished late shows up only in the
+    /// audit taken after discovery; that fresh audit decides, not the first.
+    #[test]
+    fn an_order_that_appears_after_the_first_audit_blocks_abandonment() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![],
+        }]);
+        assert_eq!(relay_ruled_out(&journal, &audit(&[])), vec![Actor::Alice]);
+        let fresh = audit(&[(ORDER, "pending")]);
+        assert!(
+            crate::run::recovery::abandon_ruled_out(&journal, &fresh)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(crate::run::recovery::unresolved_submissions(&journal));
+    }
+
+    /// Any unknown order in the window, open or closed, may be the one the
+    /// submission created: only the operator can attribute it.
+    #[test]
+    fn an_unknown_order_in_the_window_keeps_the_submission_unresolved() {
+        for status in ["pending", "expired", "canceled"] {
+            let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+                actor: Actor::Alice,
+                known_orders: vec![],
+            }]);
+            assert!(
+                relay_ruled_out(&journal, &audit(&[(ORDER, status)])).is_empty(),
+                "{status}"
+            );
+            assert!(crate::run::recovery::unresolved_submissions(&journal));
+        }
+    }
+
+    /// Orders the journal already found for either actor are not candidates
+    /// for another actor's submission.
+    #[test]
+    fn orders_the_journal_already_found_do_not_block_ruling_out() {
+        let (_dir, journal) = journal_with(vec![
+            RecoveryEvent::OrderFound {
+                actor: Actor::Bob,
+                order: mortsom_app_contract::OrderReference::new(ORDER),
+            },
+            RecoveryEvent::SubmissionStarted {
+                actor: Actor::Alice,
+                known_orders: vec![],
+            },
+        ]);
+        assert_eq!(
+            relay_ruled_out(&journal, &audit(&[(ORDER, "pending")])),
+            vec![Actor::Alice]
+        );
+    }
+
+    #[test]
+    fn the_operator_hint_names_the_actor_the_candidates_and_the_commands() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![],
+        }]);
+        let run = journal.snapshot().run_id;
+        let hints = operator_hints(&journal, &audit(&[(ORDER, "expired")]));
+        assert_eq!(hints.len(), 1);
+        assert_eq!(hints[0].0, Actor::Alice);
+        let hint = &hints[0].1;
+        assert!(hint.contains("alice"), "{hint}");
+        assert!(hint.contains(&format!("{ORDER} (expired)")), "{hint}");
+        assert!(
+            hint.contains(&format!(
+                "mortsom cleanup {run} --attribute-order alice={ORDER}"
+            )),
+            "{hint}"
+        );
+        assert!(
+            hint.contains(&format!(
+                "mortsom cleanup {run} --attribute-order alice=none"
+            )),
+            "{hint}"
+        );
+        assert!(operator_hints(&journal, &audit(&[])).is_empty());
     }
 }

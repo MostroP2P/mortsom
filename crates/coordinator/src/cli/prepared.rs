@@ -53,6 +53,7 @@ mod tests {
             xvfb: "Xvfb".into(),
             chromedriver: "chromedriver".into(),
             browser: "chromium".into(),
+            relay_audit: None,
         }
     }
 

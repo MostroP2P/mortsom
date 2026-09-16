@@ -33,6 +33,16 @@ pub struct RelayAudit {
 }
 
 impl RelayAudit {
+    /// Orders the daemon published in the window that the journal does not
+    /// already know, whatever their status: every candidate for what an
+    /// unresolved submission may have created.
+    pub fn unknown(&self, known: &[String]) -> Vec<&AuditedOrder> {
+        self.orders
+            .iter()
+            .filter(|order| !known.contains(&order.id))
+            .collect()
+    }
+
     /// Orders the daemon created in the window that the journal does not
     /// already know and that are not closed: exactly what an "it produced no
     /// order" statement would leave behind.
@@ -46,6 +56,30 @@ impl RelayAudit {
     /// Whether the daemon published `id` in the window.
     pub fn published(&self, id: &str) -> bool {
         self.orders.iter().any(|order| order.id == id)
+    }
+}
+
+/// Where and how to fetch the daemon's order events for a run's window, so
+/// the same audit can be repeated later, after the retained clients ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayAuditSource {
+    pub relay_url: String,
+    pub daemon_pubkey: String,
+    /// Unix seconds; the run's start.
+    pub since: u64,
+    pub timeout: Duration,
+}
+
+impl RelayAuditSource {
+    /// A fresh audit of the window, as of now.
+    pub async fn fetch(&self) -> Result<RelayAudit, String> {
+        fetch(
+            &self.relay_url,
+            &self.daemon_pubkey,
+            self.since,
+            self.timeout,
+        )
+        .await
     }
 }
 
@@ -137,5 +171,11 @@ mod tests {
             .collect();
         assert_eq!(open, ["live", "fresh"]);
         assert!(audit.published("expired") && !audit.published("other"));
+        let unknown: Vec<&str> = audit
+            .unknown(&["known".to_owned()])
+            .iter()
+            .map(|o| o.id.as_str())
+            .collect();
+        assert_eq!(unknown, ["expired", "canceled", "done", "live", "fresh"]);
     }
 }

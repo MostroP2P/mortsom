@@ -1,5 +1,6 @@
 //! Durable desktop ownership and public UI recovery, separate from scenario narratives.
 use super::*;
+use crate::cli::recover_audit::{AuditedOrder, RelayAudit};
 use crate::recovery_store::{FileJournal, RecoveryEnvironment, RecoveryManifest, WalletBackend};
 use mortsom_common::Actor;
 use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
@@ -165,19 +166,122 @@ pub(super) async fn discover(ctx: &Context, journal: &FileJournal) -> Result<(),
     Ok(())
 }
 
-pub(crate) fn unresolved_submissions(journal: &FileJournal) -> bool {
+/// Started submissions that no later order discovery or operator statement
+/// resolved, with the orders their actor already owned when they started.
+pub(crate) fn open_submissions(journal: &FileJournal) -> Vec<(Actor, Vec<String>)> {
     let events = journal.snapshot().events;
-    events.iter().enumerate().any(|(index, event)| {
-        if let RecoveryEvent::SubmissionStarted { actor, .. } = event {
-            !events[index + 1..].iter().any(|event| {
-                matches!(event,
+    events
+        .iter()
+        .enumerate()
+        .filter_map(|(index, event)| {
+            let RecoveryEvent::SubmissionStarted {
+                actor,
+                known_orders,
+            } = event
+            else {
+                return None;
+            };
+            let resolved = events[index + 1..].iter().any(|later| {
+                matches!(later,
                     RecoveryEvent::OrderFound { actor: found, .. }
                     | RecoveryEvent::SubmissionAbandoned { actor: found } if found == actor)
+            });
+            (!resolved).then(|| (*actor, known_orders.clone()))
+        })
+        .collect()
+}
+
+/// Every order the journal already attributes to an actor.
+pub(crate) fn found_orders(journal: &FileJournal) -> Vec<String> {
+    journal
+        .snapshot()
+        .events
+        .iter()
+        .filter_map(|event| match event {
+            RecoveryEvent::OrderFound { order, .. } => Some(order.id.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every open submission with the orders the daemon published in the run's
+/// window that neither the submission nor the journal already knows.
+pub(crate) fn candidates<'a>(
+    journal: &FileJournal,
+    audit: &'a RelayAudit,
+) -> Vec<(Actor, Vec<&'a AuditedOrder>)> {
+    let found = found_orders(journal);
+    open_submissions(journal)
+        .into_iter()
+        .map(|(actor, known_orders)| {
+            let known: Vec<String> = known_orders
+                .into_iter()
+                .chain(found.iter().cloned())
+                .collect();
+            (actor, audit.unknown(&known))
+        })
+        .collect()
+}
+
+/// Actors whose open submission the relay rules out: the daemon's public
+/// record shows no order the journal does not already know for the window.
+pub(crate) fn relay_ruled_out(journal: &FileJournal, audit: &RelayAudit) -> Vec<Actor> {
+    candidates(journal, audit)
+        .into_iter()
+        .filter_map(|(actor, unknown)| unknown.is_empty().then_some(actor))
+        .collect()
+}
+
+/// Records as abandoned every submission still open after UI discovery that
+/// a fresh relay `audit` rules out. Discovery ran first, so an order the app
+/// lists always wins; the audit is taken after the retained clients ran, so
+/// a request they finished late has had its chance to appear. Returns the
+/// actors recorded.
+pub(crate) fn abandon_ruled_out(
+    journal: &FileJournal,
+    audit: &RelayAudit,
+) -> Result<Vec<Actor>, String> {
+    let ruled_out = relay_ruled_out(journal, audit);
+    for actor in &ruled_out {
+        journal.record(RecoveryEvent::SubmissionAbandoned { actor: *actor })?;
+    }
+    Ok(ruled_out)
+}
+
+pub(crate) fn unresolved_submissions(journal: &FileJournal) -> bool {
+    !open_submissions(journal).is_empty()
+}
+
+/// Why the protected profiles stay, and what resolves it, for the operator.
+fn retained_reason(journal: &FileJournal, summary: &RunSummary) -> String {
+    let open = open_submissions(journal);
+    if !open.is_empty() {
+        let run = journal.snapshot().run_id;
+        let commands: Vec<String> = open
+            .iter()
+            .map(|(actor, _)| {
+                let actor = actor.as_str();
+                format!("`mortsom cleanup {run} --attribute-order {actor}=<order-id>` (or `{actor}=none`)")
             })
-        } else {
-            false
-        }
-    })
+            .collect();
+        let actors: Vec<&str> = open.iter().map(|(actor, _)| actor.as_str()).collect();
+        return format!(
+            "protected profiles retained: {} started an order submission the app never listed \
+             and the relay could not rule out; rerun {}",
+            actors.join(" and "),
+            commands.join(" and ")
+        );
+    }
+    if summary
+        .cleanup
+        .as_ref()
+        .is_some_and(|cleanup| !cleanup.is_clean())
+    {
+        return "protected profiles retained: order cleanup did not finish; rerun `mortsom cleanup` \
+                once the stack is healthy"
+            .into();
+    }
+    "protected profiles retained; explicit recovery is required".into()
 }
 
 pub(super) async fn resume_actor(
@@ -277,11 +381,10 @@ pub(super) fn finish(journal: &FileJournal, summary: &mut RunSummary, artifacts:
         write_recovery_evidence(&manifest, summary, artifacts);
     }
     if !manifest.closed {
-        summary.checks.push(
-            "recovery-storage",
-            CheckStatus::Fail,
-            "protected profiles retained; explicit recovery is required",
-        );
+        let reason = retained_reason(journal, summary);
+        summary
+            .checks
+            .push("recovery-storage", CheckStatus::Fail, reason);
     }
 }
 
