@@ -132,6 +132,8 @@ fn retain_bundle(
             events: vec![],
             closed: false,
             resolution_verified: false,
+            outcome: Some(mortsom_coordinator::recovery_store::RecoveryOutcome::Pending),
+            environment: None,
         },
     )?);
     use std::os::unix::fs::DirBuilderExt;

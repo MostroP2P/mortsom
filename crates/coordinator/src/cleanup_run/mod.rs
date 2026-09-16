@@ -30,7 +30,11 @@ pub struct CleanupRunSummary {
     /// Orders the run's own sweep left open; only a client session can
     /// close them, so they are reported, not fixed.
     pub unresolved_orders: Vec<String>,
-    /// True when the run's sweep ran and left no order unresolved.
+    /// The run's recovery was abandoned; its orders were never verified.
+    #[serde(default)]
+    pub recovery_abandoned: bool,
+    /// True when the run's sweep ran, left no order unresolved and its
+    /// recovery was not abandoned.
     pub clean: bool,
 }
 
@@ -48,6 +52,12 @@ impl CleanupRunSummary {
         for order in &self.unresolved_orders {
             out.push_str(&format!(
                 "  UNRESOLVED order {order}: cancel it from the maker's app; this command cannot\n"
+            ));
+        }
+        if self.recovery_abandoned {
+            out.push_str(&format!(
+                "  recovery ABANDONED: {}\n",
+                crate::recovery_abandon::NOT_VERIFIED
             ));
         }
         out.push_str("  clients: no recovery journal retained for this run; nothing to reopen\n");
@@ -68,12 +78,14 @@ pub fn cleanup_run(config: &Config, run_id: &RunId) -> CleanupRunSummary {
     let (cleanup_report_found, unresolved_orders) = read_unresolved(&run_dir);
     // Orders count as verified only when the run's own sweep reported them;
     // a run that died before its sweep leaves them unknown, not clean.
-    let clean = cleanup_report_found && unresolved_orders.is_empty();
+    let recovery_abandoned = crate::recovery_abandon::abandonment(&run_dir).is_abandoned();
+    let clean = cleanup_report_found && unresolved_orders.is_empty() && !recovery_abandoned;
     let summary = CleanupRunSummary {
         run_id: run_id.to_owned(),
         run_dir_found,
         cleanup_report_found,
         unresolved_orders,
+        recovery_abandoned,
         clean,
     };
     if run_dir_found {

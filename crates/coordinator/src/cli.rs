@@ -1,5 +1,6 @@
 //! `mortsom` command-line interface.
 
+mod abandon;
 mod maintenance;
 mod prepared;
 mod recover;
@@ -83,6 +84,12 @@ pub enum Command {
         #[arg(long = "attribute-order", value_name = "ACTOR=ORDER_ID")]
         attribute_order: Vec<String>,
     },
+    /// Close a recovery journal whose regtest stack no longer exists.
+    Recovery {
+        /// Recovery action.
+        #[command(subcommand)]
+        action: RecoveryAction,
+    },
     /// Build the sanitized publication bundle of a run (redacted text
     /// evidence, screenshots by policy, manifest with retry classification).
     Publish {
@@ -162,6 +169,24 @@ pub enum Command {
     },
 }
 
+/// Recovery journal actions other than `cleanup`.
+#[derive(Debug, Subcommand)]
+pub enum RecoveryAction {
+    /// Close an unresolved journal as abandoned, only when its Mortsom-owned
+    /// regtest stack is provably destroyed. Evidence is preserved; the run
+    /// stays failed and is never reported as cleaned up.
+    Abandon {
+        /// Run id of the journal.
+        run: String,
+        /// Why the journal is abandoned.
+        #[arg(long, value_enum)]
+        reason: crate::recovery_store::AbandonReason,
+        /// The same run id again, as confirmation.
+        #[arg(long = "confirm-run", value_name = "RUN_ID")]
+        confirm_run: String,
+    },
+}
+
 /// Persistent stack lifecycle actions.
 #[derive(Debug, Subcommand)]
 pub enum StackAction {
@@ -225,6 +250,19 @@ async fn stack_cli(stack_dir: &std::path::Path, action: StackAction) -> ExitCode
             return ExitCode::from(2);
         }
     };
+    let operation = match &action {
+        StackAction::Up { replace, .. } => {
+            Some(crate::recovery_abandon::LifecycleOperation::Up { replace: *replace })
+        }
+        StackAction::Down => Some(crate::recovery_abandon::LifecycleOperation::Down),
+        StackAction::Status | StackAction::Logs { .. } => None,
+    };
+    if let Some(operation) = operation
+        && let Err(error) = abandon::guard_stack(operation, layout.root()).await
+    {
+        eprintln!("{error}");
+        return ExitCode::from(2);
+    }
     let outcome = match action {
         StackAction::Up {
             mostro_image,
@@ -338,6 +376,7 @@ fn lock_mutation(
         command,
         Command::Run { .. }
             | Command::Cleanup { .. }
+            | Command::Recovery { .. }
             | Command::Relay { .. }
             | Command::Stack {
                 action: StackAction::Up { .. } | StackAction::Down
@@ -382,6 +421,14 @@ pub async fn run(cli: Cli) -> ExitCode {
             run,
             attribute_order,
         } => cleanup_command(&cli.config, &cli.stack_dir, &run, &attribute_order).await,
+        Command::Recovery {
+            action:
+                RecoveryAction::Abandon {
+                    run,
+                    reason,
+                    confirm_run,
+                },
+        } => abandon::abandon_command(&cli.stack_dir, &run, reason, &confirm_run).await,
         Command::Publish {
             run,
             out,
@@ -650,6 +697,58 @@ mod tests {
                     action: super::StackAction::Up { replace, .. }
                 } if replace == expected
             ));
+        }
+    }
+
+    #[test]
+    fn recovery_abandon_takes_only_a_known_reason_and_a_confirmation() {
+        use clap::Parser;
+        let cli = super::Cli::try_parse_from([
+            "mortsom",
+            "recovery",
+            "abandon",
+            "run-1",
+            "--reason",
+            "stack-destroyed",
+            "--confirm-run",
+            "run-1",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            super::Command::Recovery {
+                action: super::RecoveryAction::Abandon { ref run, ref confirm_run, .. }
+            } if run == "run-1" && confirm_run == "run-1"
+        ));
+        for args in [
+            &[
+                "mortsom",
+                "recovery",
+                "abandon",
+                "run-1",
+                "--confirm-run",
+                "run-1",
+            ][..],
+            &[
+                "mortsom",
+                "recovery",
+                "abandon",
+                "run-1",
+                "--reason",
+                "stack-destroyed",
+            ][..],
+            &[
+                "mortsom",
+                "recovery",
+                "abandon",
+                "run-1",
+                "--reason",
+                "because",
+                "--confirm-run",
+                "run-1",
+            ][..],
+        ] {
+            assert!(super::Cli::try_parse_from(args).is_err(), "{args:?}");
         }
     }
 

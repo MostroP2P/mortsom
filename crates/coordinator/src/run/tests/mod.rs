@@ -899,6 +899,7 @@ fn opts_in(world: &World, names: &[&str]) -> RunOptions {
     RunOptions {
         desktop: desktop_options(world),
         stack: Some(stack()),
+        stack_dir: None,
         scenarios: names.iter().map(|s| (*s).to_owned()).collect(),
         tag: None,
     }

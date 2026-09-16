@@ -110,3 +110,32 @@ fn an_unreadable_sweep_report_is_an_unresolved_entry() {
     assert!(!summary.clean);
     assert!(summary.unresolved_orders[0].contains("unreadable"));
 }
+
+#[test]
+fn an_abandoned_recovery_is_never_clean() {
+    let world = world();
+    let run_dir = write_cleanup(&world, "run-abandoned", &[]);
+    crate::recovery_abandon::write_test_artifact(&run_dir);
+
+    let summary = cleanup_run(&world.config, &"run-abandoned".parse().unwrap());
+
+    assert!(summary.recovery_abandoned);
+    assert!(!summary.clean);
+    let text = summary.render();
+    assert!(text.contains("recovery ABANDONED"), "{text}");
+    assert!(text.contains("result: NOT clean"));
+}
+
+#[test]
+fn a_prepared_or_unreadable_abandonment_record_is_never_clean() {
+    for corrupt in [false, true] {
+        let world = world();
+        let run_dir = write_cleanup(&world, "run-incomplete", &[]);
+        crate::recovery_abandon::write_incomplete_test_artifacts(&run_dir, corrupt);
+
+        let summary = cleanup_run(&world.config, &"run-incomplete".parse().unwrap());
+
+        assert!(summary.recovery_abandoned, "corrupt={corrupt}");
+        assert!(!summary.clean);
+    }
+}

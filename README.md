@@ -338,7 +338,10 @@ relay for the run's window: an id must have been published then and not be known
 Recovery reopens the same Alice and Bob identities from protected storage under
 `$HOME/.local/state/mortsom/recovery/<run-id>`, cancels through ordinary UI controls and deletes the profiles
 only after verified resolution. It never creates a new identity, retries a payment or releases escrow. A new
-run is refused while a journal is unresolved. Details and failure categories are in
+run is refused while a journal is unresolved, and `stack up`/`stack down` are refused while a journal's stack
+still exists. A journal whose Mortsom-owned regtest stack was destroyed can only be closed with
+`recovery abandon <run-id> --reason stack-destroyed --confirm-run <run-id>`, which preserves evidence and
+leaves the run failed: nothing is verified. Details and failure categories are in
 [docs/runbook.md](docs/runbook.md).
 
 ## Commands
@@ -349,6 +352,7 @@ run is refused while a journal is unresolved. Details and failure categories are
 | `doctor --platform linux\|web` | Read-only prerequisite and readiness checks |
 | `run <scenario>... [--tag <family>] [--platform linux\|web]` | Scenarios with isolated clients, caps and cleanup; one run per scenario |
 | `cleanup <run-id>` | Recover a run's identities and orders |
+| `recovery abandon <run-id> --reason stack-destroyed --confirm-run <run-id>` | Close a journal whose regtest stack is provably destroyed; the run stays failed |
 | `list` | Registered scenarios |
 | `publish <run-id> --out <dir>` | Redacted evidence bundle |
 | `accounting`, `parity` | Spend trends and run comparison |
