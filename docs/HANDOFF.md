@@ -3,6 +3,17 @@
 Read [spec.md](../spec.md) first; it is normative. This file says where the work is and what comes next.
 Repository content is English; the operator conversation is Spanish.
 
+## Recovery abandonment (2026-09-16)
+
+Branch `feat/recovery-abandon` adds `mortsom recovery abandon <run-id> --reason stack-destroyed
+--confirm-run <run-id>`, the only terminal path for a journal whose Mortsom-owned regtest stack was
+destroyed (spec section 11, runbook section 5). The journal now records `RecoveryEnvironment` at creation
+(lane, mainnet permission, stack directory, wallet backend, node networks) and `stack up`/`stack down` are
+guarded by pending journals. Abandonment is a failed run everywhere: `cleanup`, `accounting`, `parity` and
+`publish` read `recovery-abandonment.json`. Code lives in `crates/coordinator/src/recovery_abandon/` and
+`cli/abandon.rs`. The adapter test `selectors_match_the_v2_app_contract` reads the sibling `../mobilev2`
+checkout and fails there for a missing `node.use_default` id; it is unrelated to this branch.
+
 ## Managed app preparation (2026-09-15)
 
 The default source is now managed `MostroP2P/app` main. `run --app-ref <branch-or-PR-URL>` resolves and

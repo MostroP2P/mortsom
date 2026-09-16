@@ -80,6 +80,9 @@ pub struct Side {
     pub unresolved_orders: usize,
     /// The scenario failed on the automation contract.
     pub contract_failure: bool,
+    /// The run's recovery was abandoned: its cleanup was never verified.
+    #[serde(default)]
+    pub recovery_abandoned: bool,
 }
 
 /// Comparison of one scenario.
@@ -110,7 +113,11 @@ pub struct ParityReport {
     pub only_in_a: Vec<String>,
     /// Scenarios only one run executed.
     pub only_in_b: Vec<String>,
-    /// True when no scenario has an unexplained difference.
+    /// Runs whose recovery was abandoned; they can never reach parity.
+    #[serde(default)]
+    pub abandoned_runs: Vec<String>,
+    /// True when no scenario has an unexplained difference and no run's
+    /// recovery was abandoned.
     pub parity: bool,
 }
 
@@ -167,6 +174,12 @@ impl ParityReport {
                 ));
             }
         }
+        if !self.abandoned_runs.is_empty() {
+            out.push_str(&format!(
+                "\nRuns with ABANDONED recovery (cleanup never verified): {}\n",
+                self.abandoned_runs.join(", ")
+            ));
+        }
         out.push_str(if self.parity {
             "\nresult: parity (every difference is intentional)\n"
         } else {
@@ -222,10 +235,16 @@ pub fn compare_runs(
             findings,
         });
     }
+    let abandoned_runs: Vec<String> = [(run_a, &a), (run_b, &b)]
+        .into_iter()
+        .filter(|(_, run)| run.abandoned)
+        .map(|(id, _)| id.to_owned())
+        .collect();
     let report = ParityReport {
         runs: (run_a.to_owned(), run_b.to_owned()),
         profiles: (a.summary.app_profile.clone(), b.summary.app_profile.clone()),
-        parity: scenarios.iter().all(|s| s.findings.is_empty()),
+        parity: abandoned_runs.is_empty() && scenarios.iter().all(|s| s.findings.is_empty()),
+        abandoned_runs,
         scenarios,
         only_in_a: names_a.difference(&names_b).cloned().collect(),
         only_in_b: names_b.difference(&names_a).cloned().collect(),
@@ -249,6 +268,7 @@ pub fn load_intentional(path: &Path) -> Result<Vec<Intentional>, String> {
 struct LoadedRun {
     summary: RunSummary,
     timeline: Vec<TimelineEntry>,
+    abandoned: bool,
 }
 
 fn load_run(dir: &Path) -> Result<LoadedRun, String> {
@@ -265,7 +285,11 @@ fn load_run(dir: &Path) -> Result<LoadedRun, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(format!("{}: {e}", timeline_path.display())),
     };
-    Ok(LoadedRun { summary, timeline })
+    Ok(LoadedRun {
+        summary,
+        timeline,
+        abandoned: crate::recovery_abandon::read_artifact(dir).is_some(),
+    })
 }
 
 fn side_of(run: &LoadedRun, scenario: &str) -> Side {
@@ -298,6 +322,7 @@ fn side_of(run: &LoadedRun, scenario: &str) -> Side {
             .any(|e| e.kind == TimelineKind::Wallet && e.summary.starts_with("wallet:")),
         unresolved_orders,
         contract_failure,
+        recovery_abandoned: run.abandoned,
     }
 }
 
@@ -403,7 +428,8 @@ fn differing_aspects(a: &Side, b: &Side) -> Vec<Aspect> {
     if a.wallet_settled != b.wallet_settled {
         out.push(Aspect::Wallet);
     }
-    if (a.unresolved_orders == 0) != (b.unresolved_orders == 0) {
+    let clean = |side: &Side| side.unresolved_orders == 0 && !side.recovery_abandoned;
+    if clean(a) != clean(b) {
         out.push(Aspect::Cleanup);
     }
     if a.contract_failure != b.contract_failure {
@@ -501,6 +527,35 @@ mod tests {
         if !timeline_json.is_empty() {
             std::fs::write(run.join(files::TIMELINE_JSON), timeline_json).unwrap();
         }
+    }
+
+    #[test]
+    fn an_abandoned_recovery_never_reaches_parity() {
+        let dir = tempfile::tempdir().unwrap();
+        let states = [("alice", "pending")];
+        for (id, profile) in [("a", "profile-b"), ("b", "mobile-v2")] {
+            write_run(
+                dir.path(),
+                id,
+                &summary(id, profile, &[("happy_sell", "passed")]),
+                &timeline(&states, &["pending"], false),
+            );
+        }
+        assert!(compare_runs(dir.path(), "a", "b", &[]).unwrap().parity);
+
+        crate::recovery_abandon::write_test_artifact(&dir.path().join("b"));
+        let accepted = [Intentional {
+            scenario: "happy_sell".into(),
+            aspect: Aspect::Cleanup,
+            reason: "accepting it changes nothing".into(),
+        }];
+        let report = compare_runs(dir.path(), "a", "b", &accepted).unwrap();
+        assert!(!report.parity);
+        assert_eq!(report.abandoned_runs, vec!["b".to_owned()]);
+        assert!(report.scenarios[0].b.recovery_abandoned);
+        assert!(report.render().contains("ABANDONED recovery"));
+        let findings = compare_runs(dir.path(), "a", "b", &[]).unwrap();
+        assert_eq!(findings.scenarios[0].findings, vec![Aspect::Cleanup]);
     }
 
     #[test]

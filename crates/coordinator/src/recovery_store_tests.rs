@@ -22,6 +22,8 @@ fn manifest() -> RecoveryManifest {
         events: vec![],
         closed: false,
         resolution_verified: false,
+        outcome: Some(crate::recovery_store::RecoveryOutcome::Pending),
+        environment: None,
     }
 }
 #[test]
@@ -280,4 +282,103 @@ fn pending_recovery_message_names_the_exact_cleanup_command() {
         "{styled:?}"
     );
     assert_eq!(String::from(pending), plain);
+}
+#[test]
+fn legacy_manifests_derive_their_state_from_the_closed_flag() {
+    let base = tempfile::tempdir().unwrap();
+    let journal = FileJournal::create(base.path(), manifest()).unwrap();
+    let path = journal.root().join("manifest.json");
+    for (closed, expected) in [
+        (false, RecoveryOutcome::Pending),
+        (true, RecoveryOutcome::Resolved),
+    ] {
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let object = legacy.as_object_mut().unwrap();
+        object.remove("outcome");
+        object.remove("environment");
+        object.insert("closed".into(), closed.into());
+        crate::artifacts::persist::atomic_json(&path, &legacy.to_string()).unwrap();
+        let reopened = FileJournal::open(journal.root()).unwrap().snapshot();
+        assert_eq!(reopened.state(), expected);
+        assert!(reopened.environment.is_none());
+    }
+}
+#[test]
+fn a_manifest_whose_outcome_contradicts_closed_fails_closed() {
+    let base = tempfile::tempdir().unwrap();
+    let journal = FileJournal::create(base.path(), manifest()).unwrap();
+    let path = journal.root().join("manifest.json");
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    value["closed"] = true.into();
+    crate::artifacts::persist::atomic_json(&path, &value.to_string()).unwrap();
+    assert!(FileJournal::open(journal.root()).is_err());
+    assert!(FileJournal::refuse_pending(base.path()).is_err());
+}
+#[test]
+fn abandonment_is_terminal_and_distinct_from_resolution() {
+    let base = tempfile::tempdir().unwrap();
+    let journal = FileJournal::create(base.path(), manifest()).unwrap();
+    assert!(
+        journal.record_node_networks(BTreeMap::new()).is_err(),
+        "no environment recorded"
+    );
+    let now = chrono::Utc::now();
+    journal.abandon(AbandonReason::StackDestroyed, now).unwrap();
+    let snapshot = FileJournal::open(journal.root()).unwrap().snapshot();
+    assert!(snapshot.closed && !snapshot.resolution_verified);
+    assert!(matches!(
+        snapshot.state(),
+        RecoveryOutcome::AbandonedRegtest { .. }
+    ));
+    assert!(journal.close().is_err(), "abandoned is never resolved");
+    assert!(journal.confirm_resolution().is_err());
+    assert!(journal.abandon(AbandonReason::StackDestroyed, now).is_err());
+    FileJournal::refuse_pending(base.path()).unwrap();
+
+    let resolved = FileJournal::create(&base.path().join("other"), manifest()).unwrap();
+    resolved.close().unwrap();
+    assert!(
+        resolved
+            .abandon(AbandonReason::StackDestroyed, now)
+            .is_err()
+    );
+    assert_eq!(resolved.snapshot().state(), RecoveryOutcome::Resolved);
+}
+#[test]
+fn the_pending_inventory_lists_only_open_journals() {
+    let base = tempfile::tempdir().unwrap();
+    let open = FileJournal::create(base.path(), manifest()).unwrap();
+    let closed = FileJournal::create(base.path(), manifest()).unwrap();
+    closed.close().unwrap();
+    let pending = FileJournal::pending(base.path()).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].run_id, open.snapshot().run_id);
+    assert!(
+        FileJournal::pending(&base.path().join("missing"))
+            .unwrap()
+            .is_empty()
+    );
+}
+#[test]
+fn node_networks_are_recorded_into_the_environment() {
+    let base = tempfile::tempdir().unwrap();
+    let mut with_environment = manifest();
+    with_environment.environment = Some(RecoveryEnvironment {
+        lane: mortsom_common::Lane::Local,
+        allow_mainnet: false,
+        stack_dir: None,
+        wallet_backend: WalletBackend::StackLnd,
+        node_networks: BTreeMap::new(),
+    });
+    let journal = FileJournal::create(base.path(), with_environment).unwrap();
+    journal
+        .record_node_networks(BTreeMap::from([("alice".into(), "regtest".into())]))
+        .unwrap();
+    let reopened = FileJournal::open(journal.root()).unwrap().snapshot();
+    assert_eq!(
+        reopened.environment.unwrap().node_networks["alice"],
+        "regtest"
+    );
 }

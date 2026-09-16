@@ -144,11 +144,22 @@ async fn recover(
     attributions: &[String],
 ) -> Result<ExitCode, String> {
     let journal = Arc::new(FileJournal::open(root)?);
-    if journal.snapshot().closed {
-        println!("recovery {} already completed", journal.snapshot().run_id);
-        return Ok(ExitCode::SUCCESS);
-    }
     let manifest = journal.snapshot();
+    match manifest.state() {
+        crate::recovery_store::RecoveryOutcome::Pending => {}
+        crate::recovery_store::RecoveryOutcome::Resolved => {
+            println!("recovery {} already completed", manifest.run_id);
+            return Ok(ExitCode::SUCCESS);
+        }
+        crate::recovery_store::RecoveryOutcome::AbandonedRegtest { .. } => {
+            println!(
+                "recovery {} was abandoned because its regtest stack was destroyed; {}",
+                manifest.run_id,
+                crate::recovery_abandon::NOT_VERIFIED
+            );
+            return Ok(ExitCode::from(1));
+        }
+    }
     if manifest.events.is_empty() || manifest.resolution_verified {
         for actor in mortsom_common::Actor::ALL {
             let path = root.join("actors").join(actor.as_str());
@@ -163,6 +174,9 @@ async fn recover(
             manifest.run_id
         );
         return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(hint) = super::abandon::destroyed_hint(&manifest, stack_dir).await {
+        return Err(hint);
     }
     let (config, stack) =
         crate::desktop::load(config_path, stack_dir, &TokioRunner, &RealHost).await?;
@@ -240,6 +254,7 @@ async fn recover(
     let options = RunOptions {
         desktop,
         stack: Some(stack),
+        stack_dir: stack_dir.canonicalize().ok(),
         scenarios: Vec::new(),
         tag: None,
     };
@@ -293,6 +308,8 @@ mod tests {
                 events,
                 closed: false,
                 resolution_verified: false,
+                outcome: Some(crate::recovery_store::RecoveryOutcome::Pending),
+                environment: None,
             },
         )
         .unwrap();

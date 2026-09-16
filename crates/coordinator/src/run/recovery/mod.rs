@@ -1,14 +1,16 @@
 //! Durable desktop ownership and public UI recovery, separate from scenario narratives.
 use super::*;
-use crate::recovery_store::{FileJournal, RecoveryManifest};
+use crate::recovery_store::{FileJournal, RecoveryEnvironment, RecoveryManifest, WalletBackend};
 use mortsom_common::Actor;
 use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
 
 pub(super) fn prepare(
+    config: &Config,
     options: &mut RunOptions,
     run: &RunId,
     deps: &RunDeps<'_>,
 ) -> Result<(), String> {
+    let environment = environment(config, options);
     let desktop = &mut options.desktop;
     if desktop.resume {
         let journal = desktop
@@ -59,6 +61,8 @@ pub(super) fn prepare(
             events: vec![],
             closed: false,
             resolution_verified: false,
+            outcome: Some(crate::recovery_store::RecoveryOutcome::Pending),
+            environment: Some(environment),
         },
     )?);
     crate::artifacts::persist::create_directory(&journal.root().join("actors"))
@@ -75,6 +79,33 @@ pub(super) fn prepare(
     desktop.bundle = Arc::new(bundle);
     desktop.recovery = Some(journal);
     Ok(())
+}
+
+/// Ownership, lane and wallet facts a later abandonment is checked against.
+fn environment(config: &Config, options: &RunOptions) -> RecoveryEnvironment {
+    let endpoints = options.stack.as_ref().map(|stack| &stack.wallet_endpoints);
+    let stack_lnd = [
+        ("alice", &config.wallets.alice),
+        ("bob", &config.wallets.bob),
+    ]
+    .into_iter()
+    .all(|(actor, wallet)| match wallet {
+        WalletConfig::Lnd { host, .. } => {
+            endpoints.and_then(|endpoints| endpoints.get(actor)) == Some(host)
+        }
+        _ => false,
+    });
+    RecoveryEnvironment {
+        lane: config.run.lane,
+        allow_mainnet: config.run.allow_mainnet,
+        stack_dir: options.stack.as_ref().and(options.stack_dir.clone()),
+        wallet_backend: if stack_lnd {
+            WalletBackend::StackLnd
+        } else {
+            WalletBackend::External
+        },
+        node_networks: BTreeMap::new(),
+    }
 }
 
 pub(super) fn journal(options: &DesktopOptions) -> Arc<dyn RecoveryJournal> {
@@ -218,6 +249,7 @@ pub(super) fn finish(journal: &FileJournal, summary: &mut RunSummary, artifacts:
         original_run_id: manifest.run_id.clone(),
         retained: !manifest.closed,
         resolution_verified: manifest.resolution_verified,
+        outcome: Some(manifest.state().as_str().to_owned()),
     });
     if can_remove {
         // Filesystem deletion and public reports cannot be one atomic change.
@@ -243,6 +275,7 @@ fn write_recovery_evidence(
         "run_id": manifest.run_id,
         "retained": !manifest.closed,
         "resolution_verified": manifest.resolution_verified,
+        "outcome": manifest.state().as_str(),
         "events": manifest.events,
     });
     if let Err(error) = artifacts.write_json("recovery.json", &evidence) {

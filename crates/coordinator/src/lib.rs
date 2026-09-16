@@ -33,3 +33,9 @@ pub mod provenance;
 
 /// Protected desktop identity and action recovery.
 pub mod recovery_store;
+
+/// Terminal recovery outcomes and recorded environment facts.
+pub mod recovery_outcome;
+
+/// Terminal abandonment of recovery whose regtest stack was destroyed.
+pub mod recovery_abandon;

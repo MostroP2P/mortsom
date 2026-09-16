@@ -6,7 +6,10 @@ use super::StackError;
 use super::compose::Compose;
 use super::layout::{Layout, PROJECT};
 use mortsom_ui_driver::process::{Command, CommandRunner, run_ok};
-use std::{path::Path, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 const LABEL_FORMAT: &str = r#"{"working_dir":{{json (index .Config.Labels "com.docker.compose.project.working_dir")}},"config_files":{{json (index .Config.Labels "com.docker.compose.project.config_files")}}}"#;
 const INSPECT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -62,16 +65,7 @@ pub(super) async fn verify_container(
     layout: &Layout,
     id: &str,
 ) -> Result<(), StackError> {
-    if id.len() != 64 || !id.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(unreadable());
-    }
-    let output = run_ok(
-        runner,
-        &Command::new("docker", &["inspect", "--format", LABEL_FORMAT, id]),
-        INSPECT_TIMEOUT,
-    )
-    .await?;
-    let labels: Ownership = serde_json::from_str(&output.stdout).map_err(|_| unreadable())?;
+    let labels = container_labels(runner, id).await?.ok_or_else(unreadable)?;
     if Path::new(&labels.working_dir) != layout.root() {
         return Err(StackError::ForeignOwner(labels.working_dir));
     }
@@ -83,6 +77,79 @@ pub(super) async fn verify_container(
         )));
     }
     Ok(())
+}
+
+/// Which directory holds the `mortsom-regtest` project right now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectOwner {
+    /// No container, volume or network of the project exists.
+    Absent,
+    /// Every container was started from this directory's compose file.
+    Directory(PathBuf),
+    /// Resources exist whose creator cannot be shown; holds why.
+    Unprovable(String),
+}
+
+/// Reads the project's ownership labels without changing anything.
+pub(super) async fn owner(runner: &dyn CommandRunner) -> Result<ProjectOwner, StackError> {
+    let output = run_ok(
+        runner,
+        &Command::new(
+            "docker",
+            &[
+                "ps",
+                "--all",
+                "--no-trunc",
+                "--filter",
+                &project_label(),
+                "--format",
+                "{{.ID}}",
+            ],
+        ),
+        INSPECT_TIMEOUT,
+    )
+    .await?;
+    if output.stdout.trim().is_empty() {
+        return Ok(match verify_empty_project(runner).await {
+            Ok(()) => ProjectOwner::Absent,
+            Err(StackError::Unowned(reason)) => ProjectOwner::Unprovable(reason),
+            Err(error) => return Err(error),
+        });
+    }
+    let mut owner: Option<PathBuf> = None;
+    for id in output.stdout.lines() {
+        let Some(labels) = container_labels(runner, id).await? else {
+            return Ok(ProjectOwner::Unprovable(
+                "its containers carry unreadable ownership labels".into(),
+            ));
+        };
+        let dir = PathBuf::from(&labels.working_dir);
+        if Path::new(&labels.config_files) != dir.join("compose.yml")
+            || owner.as_ref().is_some_and(|known| *known != dir)
+        {
+            return Ok(ProjectOwner::Unprovable(
+                "its containers do not share one compose file".into(),
+            ));
+        }
+        owner = Some(dir);
+    }
+    Ok(owner.map_or(ProjectOwner::Absent, ProjectOwner::Directory))
+}
+
+async fn container_labels(
+    runner: &dyn CommandRunner,
+    id: &str,
+) -> Result<Option<Ownership>, StackError> {
+    if id.len() != 64 || !id.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Ok(None);
+    }
+    let output = run_ok(
+        runner,
+        &Command::new("docker", &["inspect", "--format", LABEL_FORMAT, id]),
+        INSPECT_TIMEOUT,
+    )
+    .await?;
+    Ok(serde_json::from_str(&output.stdout).ok())
 }
 
 /// Removes the project whichever directory created it. Compose finds its
@@ -180,6 +247,45 @@ mod tests {
                     .all(|call| !call.contains(" rm") && !call.contains("stack up"))
             );
         }
+    }
+
+    #[tokio::test]
+    async fn the_owner_is_absent_named_or_unprovable() {
+        use super::ProjectOwner;
+        let runner = FakeRunner::default();
+        assert_eq!(super::owner(&runner).await.unwrap(), ProjectOwner::Absent);
+
+        runner.script("docker volume ls", "leftover");
+        assert!(matches!(
+            super::owner(&runner).await.unwrap(),
+            ProjectOwner::Unprovable(_)
+        ));
+
+        let runner = FakeRunner::default();
+        runner.script("docker ps", &"a".repeat(64));
+        runner.script(
+            "docker inspect",
+            r#"{"working_dir":"/other","config_files":"/other/compose.yml"}"#,
+        );
+        assert_eq!(
+            super::owner(&runner).await.unwrap(),
+            ProjectOwner::Directory("/other".into())
+        );
+
+        runner.script(
+            "docker inspect",
+            r#"{"working_dir":"/other","config_files":"/elsewhere/compose.yml"}"#,
+        );
+        assert!(matches!(
+            super::owner(&runner).await.unwrap(),
+            ProjectOwner::Unprovable(_)
+        ));
+
+        runner.script("docker ps", "not-an-id");
+        assert!(matches!(
+            super::owner(&runner).await.unwrap(),
+            ProjectOwner::Unprovable(_)
+        ));
     }
 
     #[tokio::test]

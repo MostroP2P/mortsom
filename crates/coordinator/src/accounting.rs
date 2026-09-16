@@ -41,6 +41,10 @@ pub struct RunLine {
     pub reserved_sats: u64,
     /// Orders the cleanup sweep left open.
     pub unresolved_orders: usize,
+    /// The run's recovery was abandoned after its regtest stack was
+    /// destroyed; its orders and payments were never verified resolved.
+    #[serde(default)]
+    pub recovery_abandoned: bool,
 }
 
 /// The trend report.
@@ -59,8 +63,12 @@ pub struct AccountingReport {
     pub total_fee_sats: u64,
     /// Runs that passed.
     pub runs_passed: usize,
-    /// Runs still holding reservations or open orders at the end.
+    /// Runs still holding reservations or open orders at the end, or
+    /// whose recovery was abandoned.
     pub runs_with_leftovers: usize,
+    /// Runs whose recovery was abandoned.
+    #[serde(default)]
+    pub runs_abandoned: usize,
 }
 
 impl AccountingReport {
@@ -71,10 +79,11 @@ impl AccountingReport {
             out.push_str(&format!("Lane: `{lane}`\n\n"));
         }
         out.push_str(&format!(
-            "Runs: {} ({} passed, {} with leftovers) — settled {} sats, fees {} sats\n\n",
+            "Runs: {} ({} passed, {} with leftovers, {} with abandoned recovery) — settled {} sats, fees {} sats\n\n",
             self.runs.len(),
             self.runs_passed,
             self.runs_with_leftovers,
+            self.runs_abandoned,
             self.total_settled_sats,
             self.total_fee_sats
         ));
@@ -86,7 +95,11 @@ impl AccountingReport {
                 r.run_id,
                 r.lane,
                 r.app_profile,
-                if r.passed { "pass" } else { "FAIL" },
+                match (r.passed, r.recovery_abandoned) {
+                    (_, true) => "FAIL (recovery abandoned)",
+                    (true, false) => "pass",
+                    (false, false) => "FAIL",
+                },
                 r.scenarios_passed,
                 r.scenarios_failed,
                 r.scenarios_skipped,
@@ -146,8 +159,9 @@ pub fn build_accounting(
         runs_passed: runs.iter().filter(|r| r.passed).count(),
         runs_with_leftovers: runs
             .iter()
-            .filter(|r| r.reserved_sats > 0 || r.unresolved_orders > 0)
+            .filter(|r| r.reserved_sats > 0 || r.unresolved_orders > 0 || r.recovery_abandoned)
             .count(),
+        runs_abandoned: runs.iter().filter(|r| r.recovery_abandoned).count(),
         runs,
         unreadable,
     };
@@ -173,11 +187,13 @@ fn read_run(dir: &Path) -> Option<Option<RunLine>> {
         .map_err(|e| warn!(path = %path.display(), error = %e, "unreadable run summary"))
         .ok()?;
     let budget = summary.budget.as_ref();
+    let recovery_abandoned = crate::recovery_abandon::read_artifact(dir).is_some();
     Some(Some(RunLine {
         run_id: summary.run_id.as_str().to_owned(),
         lane: summary.lane,
         app_profile: summary.app_profile.clone(),
-        passed: summary.passed,
+        passed: summary.passed && !recovery_abandoned,
+        recovery_abandoned,
         scenarios_passed: summary
             .results
             .iter()
@@ -289,6 +305,26 @@ mod tests {
         )
         .unwrap();
         assert_eq!(json, canary);
+    }
+
+    #[test]
+    fn an_abandoned_recovery_is_a_failed_run_with_leftovers() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = "20260815T100000Z-aaaaaa";
+        let run = dir.path().join(id);
+        std::fs::create_dir_all(&run).unwrap();
+        // Even a summary that claims a pass cannot outweigh the abandonment.
+        std::fs::write(run.join(files::SUMMARY), summary(id, "local", true, 0, "")).unwrap();
+        crate::recovery_abandon::write_test_artifact(&run);
+
+        let report = build_accounting(dir.path(), None).unwrap();
+
+        assert!(report.runs[0].recovery_abandoned);
+        assert!(!report.runs[0].passed);
+        assert_eq!(report.runs_passed, 0);
+        assert_eq!(report.runs_abandoned, 1);
+        assert_eq!(report.runs_with_leftovers, 1);
+        assert!(report.render().contains("FAIL (recovery abandoned)"));
     }
 
     #[test]

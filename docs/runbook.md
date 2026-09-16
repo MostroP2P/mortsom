@@ -76,7 +76,32 @@ whatever config or artifact directory is selected.
 A killed coordinator leaves an active-runtime marker. Do not delete the marker, reset the stack or remove
 the private directory to bypass the refusal: reconcile the owned client processes first. A stack mismatch
 or missing protected files also refuses cleanup; keep the original stack available. `stack down` discards
-the environment and is never proof of cancellation or refund.
+the environment and is never proof of cancellation or refund. While a journal is pending and its stack
+still exists, `stack up` and `stack down` are refused and name the `cleanup` to run first.
+
+### Abandoning a journal whose regtest stack is gone
+
+```sh
+mortsom recovery abandon <run-id> --reason stack-destroyed --confirm-run <run-id>
+```
+
+This is the only way to close a journal that cleanup can no longer resume because the Mortsom-owned regtest
+stack that held its orders was destroyed. `cleanup`, `stack up` and `stack down` print the exact command
+when, and only when, every gate below is met. The command refuses otherwise:
+
+- the journal is pending (a resolved or already abandoned journal has nothing to abandon);
+- the journal recorded its environment: not the canary lane, mainnet spending never allowed, a
+  Mortsom-owned stack directory, both actors on the stack's own LND nodes, both nodes reporting regtest;
+- the original stack identity is recorded nowhere on the host (recorded directory, selected directory,
+  Compose project). An unreadable identity or a Compose project without one fails closed;
+- `--confirm-run` repeats the run id exactly.
+
+Evidence is written first (`artifacts/<run-id>/recovery-abandonment.json` and `abandonment.json` in the
+journal directory), then the journal turns terminal, then the retained profiles are removed. If removal
+fails, rerun the same command; it retries removal without re-proving the gates. The run stays failed:
+`cleanup` reports it as abandoned with exit code 1, `accounting` counts it as a leftover, `parity` never
+accepts it and `publish` marks it failed. Abandonment never verifies an order or a payment and never counts
+as a clean cleanup. Never delete or edit journals by hand.
 
 ## 6. Secrets
 

@@ -119,6 +119,8 @@ fn saved_run_for(fixture: &World, maker: Actor) -> Arc<FileJournal> {
             ],
             closed: false,
             resolution_verified: false,
+            outcome: Some(crate::recovery_store::RecoveryOutcome::Pending),
+            environment: None,
         },
     )
     .unwrap();
@@ -157,6 +159,7 @@ pub(super) fn options(journal: Arc<FileJournal>) -> RunOptions {
             chromedriver: "unused".into(),
         },
         stack: Some(stack()),
+        stack_dir: None,
         scenarios: Vec::new(),
         tag: None,
     }
@@ -474,7 +477,8 @@ fn changed_stack_refuses_resume_before_environment_or_process_access() {
         wallets: &no_wallets,
         observer: &FakeObserver::default(),
     };
-    let error = recovery_impl::prepare(&mut options, &RunId::new(), &deps).unwrap_err();
+    let error =
+        recovery_impl::prepare(&fixture.config, &mut options, &RunId::new(), &deps).unwrap_err();
     assert!(error.contains("stack identity changed"));
     assert!(adapter.recovery_calls.lock().unwrap().is_empty());
     assert!(!journal.snapshot().closed && journal.root().join("actors").exists());

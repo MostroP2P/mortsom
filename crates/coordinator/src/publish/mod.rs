@@ -132,6 +132,10 @@ pub struct PublishManifest {
     pub scenarios: Vec<ScenarioClassification>,
     /// Text files this pass had to redact further.
     pub redacted_here: usize,
+    /// True when the run's recovery was abandoned: its cleanup was never
+    /// verified, so the run is published as failed whatever it claimed.
+    #[serde(default)]
+    pub recovery_abandoned: bool,
 }
 
 impl PublishManifest {
@@ -144,6 +148,12 @@ impl PublishManifest {
             self.skipped.len(),
             self.screenshots
         );
+        if self.recovery_abandoned {
+            out.push_str(&format!(
+                "  RECOVERY ABANDONED: {}\n",
+                crate::recovery_abandon::NOT_VERIFIED
+            ));
+        }
         if self.redacted_here > 0 {
             out.push_str(&format!(
                 "  WARNING: {} file(s) still contained secret-shaped text before this pass\n",
@@ -208,6 +218,7 @@ pub fn publish_artifacts(
         skipped: Vec::new(),
         scenarios: Vec::new(),
         redacted_here: 0,
+        recovery_abandoned: crate::recovery_abandon::read_artifact(&run_dir).is_some(),
     };
     let mut paths = Vec::new();
     collect(&run_dir, &run_dir, &mut paths)?;
@@ -375,7 +386,7 @@ fn classify(
         return Ok(());
     };
     manifest.lane = Some(summary.lane);
-    manifest.passed = Some(summary.passed);
+    manifest.passed = Some(summary.passed && !manifest.recovery_abandoned);
     // Free text from the summary goes through the same redaction and leak
     // gate as file bodies; the manifest is published too.
     let scrub = |text: &str| -> Result<String, PublishError> {

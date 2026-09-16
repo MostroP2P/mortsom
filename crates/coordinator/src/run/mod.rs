@@ -71,6 +71,8 @@ pub struct RunOptions {
     /// Verified public stack snapshot; a run without one is refused at
     /// preflight.
     pub stack: Option<crate::stack::StackSnapshot>,
+    /// Canonical directory of the Mortsom-owned stack `stack` came from.
+    pub stack_dir: Option<PathBuf>,
 }
 
 /// What a run holds for one actor's wallet.
@@ -179,7 +181,7 @@ pub async fn run_scenarios(
 
     report::record_environment(&artifacts, &summary)?;
     let mut options = options.clone();
-    if let Err(error) = recovery::prepare(&mut options, &run_id, deps) {
+    if let Err(error) = recovery::prepare(config, &mut options, &run_id, deps) {
         summary
             .checks
             .push("protected-recovery", CheckStatus::Fail, error);
@@ -510,6 +512,16 @@ impl<'a> World<'a> {
             readers.push((label.to_owned(), handles.reader));
         }
         self.node_wallets = nodes;
+        if let Some(journal) = self
+            .desktop
+            .recovery
+            .as_ref()
+            .filter(|_| !self.desktop.resume)
+        {
+            journal
+                .record_node_networks(networks.iter().cloned().collect())
+                .map_err(|e| record_fail(summary, "protected-recovery", e))?;
+        }
         summary.checks.push(
             "wallet-observer",
             CheckStatus::Pass,

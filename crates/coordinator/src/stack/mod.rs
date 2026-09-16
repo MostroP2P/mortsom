@@ -20,6 +20,7 @@ pub use descriptor::Descriptor;
 pub use fingerprint::StackFingerprint;
 pub use layout::{Layout, PROJECT};
 pub use metadata::{DaemonImage, DeclaredLimits, StackSnapshot};
+pub use ownership::ProjectOwner;
 pub use status::Status;
 pub use up::{Timing, UpOptions, up};
 
@@ -184,6 +185,41 @@ pub async fn status(runner: &dyn CommandRunner, layout: &Layout) -> Result<Statu
 }
 
 pub use logs::{LogsOptions, logs, services as log_services};
+
+/// Which directory holds the Compose project, read without changing it.
+pub async fn project_owner(runner: &dyn CommandRunner) -> Result<ProjectOwner, StackError> {
+    ownership::owner(runner).await
+}
+
+/// The stack identity whose generated state lives in a stack directory.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordedIdentity {
+    /// No generated state exists there: never built, or torn down.
+    Absent,
+    /// A completed `stack up` left this identity.
+    Present(StackFingerprint),
+    /// Generated state exists but its identity cannot be read; holds why.
+    Unreadable(String),
+}
+
+/// Reads the identity `stack up` recorded in `dir` without touching Docker.
+pub fn recorded_identity(dir: &Path) -> RecordedIdentity {
+    if !dir.join("local").exists() {
+        return RecordedIdentity::Absent;
+    }
+    let layout = match Layout::new(dir) {
+        Ok(layout) => layout,
+        Err(error) => return RecordedIdentity::Unreadable(error.to_string()),
+    };
+    match Descriptor::read(&layout) {
+        Ok(Some(descriptor)) => RecordedIdentity::Present(descriptor.fingerprint),
+        Ok(None) => RecordedIdentity::Unreadable(format!(
+            "{} holds generated state without a completed descriptor",
+            layout.root().display()
+        )),
+        Err(error) => RecordedIdentity::Unreadable(error.to_string()),
+    }
+}
 
 /// Stops the services, removes their volumes and deletes every generated
 /// credential and identity. Refuses containers another directory created.
