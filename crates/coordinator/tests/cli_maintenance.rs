@@ -149,6 +149,7 @@ fn journal(root: &Path, regtest: bool) -> (String, std::path::PathBuf) {
         node_networks: [("alice", "regtest"), ("bob", "regtest")]
             .map(|(a, n)| (a.to_owned(), n.to_owned()))
             .into(),
+        artifacts_dir: None,
     });
     let manifest: RecoveryManifest = serde_json::from_value(serde_json::json!({
         "run_id": run_id,

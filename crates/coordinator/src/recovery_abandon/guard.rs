@@ -28,7 +28,8 @@ impl LifecycleOperation {
 }
 
 /// Refuses `operation` while any pending journal's original stack is still
-/// present; returns notes for journals whose stack is already gone.
+/// present or cannot be proved gone; returns notes for journals whose stack
+/// is provably destroyed.
 pub async fn lifecycle_guard(
     operation: LifecycleOperation,
     pending: &[RecoveryManifest],
@@ -61,7 +62,14 @@ pub async fn lifecycle_guard(
                     )
                 }));
             }
-            StackPresence::Unprovable(_) => {}
+            StackPresence::Unprovable(why) => {
+                return Err(format!(
+                    "refusing `mortsom {}`: run {run} retains unresolved recovery state and it \
+                     cannot be proved that its stack is gone ({why}); resolve it with `mortsom \
+                     cleanup {run}` first. Never delete or edit recovery journals by hand.",
+                    operation.command()
+                ));
+            }
         }
     }
     Ok(notes)

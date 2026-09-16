@@ -85,6 +85,11 @@ pub struct RecoveryEnvironment {
     /// Network each actor's node reported for itself, once connected.
     #[serde(default)]
     pub node_networks: BTreeMap<String, String>,
+    /// Absolute artifacts directory the run wrote to, so abandonment evidence
+    /// lands next to the run's own reports whatever configuration is
+    /// selected later; absent in older manifests.
+    #[serde(default)]
+    pub artifacts_dir: Option<PathBuf>,
 }
 
 impl RecoveryEnvironment {
@@ -131,6 +136,7 @@ pub(crate) mod tests {
                 ("alice".into(), "regtest".into()),
                 ("bob".into(), "regtest".into()),
             ]),
+            artifacts_dir: Some("/artifacts".into()),
         }
     }
 

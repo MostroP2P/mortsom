@@ -20,10 +20,11 @@ fn fingerprint(digit: char) -> StackFingerprint {
     }
 }
 
-fn environment(stack_dir: &Path) -> RecoveryEnvironment {
+fn environment(stack_dir: &Path, artifacts_dir: &Path) -> RecoveryEnvironment {
     RecoveryEnvironment {
         lane: Lane::Local,
         allow_mainnet: false,
+        artifacts_dir: Some(artifacts_dir.to_path_buf()),
         stack_dir: Some(stack_dir.to_path_buf()),
         wallet_backend: WalletBackend::StackLnd,
         node_networks: BTreeMap::from([
@@ -64,20 +65,27 @@ struct Fixture {
 
 impl Fixture {
     fn new(tweak: impl FnOnce(&mut RecoveryEnvironment)) -> Self {
-        Self::with(|stack| {
-            let mut environment = environment(stack);
+        Self::with(|stack, artifacts| {
+            let mut environment = environment(stack, artifacts);
             tweak(&mut environment);
             Some(environment)
         })
     }
 
-    fn with(environment: impl FnOnce(&Path) -> Option<RecoveryEnvironment>) -> Self {
+    /// `environment` receives the stack directory and the artifacts
+    /// directory the run is recorded to have written to.
+    fn with(environment: impl FnOnce(&Path, &Path) -> Option<RecoveryEnvironment>) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let stack = dir.path().join("stack");
         let run_id = RunId::new();
         let base = dir.path().canonicalize().unwrap().join("recovery");
-        let journal =
-            FileJournal::create(&base, manifest(run_id.clone(), environment(&stack))).unwrap();
+        let artifacts = dir.path().join("artifacts");
+        std::fs::create_dir_all(artifacts.join(run_id.as_str())).unwrap();
+        let journal = FileJournal::create(
+            &base,
+            manifest(run_id.clone(), environment(&stack, &artifacts)),
+        )
+        .unwrap();
         for part in ["actors/alice", "bundle"] {
             std::fs::create_dir_all(journal.root().join(part)).unwrap();
         }
@@ -111,11 +119,26 @@ impl Fixture {
         inspector: &dyn StackInspector,
         storage: &dyn RetainedStorage,
     ) -> Result<AbandonReport, String> {
-        let artifacts = self.artifacts();
+        self.abandon_from(
+            &self.dir.path().join("artifacts"),
+            request,
+            inspector,
+            storage,
+        )
+        .await
+    }
+
+    async fn abandon_from(
+        &self,
+        configured_artifacts: &Path,
+        request: &AbandonRequest,
+        inspector: &dyn StackInspector,
+        storage: &dyn RetainedStorage,
+    ) -> Result<AbandonReport, String> {
         let selected = self.selected();
         let paths = AbandonPaths {
             journal: &self.journal,
-            run_artifacts: &artifacts,
+            artifacts_dir: configured_artifacts,
             selected_stack: &selected,
         };
         abandon(request, &paths, inspector, storage, chrono::Utc::now()).await
@@ -319,7 +342,7 @@ async fn non_regtest_external_mainnet_canary_and_legacy_runs_are_refused() {
         }),
         Fixture::new(|e| e.node_networks.clear()),
         Fixture::new(|e| e.stack_dir = None),
-        Fixture::with(|_| None),
+        Fixture::with(|_, _| None),
     ];
     for fixture in fixtures {
         let error = fixture
@@ -359,12 +382,8 @@ async fn a_wrong_confirmation_is_refused_before_anything_is_read() {
 #[tokio::test]
 async fn an_evidence_write_failure_leaves_the_journal_pending_and_storage_intact() {
     let fixture = Fixture::new(|_| {});
-    std::fs::create_dir_all(fixture.artifacts().parent().unwrap()).unwrap();
-    std::fs::write(
-        fixture.artifacts(),
-        b"a file where the run directory belongs",
-    )
-    .unwrap();
+    // A directory where the protected record must go makes its write fail.
+    std::fs::create_dir(fixture.journal.join(JOURNAL_FILE)).unwrap();
     let storage = FakeStorage::default();
 
     let error = fixture
@@ -530,20 +549,113 @@ async fn stack_lifecycle_names_the_abandon_command_only_when_its_gates_pass() {
     .await
     .unwrap();
     assert!(!notes[0].contains("recovery abandon"), "{}", notes[0]);
+}
 
+#[tokio::test]
+async fn stack_lifecycle_refuses_while_a_pending_journal_cannot_be_proved_gone() {
+    let fixture = Fixture::new(|_| {});
     let unprovable = LiveFacts {
         project: ProjectOwner::Unprovable("volumes".into()),
         ..nothing_left()
     };
-    let notes = lifecycle_guard(
+    let error = lifecycle_guard(
         LifecycleOperation::Down,
         &pending(&fixture),
         &fixture.selected(),
         &FakeInspector(unprovable),
     )
     .await
-    .unwrap();
-    assert!(notes.is_empty());
+    .unwrap_err();
+    assert!(error.contains("cannot be proved"), "{error}");
+    assert!(
+        error.contains(&format!("mortsom cleanup {}", fixture.run_id)),
+        "{error}"
+    );
+}
+
+#[tokio::test]
+async fn evidence_lands_in_the_recorded_artifact_directory_not_the_configured_one() {
+    let fixture = Fixture::new(|_| {});
+    let elsewhere = fixture.dir.path().join("elsewhere");
+
+    let report = fixture
+        .abandon_from(
+            &elsewhere,
+            &fixture.request(),
+            &FakeInspector(nothing_left()),
+            &FakeStorage::default(),
+        )
+        .await
+        .unwrap();
+
+    assert!(read_artifact(&fixture.artifacts()).is_some());
+    assert!(!elsewhere.exists());
+    assert!(
+        report
+            .preserved
+            .contains(&fixture.artifacts().join(ARTIFACT_FILE))
+    );
+}
+
+#[tokio::test]
+async fn a_missing_run_artifact_directory_refuses_before_the_journal_changes() {
+    let fixture = Fixture::new(|_| {});
+    std::fs::remove_dir_all(fixture.artifacts()).unwrap();
+
+    let error = fixture
+        .abandon_with(
+            &fixture.request(),
+            &FakeInspector(nothing_left()),
+            &FakeStorage::default(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("artifact directory"), "{error}");
+    assert!(fixture.state().is_pending());
+    assert!(!fixture.journal.join(JOURNAL_FILE).exists());
+    assert!(fixture.storage_intact());
+}
+
+#[tokio::test]
+async fn a_public_copy_that_fails_after_the_terminal_record_is_restored_on_rerun() {
+    let fixture = Fixture::new(|_| {});
+    let artifact = fixture.artifacts().join(ARTIFACT_FILE);
+    // A directory where the file must go makes only the public copy fail.
+    std::fs::create_dir(&artifact).unwrap();
+
+    let error = fixture
+        .abandon_with(
+            &fixture.request(),
+            &FakeInspector(nothing_left()),
+            &FakeStorage::default(),
+        )
+        .await
+        .unwrap_err();
+
+    assert!(error.contains(ARTIFACT_FILE), "{error}");
+    assert!(
+        !fixture.state().is_pending(),
+        "the protected record is terminal"
+    );
+    assert!(fixture.journal.join(JOURNAL_FILE).is_file());
+    assert!(
+        fixture.storage_intact(),
+        "nothing is removed before the copy exists"
+    );
+
+    std::fs::remove_dir(&artifact).unwrap();
+    let report = fixture
+        .abandon_with(
+            &fixture.request(),
+            &FakeInspector(nothing_left()),
+            &FakeStorage::default(),
+        )
+        .await
+        .unwrap();
+    assert!(report.already_abandoned);
+    assert!(read_artifact(&fixture.artifacts()).is_some());
+    assert!(!fixture.storage_intact());
 }
 
 #[test]

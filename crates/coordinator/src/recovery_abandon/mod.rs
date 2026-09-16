@@ -129,8 +129,9 @@ pub trait RetainedStorage {
 pub struct AbandonPaths<'a> {
     /// The journal's directory.
     pub journal: &'a Path,
-    /// `<artifacts_dir>/<run_id>`.
-    pub run_artifacts: &'a Path,
+    /// The configured artifacts directory; used only when the journal did
+    /// not record the directory the run wrote to.
+    pub artifacts_dir: &'a Path,
     /// The stack directory the operator selected.
     pub selected_stack: &'a Path,
 }
@@ -162,16 +163,20 @@ pub async fn abandon(
         }
     };
     let evidence = if already_abandoned {
-        let evidence = read_evidence(&paths.journal.join(JOURNAL_FILE))?;
-        // The run directory may have been restored or moved since.
-        write_evidence(paths, &evidence)?;
-        evidence
+        read_evidence(&paths.journal.join(JOURNAL_FILE))?
     } else {
-        let evidence = prove(request, &manifest, paths, inspector, now).await?;
-        write_evidence(paths, &evidence)?;
-        journal.abandon(request.reason, now)?;
-        evidence
+        prove(request, &manifest, paths, inspector, now).await?
     };
+    let run_artifacts = run_artifacts(&manifest, paths.artifacts_dir)?;
+    if !already_abandoned {
+        // The protected record is durable before the journal turns
+        // terminal; the public copy only ever exists after it, so an
+        // interrupted abandonment never leaves a pending journal that
+        // reports and accounting read as abandoned.
+        write_evidence(paths.journal, JOURNAL_FILE, &evidence)?;
+        journal.abandon(request.reason, now)?;
+    }
+    write_evidence(&run_artifacts, ARTIFACT_FILE, &evidence)?;
     let (removed, removal_error) = match storage.remove(paths.journal) {
         Ok(removed) => (removed, None),
         Err(error) => (Vec::new(), Some(error)),
@@ -182,7 +187,7 @@ pub async fn abandon(
         preserved: vec![
             paths.journal.join("manifest.json"),
             paths.journal.join(JOURNAL_FILE),
-            paths.run_artifacts.join(ARTIFACT_FILE),
+            run_artifacts.join(ARTIFACT_FILE),
         ],
         removed,
         removal_error,
@@ -238,18 +243,33 @@ fn recorded_dir(manifest: &RecoveryManifest) -> Result<PathBuf, String> {
         .ok_or_else(|| "the journal records no Mortsom-owned stack directory".to_owned())
 }
 
-fn write_evidence(paths: &AbandonPaths<'_>, evidence: &AbandonmentEvidence) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(evidence).map_err(|e| e.to_string())?;
-    for (dir, name) in [
-        (paths.run_artifacts, ARTIFACT_FILE),
-        (paths.journal, JOURNAL_FILE),
-    ] {
-        let path = dir.join(name);
-        crate::artifacts::persist::create_directory(dir)
-            .and_then(|()| crate::artifacts::persist::atomic_json(&path, &json))
-            .map_err(|e| format!("cannot persist {}: {e}", path.display()))?;
+/// The run's own artifact directory: the one the journal recorded, else the
+/// configured one. It must already exist; evidence is never written to a
+/// directory the run's reports do not live in.
+fn run_artifacts(manifest: &RecoveryManifest, configured: &Path) -> Result<PathBuf, String> {
+    let base = manifest
+        .environment
+        .as_ref()
+        .and_then(|environment| environment.artifacts_dir.as_deref())
+        .unwrap_or(configured);
+    let run_dir = base.join(manifest.run_id.as_str());
+    if run_dir.is_dir() {
+        return Ok(run_dir);
     }
-    Ok(())
+    Err(format!(
+        "the artifact directory of run {} is missing at {}; restore it or select the \
+         configuration the run used, so the abandonment is recorded next to its reports",
+        manifest.run_id,
+        run_dir.display()
+    ))
+}
+
+fn write_evidence(dir: &Path, name: &str, evidence: &AbandonmentEvidence) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(evidence).map_err(|e| e.to_string())?;
+    let path = dir.join(name);
+    crate::artifacts::persist::create_directory(dir)
+        .and_then(|()| crate::artifacts::persist::atomic_json(&path, &json))
+        .map_err(|e| format!("cannot persist {}: {e}", path.display()))
 }
 
 fn read_evidence(path: &Path) -> Result<AbandonmentEvidence, String> {

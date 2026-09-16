@@ -435,20 +435,21 @@ closed manifest is authoritative.
 A killed run leaves active-runtime markers and later invocations fail closed. Markers are never removed just
 to bypass that refusal.
 
-`stack up` and `stack down` are refused while a pending journal's original stack still exists; `--replace` is
-never permission to destroy recoverable state. The journal records, at creation, the facts a later
-abandonment is checked against: lane, mainnet permission, the Mortsom-owned stack directory, whether both
-actors used the stack's own LND nodes, and the network each node reported. Nothing is inferred from the lane
-name.
+`stack up` and `stack down` are refused while a pending journal's original stack still exists or cannot be
+proved gone; `--replace` is never permission to destroy recoverable state. The journal records, at creation,
+the facts a later abandonment is checked against: lane, mainnet permission, the Mortsom-owned stack
+directory, the artifacts directory the run wrote to, whether both actors used the stack's own LND nodes, and
+the network each node reported. Nothing is inferred from the lane name.
 
 `mortsom recovery abandon <run-id> --reason stack-destroyed --confirm-run <run-id>` is the only terminal path
 for a journal whose Mortsom-owned regtest stack is provably destroyed. It requires a pending journal, a
 recorded environment that is not canary, never allowed mainnet, attached to a Mortsom-owned stack and used
 the stack's own regtest nodes, and live proof that the original stack identity is recorded nowhere: not in
 the recorded directory, the selected directory or the Compose project. Anything unreadable or unowned fails
-closed. Sanitized evidence (`recovery-abandonment.json` in the run's artifacts and `abandonment.json` in the
-journal) is written before the journal turns terminal, and retained storage is removed last; a failed
-removal is retried by rerunning the command. Abandonment verifies no order and no payment: the run is
+closed. Sanitized evidence is written in a fixed order: `abandonment.json` in the journal before the journal
+turns terminal, then `recovery-abandonment.json` in the run's recorded artifact directory, which must exist,
+then retained storage is removed. An interrupted abandonment therefore never leaves a pending journal whose
+artifacts read as abandoned; rerunning the command finishes the copy and the removal. Abandonment verifies no order and no payment: the run is
 failed, is never reported as cleaned up, never reaches parity, and is counted as a leftover in accounting.
 
 ## 12. Evidence and reports

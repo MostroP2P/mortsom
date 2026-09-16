@@ -77,7 +77,8 @@ A killed coordinator leaves an active-runtime marker. Do not delete the marker, 
 the private directory to bypass the refusal: reconcile the owned client processes first. A stack mismatch
 or missing protected files also refuses cleanup; keep the original stack available. `stack down` discards
 the environment and is never proof of cancellation or refund. While a journal is pending and its stack
-still exists, `stack up` and `stack down` are refused and name the `cleanup` to run first.
+still exists, or cannot be proved gone, `stack up` and `stack down` are refused and name the `cleanup` to
+run first.
 
 ### Abandoning a journal whose regtest stack is gone
 
@@ -94,11 +95,15 @@ when, and only when, every gate below is met. The command refuses otherwise:
   Mortsom-owned stack directory, both actors on the stack's own LND nodes, both nodes reporting regtest;
 - the original stack identity is recorded nowhere on the host (recorded directory, selected directory,
   Compose project). An unreadable identity or a Compose project without one fails closed;
-- `--confirm-run` repeats the run id exactly.
+- `--confirm-run` repeats the run id exactly;
+- the run's artifact directory still exists where the journal recorded it (or, for older journals, under
+  the configured `artifacts_dir`). Restore it or select the run's configuration; evidence is never written
+  next to some other run's reports.
 
-Evidence is written first (`artifacts/<run-id>/recovery-abandonment.json` and `abandonment.json` in the
-journal directory), then the journal turns terminal, then the retained profiles are removed. If removal
-fails, rerun the same command; it retries removal without re-proving the gates. The run stays failed:
+`abandonment.json` is written in the journal directory first, then the journal turns terminal, then
+`recovery-abandonment.json` is copied into the run's artifact directory, then the retained profiles are
+removed. If any later step fails, rerun the same command; it finishes the copy and the removal without
+re-proving the gates. The run stays failed:
 `cleanup` reports it as abandoned with exit code 1, `accounting` counts it as a leftover, `parity` never
 accepts it and `publish` marks it failed. Abandonment never verifies an order or a payment and never counts
 as a clean cleanup. Never delete or edit journals by hand.

@@ -33,7 +33,12 @@ pub(super) async fn abandon_command(
         if !journal.is_dir() {
             return Err(format!("no recovery journal is retained for run {run_id}"));
         }
-        let artifacts = Path::new(&config.run.artifacts_dir).join(run_id.as_str());
+        let artifacts = std::path::absolute(&config.run.artifacts_dir).map_err(|e| {
+            format!(
+                "cannot resolve artifacts_dir {}: {e}",
+                config.run.artifacts_dir
+            )
+        })?;
         Ok((run_id, journal, artifacts))
     });
     let (run_id, journal, artifacts) = match prepared {
@@ -50,7 +55,7 @@ pub(super) async fn abandon_command(
     };
     let paths = AbandonPaths {
         journal: &journal,
-        run_artifacts: &artifacts,
+        artifacts_dir: &artifacts,
         selected_stack: stack_dir,
     };
     let inspector = LiveStacks {

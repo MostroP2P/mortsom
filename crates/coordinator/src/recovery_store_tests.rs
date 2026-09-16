@@ -371,6 +371,7 @@ fn node_networks_are_recorded_into_the_environment() {
         stack_dir: None,
         wallet_backend: WalletBackend::StackLnd,
         node_networks: BTreeMap::new(),
+        artifacts_dir: None,
     });
     let journal = FileJournal::create(base.path(), with_environment).unwrap();
     journal

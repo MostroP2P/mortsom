@@ -105,6 +105,9 @@ fn environment(config: &Config, options: &RunOptions) -> RecoveryEnvironment {
             WalletBackend::External
         },
         node_networks: BTreeMap::new(),
+        // `absolute` fails only on an empty path, which configuration
+        // validation already refuses.
+        artifacts_dir: std::path::absolute(&config.run.artifacts_dir).ok(),
     }
 }
 
