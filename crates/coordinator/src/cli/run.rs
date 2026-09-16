@@ -7,6 +7,7 @@ pub(super) async fn run_command(
     selection: RunSelection,
 ) -> ExitCode {
     let RunSelection {
+        preserve_legacy_recovery,
         scenarios,
         tag,
         platform,
@@ -28,6 +29,7 @@ pub(super) async fn run_command(
             config_path,
             stack_dir,
             RunSelection {
+                preserve_legacy_recovery,
                 scenarios,
                 tag,
                 platform,
@@ -49,6 +51,7 @@ pub(super) async fn run_command(
             config_path,
             stack_dir,
             RunSelection {
+                preserve_legacy_recovery: preserve_legacy_recovery.clone(),
                 scenarios: vec![def.name.to_owned()],
                 tag: None,
                 platform,
@@ -75,6 +78,7 @@ pub(super) async fn run_command(
 
 /// What one `run` invocation was asked to do.
 pub(super) struct RunSelection {
+    pub preserve_legacy_recovery: Vec<mortsom_common::RunId>,
     pub scenarios: Vec<String>,
     pub tag: Option<String>,
     pub platform: mortsom_desktop_driver::Platform,
@@ -228,6 +232,7 @@ async fn run_once(
     prepared: &mut super::prepared::InvocationBuild,
 ) -> Attempt {
     let RunSelection {
+        preserve_legacy_recovery,
         scenarios,
         tag,
         platform,
@@ -254,18 +259,20 @@ async fn run_once(
             return Attempt::refused(2);
         }
     };
-    let pending = RealHost
-        .env("HOME")
-        .ok_or("HOME is required for desktop recovery".to_string())
-        .and_then(|home| crate::recovery_store::FileJournal::directory(std::path::Path::new(&home)))
-        .and_then(|base| {
-            crate::recovery_store::FileJournal::refuse_pending(&base)
-                .map_err(|pending| pending.message(use_color_on_stderr()))
-        });
-    if let Err(error) = pending {
-        eprintln!("{error}");
-        return Attempt::refused(2);
-    }
+    let recovery_isolation = match super::isolation::admit(
+        &preserve_legacy_recovery,
+        &config,
+        &stack,
+        stack_dir,
+    )
+    .await
+    {
+        Ok(isolation) => isolation,
+        Err(error) => {
+            eprintln!("{error}");
+            return Attempt::refused(2);
+        }
+    };
     if ![&config.wallets.alice, &config.wallets.bob]
         .iter()
         .all(|wallet| matches!(wallet, mortsom_environment::WalletConfig::Lnd { .. }))
@@ -312,6 +319,7 @@ async fn run_once(
         observer: &LiveObserver,
     };
     let options = RunOptions {
+        recovery_isolation,
         scenarios,
         tag,
         desktop,

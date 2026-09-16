@@ -2,7 +2,7 @@
 
 **Version:** 1.0
 
-**Updated:** 2026-09-15
+**Updated:** 2026-09-16
 
 **Status:** normative for all new work
 
@@ -466,12 +466,40 @@ the stack's own regtest nodes, and live proof that the original stack identity i
 the recorded directory, the selected directory or the Compose project. Anything unreadable or unowned fails
 closed. Only a journal that recorded these facts and its artifact directory can be abandoned; journals
 written before they were recorded are refused, and the selected configuration is never a substitute.
+An unresolved legacy journal without `RecoveryEnvironment` has a separate, nonterminal route:
+`mortsom run ... --preserve-legacy-recovery <run-id>`. Repeat the option for every pending legacy
+journal on every invocation. This leaves the old manifests, events, profiles, bundles and reports
+unchanged and pending; it neither proves destruction nor verifies the old environment, orders or
+payments. The old runs remain unresolved and unaccepted. No historical fields are backfilled.
+
+Continuation requires exact acknowledgement of the entire pending inventory, readable private journals,
+both old actor directories with verified runtime shutdown, and a different current stack fingerprint
+compared in the original digest schema (v1 or v2; unknown schemes refuse). Recorded digests must be
+exactly 64 lowercase ASCII hexadecimal characters; malformed or noncanonical fingerprints are errors,
+never evidence of a different stack, and journals containing them are left untouched. Journals with recorded
+environments must use normal cleanup or proven abandonment and cannot take this route. The current
+Compose project and descriptor must belong to the selected Mortsom stack, configuration must bind both
+actors to that stack's LND endpoints, mainnet permission must be disabled, the lane must not be canary,
+and both connected wallets must report regtest. These are facts about the **new** run only. The host lock
+is held throughout; inventory and configuration are rechecked before journal creation, and both node
+networks are checked again before clients start, including non-payment scenarios. A new pending journal
+blocks subsequent scenarios normally. Default runs, mainnet and canary keep the global pending guard.
+The new run durably writes `recovery-isolation.json` before client startup and includes a warning naming
+every preserved pending run. Its own acceptance still requires ordinary order/payment and cleanup proof.
+
+Schema-1 stack descriptors are read without rewriting them, preserving source provenance as unrecorded.
+Their original fingerprint, endpoints, image and limits are validated; schema-2 descriptors still require
+source provenance. A schema upgrade alone cannot authorize isolation, abandonment or stack destruction.
+
 Sanitized evidence is written in a fixed order: a prepared `recovery-abandonment.json` in the run's recorded
 artifact directory, `abandonment.json` in the journal, the journal turning terminal, the public record
 finalized, and retained storage removed last, with every removal reported even when a later one fails.
 Reports, accounting, parity, publish and offline cleanup treat any present record, prepared, finalized or
 unreadable, as abandonment, so an interrupted abandonment fails closed from its first write; rerunning the
-command finishes it, and cleanup that verifies resolution instead discards only a prepared record. Abandonment verifies no order and no payment: the run is
+command finishes it, and cleanup that verifies resolution instead discards only a prepared record for
+that exact run and stack. Cleanup retries this reconciliation even after the journal is already Resolved;
+removal or directory-sync failures return an error. Finalized, unreadable, unsafe or mismatched evidence
+is retained and refuses successful cleanup. Abandonment verifies no order and no payment: the run is
 failed, is never reported as cleaned up, never reaches parity, and is counted as a leftover in accounting.
 
 ## 12. Evidence and reports

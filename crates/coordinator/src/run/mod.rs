@@ -62,6 +62,8 @@ pub const WALLET_LOOKUP_TIMEOUT: Duration = Duration::from_secs(20);
 /// What to run.
 #[derive(Debug, Clone)]
 pub struct RunOptions {
+    /// Explicit, freshly verified continuation while legacy journals stay pending.
+    pub recovery_isolation: Option<crate::recovery_isolation::ValidatedIsolation>,
     /// Scenario names.
     pub scenarios: Vec<String>,
     /// Suite tag.
@@ -188,6 +190,13 @@ pub async fn run_scenarios(
         preflight::reject(&runnable, &mut summary);
         return finish(&artifacts, &mut summary).map(|()| summary);
     }
+    if let Some(isolation) = &options.recovery_isolation {
+        summary.checks.push(
+            "legacy-recovery-preserved",
+            CheckStatus::Warn,
+            isolation.warning(),
+        );
+    }
     let mut world = World::new(
         config,
         &options,
@@ -195,7 +204,7 @@ pub async fn run_scenarios(
         &artifacts,
         caps,
         mainnet,
-        matches!(clearance, Clearance::PendingRegtest),
+        matches!(clearance, Clearance::PendingRegtest) || options.recovery_isolation.is_some(),
     );
     // A cleanup run may find an order left disputed by a broken run; only a
     // solver can close it, so a cleanup on an owned stack registers one.
@@ -529,6 +538,13 @@ impl<'a> World<'a> {
         );
         self.wallets = Some(Arc::new(WalletObserver::new(readers)));
         if self.regtest_pending {
+            if networks.len() != mortsom_common::Actor::ALL.len() {
+                return Err(record_fail(
+                    summary,
+                    "regtest-clearance",
+                    "both actor nodes must report their networks".into(),
+                ));
+            }
             match crate::safety::authorize_regtest(&self.config.run, &networks) {
                 Ok(clearance) => {
                     self.mainnet = Some(MainnetClearance {

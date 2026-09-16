@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used)]
 //! The stack module against a scripted Docker: no daemon, no network.
 use super::*;
+mod legacy;
 use async_trait::async_trait;
 use mortsom_ui_driver::process::{ChildProcess, Command, CommandRunner, Output, ProcessError};
 use std::path::{Path, PathBuf};

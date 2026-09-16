@@ -3,6 +3,48 @@
 Read [spec.md](../spec.md) first; it is normative. This file says where the work is and what comes next.
 Repository content is English; the operator conversation is Spanish.
 
+## Legacy recovery continuation (2026-09-16)
+
+The baseline is main `5dc7d64`, including merged PR #45 and PR #44. The retained run
+`20260915T180600Z-75d6ac262087` has no `RecoveryEnvironment`. The reproduction confirmed a ready
+replacement stack, a smoke invocation against app PR #456 that started no scenarios, changed-stack
+cleanup refusal, and correct abandonment refusal. No historical environment facts can be backfilled.
+
+`run --preserve-legacy-recovery <run-id>` now offers explicit continuation on a different, verified
+Mortsom regtest stack. Repeat for all pending legacy journals on every invocation. The original journal
+and profiles remain pending and unchanged. Current ownership, stack binding, non-canary lane, disabled
+mainnet permission and both live regtest nodes are required; actor shutdown markers still fail closed.
+New runs retain ordinary cleanup and budget requirements and write `recovery-isolation.json` plus a
+warning. A newly pending journal blocks further work. See spec section 11 and runbook section 5.
+
+The existing replacement stack used a schema-1 descriptor. Read-only compatibility validates its
+fingerprint without inventing daemon provenance; v1/v2 comparisons prevent a schema upgrade from
+looking like stack destruction. Issue #46 is also covered: already-Resolved cleanup retries valid
+Prepared-marker removal and refuses contradictory or unremovable evidence.
+
+Validation: formatting and strict workspace/all-targets clippy passed; 770 workspace tests passed with
+two existing ignored tests and only `selectors_match_the_v2_app_contract` filtered (the unfiltered run
+fails on the sibling checkout's missing `node.use_default`, as noted below). The same instrumented suite
+passed with 84.00% line coverage, excluding scenario bodies as in CI. Independent CodeRabbit review
+reported no remaining findings after removing a descriptor double-read.
+
+The first post-change Linux smoke built app PR #456 at `2724772a530f4c3b2826d6ec881309480c613bba`,
+then exposed a report-startup rejection of the legacy descriptor's unrecorded daemon source. A runner
+regression reproduced it before the fix; reports now preserve that explicit unknown while modern
+descriptor validation remains strict. Both Linux and Web runner tests cover that combination.
+
+The final live Linux smoke on the same app revision created `20260916T155537Z-af7ee1867161`, recorded
+isolation evidence and launched both clients. It did **not** pass: both clients timed out waiting for
+`keys.public_key` during onboarding, before any scenario body or order/payment event. Its new pending
+journal correctly blocked the next family member. Ordinary cleanup succeeded offline, resolved that
+new empty journal and removed its inactive storage; failed reports remain in artifacts. The original
+legacy manifest is unchanged (SHA-256 `226aa0c69ab3fe719d343aa298eb02f23b76d601efdd6a751deeff40eeac1be7`),
+still pending and unverified. PR #47 records the evidence; CI passed format/lint, tests and coverage on
+`0426636`. App onboarding and live Linux/Web business-flow acceptance remain outstanding.
+
+Manual acceptance for issue #43 is still required. Keep PR language non-closing until it is recorded;
+automated tests and agent-run smoke are not a substitute for that acceptance.
+
 ## Recovery abandonment (2026-09-16)
 
 PR #45 (`feat/recovery-abandon`) adds `mortsom recovery abandon <run-id> --reason stack-destroyed
@@ -17,7 +59,8 @@ Abandonment is a failed run everywhere: `cleanup`, `accounting`, `parity` and `p
 **Scope: journals created after this change only.** The retained legacy journal that motivated issue #43
 predates the recorded environment and is still refused; its stored evidence does not record the original
 stack directory, mainnet permission, wallet-to-stack binding, node networks or artifact directory, and no
-trustworthy source for them exists, so no backfill was attempted. Issue #43 stays open for that incident.
+trustworthy source for them exists, so no backfill was attempted. The continuation above preserves
+that incident unresolved; no automatic closure of issue #43 is intended.
 A live acceptance of the abandon path on a newly recorded journal is still to be run. The adapter test `selectors_match_the_v2_app_contract` reads the sibling `../mobilev2`
 checkout and fails there for a missing `node.use_default` id; it is unrelated to this branch.
 

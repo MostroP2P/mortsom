@@ -43,7 +43,9 @@ pub async fn lifecycle_guard(
             .as_ref()
             .and_then(|environment| environment.stack_dir.as_deref())
             .unwrap_or(selected);
-        let facts = inspector.facts(recorded, selected).await?;
+        let facts = inspector
+            .facts_for(recorded, selected, &manifest.stack)
+            .await?;
         let run = &manifest.run_id;
         match presence(&manifest.stack, &facts) {
             StackPresence::Live(_) => {
@@ -55,6 +57,10 @@ pub async fn lifecycle_guard(
                 ));
             }
             destroyed @ StackPresence::Destroyed { .. } => {
+                if manifest.environment.is_none() {
+                    notes.push(crate::recovery_isolation::legacy_hint(run));
+                    continue;
+                }
                 notes.push(abandon_hint(manifest, &destroyed).unwrap_or_else(|| {
                     format!(
                         "note: run {run} retains unresolved recovery state whose stack is gone, \

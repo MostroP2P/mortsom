@@ -92,7 +92,7 @@ pub enum DaemonProvenance {
     GitRef(crate::git_source::RemoteSelection),
     /// Read from a record another Mortsom version wrote: one from before
     /// provenance was recorded, or one with a kind this version does not
-    /// know. Never written by this version.
+    /// know. Retained in reports, never assigned to a new stack descriptor.
     #[default]
     #[serde(other)]
     Unrecorded,
@@ -101,7 +101,8 @@ pub enum DaemonProvenance {
 impl DaemonProvenance {
     /// Rejects a record whose source and image identity disagree: a pulled
     /// image carries an official digest, a built one its commit tag. A
-    /// record without provenance is only ever read, never written.
+    /// new descriptor cannot have missing provenance. Reports can retain an
+    /// explicitly Unrecorded source from a validated legacy descriptor.
     pub(crate) fn validate(&self, image: &DaemonImage) -> Result<(), StackError> {
         let consistent = match self {
             Self::Unrecorded => false,

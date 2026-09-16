@@ -214,6 +214,13 @@ pub enum RecordedIdentity {
 
 /// Reads the identity `stack up` recorded in `dir` without touching Docker.
 pub fn recorded_identity(dir: &Path) -> RecordedIdentity {
+    identity_using(dir, |descriptor| Ok(descriptor.fingerprint))
+}
+
+fn identity_using(
+    dir: &Path,
+    fingerprint: impl FnOnce(Descriptor) -> Result<StackFingerprint, String>,
+) -> RecordedIdentity {
     if !dir.join("local").exists() {
         return RecordedIdentity::Absent;
     }
@@ -222,13 +229,28 @@ pub fn recorded_identity(dir: &Path) -> RecordedIdentity {
         Err(error) => return RecordedIdentity::Unreadable(error.to_string()),
     };
     match Descriptor::read(&layout) {
-        Ok(Some(descriptor)) => RecordedIdentity::Present(descriptor.fingerprint),
+        Ok(Some(descriptor)) => match fingerprint(descriptor) {
+            Ok(value) => RecordedIdentity::Present(value),
+            Err(error) => RecordedIdentity::Unreadable(error),
+        },
         Ok(None) => RecordedIdentity::Unreadable(format!(
             "{} holds generated state without a completed descriptor",
             layout.root().display()
         )),
         Err(error) => RecordedIdentity::Unreadable(error.to_string()),
     }
+}
+
+/// Read-only schema-compatible comparison for legacy recovery guards.
+pub(crate) fn recorded_identity_for(dir: &Path, original: &StackFingerprint) -> RecordedIdentity {
+    identity_using(dir, |descriptor| {
+        let snapshot = descriptor.snapshot();
+        match original.algorithm.as_str() {
+            "sha256-mortsom-stack-v1" => snapshot.legacy_fingerprint(),
+            "sha256-mortsom-stack-v2" => snapshot.fingerprint(),
+            _ => Err("unsupported recovery stack fingerprint algorithm".into()),
+        }
+    })
 }
 
 /// Stops the services, removes their volumes and deletes every generated

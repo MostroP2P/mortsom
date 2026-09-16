@@ -356,11 +356,25 @@ relay for the run's window: an id must have been published then and not be known
 Recovery reopens the same Alice and Bob identities from protected storage under
 `$HOME/.local/state/mortsom/recovery/<run-id>`, cancels through ordinary UI controls and deletes the profiles
 only after verified resolution. It never creates a new identity, retries a payment or releases escrow. A new
-run is refused while a journal is unresolved, and `stack up`/`stack down` are refused while a journal's stack
+run is refused by default while a journal is unresolved, and `stack up`/`stack down` are refused while a journal's stack
 still exists. A journal whose Mortsom-owned regtest stack was destroyed can only be closed with
 `recovery abandon <run-id> --reason stack-destroyed --confirm-run <run-id>`, which preserves evidence and
 leaves the run failed: nothing is verified. Details and failure categories are in
 [docs/runbook.md](docs/runbook.md).
+
+Older journals without recorded environment facts cannot be abandoned. To keep such a journal pending
+and intact while explicitly using a **different, verified Mortsom regtest stack**:
+
+```sh
+mortsom run --tag smoke --app-ref https://github.com/MostroP2P/app/pull/456 \
+  --preserve-legacy-recovery <run-id>
+```
+
+Repeat the option for each pending legacy run, on every invocation. It authorizes only the new run;
+historical orders, payments and network remain unverified. Both old actor runtimes must have stopped,
+the current stack must be owned, both current wallets must report regtest, mainnet permission must be
+disabled and the lane must not be canary. The new run writes `recovery-isolation.json` and a warning;
+no old evidence or protected storage is changed. A new unresolved run blocks the following scenarios.
 
 ## Commands
 

@@ -25,6 +25,7 @@ pub struct Descriptor {
     /// The image the daemon was started from.
     pub daemon_image: DaemonImage,
     /// How the image was selected, and the commit when it was built here.
+    #[serde(default)]
     pub daemon_source: DaemonProvenance,
     /// Limits declared in `stack/limits.toml` at `up` time.
     pub declared_limits: DeclaredLimits,
@@ -33,6 +34,17 @@ pub struct Descriptor {
 }
 
 impl Descriptor {
+    /// Public facts, retaining explicitly unrecorded source provenance in v1.
+    pub fn snapshot(&self) -> StackSnapshot {
+        StackSnapshot {
+            daemon_pubkey: self.daemon_pubkey.clone(),
+            relay_url: self.connections.relay_url.clone(),
+            wallet_endpoints: self.connections.wallet_endpoints(),
+            daemon_image: self.daemon_image.clone(),
+            daemon_source: self.daemon_source.clone(),
+            declared_limits: self.declared_limits.clone(),
+        }
+    }
     /// Assembles the descriptor and its fingerprint.
     pub fn new(
         daemon_pubkey: String,
@@ -94,18 +106,35 @@ impl Descriptor {
                 path.display()
             ))
         })?;
-        if descriptor.schema_version != SCHEMA_VERSION {
+        if ![1, SCHEMA_VERSION].contains(&descriptor.schema_version) {
             return Err(StackError::Configuration(format!(
                 "{} was written by another version; run `mortsom stack up` again",
                 path.display()
             )));
         }
         descriptor.daemon_image.validate()?;
-        descriptor
-            .daemon_source
-            .validate(&descriptor.daemon_image)?;
+        if descriptor.schema_version == SCHEMA_VERSION {
+            descriptor
+                .daemon_source
+                .validate(&descriptor.daemon_image)?;
+        } else if descriptor.daemon_source != DaemonProvenance::Unrecorded {
+            return Err(StackError::Configuration(
+                "legacy descriptor must not invent daemon provenance".into(),
+            ));
+        }
         descriptor.declared_limits.validate()?;
         descriptor.connections.validate(layout.root())?;
+        let expected_algorithm = format!("sha256-mortsom-stack-v{}", descriptor.schema_version);
+        if descriptor.fingerprint.algorithm != expected_algorithm
+            || !descriptor
+                .snapshot()
+                .matches_recorded(&descriptor.fingerprint)
+                .map_err(StackError::Configuration)?
+        {
+            return Err(StackError::Configuration(
+                "stack descriptor fingerprint does not match its recorded facts".into(),
+            ));
+        }
         Ok(Some(descriptor))
     }
 }

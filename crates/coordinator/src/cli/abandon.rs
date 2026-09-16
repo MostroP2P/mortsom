@@ -98,6 +98,9 @@ pub(super) async fn destroyed_hint(
     let inspector = LiveStacks {
         runner: &TokioRunner,
     };
-    let facts = inspector.facts(&recorded, stack_dir).await.ok()?;
+    let facts = inspector
+        .facts_for(&recorded, stack_dir, &manifest.stack)
+        .await
+        .ok()?;
     abandon_hint(manifest, &presence(&manifest.stack, &facts))
 }

@@ -1,6 +1,7 @@
 //! `mortsom` command-line interface.
 
 mod abandon;
+mod isolation;
 mod maintenance;
 mod prepared;
 mod recover;
@@ -123,6 +124,10 @@ pub enum Command {
     },
     /// Run scenarios end to end (stack relay, clients, observers, cleanup).
     Run {
+        /// Keep this exact legacy journal pending while using a different,
+        /// verified Mortsom regtest stack. Repeat for every pending legacy run.
+        #[arg(long, value_name = "RUN_ID")]
+        preserve_legacy_recovery: Vec<mortsom_common::RunId>,
         /// Client target for Alice and Bob.
         #[arg(long, default_value = "linux")]
         platform: mortsom_desktop_driver::Platform,
@@ -462,6 +467,7 @@ pub async fn run(cli: Cli) -> ExitCode {
             intentional,
         } => parity_command(&cli.config, &run_a, &run_b, intentional.as_deref()),
         Command::Run {
+            preserve_legacy_recovery,
             scenarios,
             tag,
             platform,
@@ -473,6 +479,7 @@ pub async fn run(cli: Cli) -> ExitCode {
                 &cli.config,
                 &cli.stack_dir,
                 run::RunSelection {
+                    preserve_legacy_recovery,
                     scenarios,
                     tag,
                     platform,

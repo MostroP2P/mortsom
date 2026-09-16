@@ -149,6 +149,7 @@ pub(super) fn options(journal: Arc<FileJournal>) -> RunOptions {
             .unwrap(),
     );
     RunOptions {
+        recovery_isolation: None,
         desktop: DesktopOptions {
             recovery: Some(journal),
             resume: true,

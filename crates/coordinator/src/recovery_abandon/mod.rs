@@ -8,6 +8,8 @@
 mod assess;
 mod guard;
 mod live;
+mod reconcile;
+pub use reconcile::discard_prepared;
 
 pub use assess::{LiveFacts, StackInspector, StackPresence, gate, presence};
 pub use guard::{LifecycleOperation, abandon_hint, lifecycle_guard};
@@ -244,7 +246,9 @@ async fn prove(
     let run = &request.run_id;
     let mut checks = gate(manifest, request.reason)?;
     let dir = recorded_dir(manifest)?;
-    let facts = inspector.facts(&dir, paths.selected_stack).await?;
+    let facts = inspector
+        .facts_for(&dir, paths.selected_stack, &manifest.stack)
+        .await?;
     let current_stack_present = match presence(&manifest.stack, &facts) {
         StackPresence::Destroyed {
             current_stack_present,
@@ -345,35 +349,6 @@ pub fn abandonment(run_dir: &Path) -> Abandonment {
 /// The readable abandonment record a run directory holds, if any.
 pub fn read_artifact(run_dir: &Path) -> Option<AbandonmentEvidence> {
     abandonment(run_dir).evidence().cloned()
-}
-
-/// Removes the prepared record an abandonment interrupted before its journal
-/// turned terminal left behind, once that journal is verified resolved
-/// instead. A finalized or unreadable record is never removed: next to a
-/// resolved journal it is a contradiction to investigate, and the run keeps
-/// failing closed until someone does.
-pub fn discard_prepared(manifest: &RecoveryManifest) -> Result<(), String> {
-    if manifest.state() != RecoveryOutcome::Resolved {
-        return Ok(());
-    }
-    let Some(base) = manifest
-        .environment
-        .as_ref()
-        .and_then(|environment| environment.artifacts_dir.as_deref())
-    else {
-        return Ok(());
-    };
-    let run_dir = base.join(manifest.run_id.as_str());
-    if !matches!(abandonment(&run_dir), Abandonment::Prepared(_)) {
-        return Ok(());
-    }
-    let path = run_dir.join(ARTIFACT_FILE);
-    std::fs::remove_file(&path).map_err(|error| {
-        format!(
-            "recovery is resolved but its prepared abandonment record {} cannot be removed: {error}",
-            path.display()
-        )
-    })
 }
 
 /// The command that closes `run_id`, as printed to operators.
