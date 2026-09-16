@@ -84,13 +84,16 @@ impl World<'_> {
             execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()).await;
         if let Some(journal) = self.desktop.recovery.as_ref() {
             let discovery = recovery::discover(&ctx, journal).await;
-            // Audited only after discovery and against the relay as of now: an
-            // order the app lists wins, and a request the restarted client
-            // finished late has had its chance to appear.
+            // Audited only after discovery, so an order the app lists wins,
+            // and across the quiet window, so a request the client sent
+            // before it died has had its chance to be published.
             let audit = match self.desktop.relay_audit.as_ref() {
-                Some(source) if recovery::unresolved_submissions(journal) => {
-                    Some(source.fetch().await)
-                }
+                Some(source) if recovery::unresolved_submissions(journal) => Some(
+                    recovery::observe_relay_quiet(journal, ctx.recovery.quiet_window, || {
+                        source.fetch()
+                    })
+                    .await,
+                ),
                 _ => None,
             };
             recovery::settle_after_scenario(journal, discovery, audit, &mut summary.checks);

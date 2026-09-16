@@ -259,6 +259,29 @@ pub(crate) fn unresolved_submissions(journal: &FileJournal) -> bool {
     !open_submissions(journal).is_empty()
 }
 
+/// The relay audit that decides an open submission, taken as a negative
+/// observation over `quiet_window`: a request the client sent before it died
+/// may still be processed and published a moment later, so one empty
+/// snapshot proves nothing. When the first audit already shows a candidate
+/// there is nothing to rule out and it is returned at once; otherwise the
+/// audit is repeated once the window has elapsed and that later view decides.
+pub(crate) async fn observe_relay_quiet<F, Fut>(
+    journal: &FileJournal,
+    quiet_window: std::time::Duration,
+    fetch: F,
+) -> Result<RelayAudit, String>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<RelayAudit, String>>,
+{
+    let first = fetch().await?;
+    if relay_ruled_out(journal, &first).is_empty() {
+        return Ok(first);
+    }
+    tokio::time::sleep(quiet_window).await;
+    fetch().await
+}
+
 /// Settles the journal once the scenario and UI discovery are over. A failed
 /// discovery is reported, never fatal on its own: the relay is the daemon's
 /// record, so when the fresh `audit` shows no order for the window the

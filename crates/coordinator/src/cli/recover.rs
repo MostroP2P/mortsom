@@ -805,4 +805,77 @@ mod tests {
         assert!(crate::run::recovery::unresolved_submissions(&journal));
         assert!(checks.is_healthy());
     }
+
+    /// One empty snapshot is not proof: the daemon may publish the order a
+    /// moment after a request the client sent before it died. Ruling out
+    /// needs the relay empty across a bounded quiet interval, so the audit
+    /// is taken twice, the second after the window has elapsed.
+    #[tokio::test(start_paused = true)]
+    async fn ruling_out_needs_the_relay_empty_across_the_quiet_window() {
+        let (_dir, journal) = journal_with(vec![RecoveryEvent::SubmissionStarted {
+            actor: Actor::Alice,
+            known_orders: vec![],
+        }]);
+        let window = std::time::Duration::from_secs(10);
+        let fetches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let started = tokio::time::Instant::now();
+        let audit_result = {
+            let fetches = fetches.clone();
+            crate::run::recovery::observe_relay_quiet(&journal, window, || {
+                let fetches = fetches.clone();
+                async move {
+                    fetches.lock().unwrap().push(started.elapsed());
+                    Ok(audit(&[]))
+                }
+            })
+            .await
+            .unwrap()
+        };
+        assert!(audit_result.orders.is_empty());
+        assert_eq!(
+            *fetches.lock().unwrap(),
+            [std::time::Duration::ZERO, window]
+        );
+
+        // A late order shows up in the second audit and blocks the abandonment.
+        let fetches = std::sync::Arc::new(std::sync::Mutex::new(0));
+        let late = {
+            let fetches = fetches.clone();
+            crate::run::recovery::observe_relay_quiet(&journal, window, move || {
+                let fetches = fetches.clone();
+                async move {
+                    let mut count = fetches.lock().unwrap();
+                    *count += 1;
+                    Ok(if *count == 1 {
+                        audit(&[])
+                    } else {
+                        audit(&[(ORDER, "pending")])
+                    })
+                }
+            })
+            .await
+            .unwrap()
+        };
+        assert_eq!(late.orders.len(), 1);
+        assert!(relay_ruled_out(&journal, &late).is_empty());
+
+        // A candidate in the first audit settles nothing, so no wait is spent.
+        let fetches = std::sync::Arc::new(std::sync::Mutex::new(0));
+        let before = tokio::time::Instant::now();
+        let first = {
+            let fetches = fetches.clone();
+            crate::run::recovery::observe_relay_quiet(&journal, window, move || {
+                let fetches = fetches.clone();
+                async move {
+                    *fetches.lock().unwrap() += 1;
+                    Ok(audit(&[(ORDER, "pending")]))
+                }
+            })
+            .await
+            .unwrap()
+        };
+        assert_eq!(first.orders.len(), 1);
+        assert_eq!(*fetches.lock().unwrap(), 1);
+        assert_eq!(before.elapsed(), std::time::Duration::ZERO);
+    }
 }

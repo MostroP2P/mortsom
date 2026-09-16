@@ -66,8 +66,8 @@ Otherwise cleanup opens the protected journal, checks that the current stack and
 restarts private runtime services on the retained profiles, verifies the original Alice and Bob public
 identities, discovers uncertain submissions through their trade lists and cancels through ordinary UI
 controls. A submission whose order the trade list never showed is checked against the daemon's order
-events on the relay for the run's window. The run already did this once, right after the scenario and
-whether or not the trade list could be read, so a journal reaches cleanup only when the relay showed a
+events on the relay for the run's window. The run already did this, right after the scenario and again
+after the quiet window, whether or not the trade list could be read, so a journal reaches cleanup only when the relay showed a
 candidate then; cleanup audits again after the retained clients ran and their trade lists were read: no
 unknown order there resolves it as having produced nothing; otherwise cleanup prints
 the candidates and the `--attribute-order` commands that settle it. Completed
