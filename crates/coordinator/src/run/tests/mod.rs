@@ -102,7 +102,9 @@ fn stack() -> crate::stack::StackSnapshot {
         "daemon_pubkey": HEX, "relay_url": RELAY_URL,
         "wallet_endpoints": {"alice": ALICE_LND, "bob": BOB_LND},
         "daemon_image": {"image_id": format!("sha256:{}", "a".repeat(64)),
-            "reference": "mostrop2p/mostro:latest", "repository_digest": null},
+            "reference": format!("mostrop2p/mostro@sha256:{}", "b".repeat(64)),
+                "repository_digest": format!("sha256:{}", "b".repeat(64))},
+        "daemon_source":{"kind":"pinned-image"},
         "declared_limits": {"order_expiration_secs": 300, "hold_invoice_expiry_secs": 120,
             "buyer_invoice_deadline_secs": 120, "payout_invoice_min_expiry_secs": 300}
     }))

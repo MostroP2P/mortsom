@@ -305,6 +305,7 @@ mod tests {
             (
                 StackAction::Up {
                     mostro_image: None,
+                    mostro_ref: None,
                     replace: false,
                 },
                 "stack up",

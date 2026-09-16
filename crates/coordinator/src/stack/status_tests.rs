@@ -5,7 +5,7 @@ use std::path::Path;
 
 use super::super::connections::Connections;
 use super::super::descriptor::Descriptor;
-use super::super::metadata::{DaemonImage, DeclaredLimits};
+use super::super::metadata::{DaemonImage, DaemonProvenance, DeclaredLimits};
 use super::super::nodes::Service;
 use super::{Node, Status};
 
@@ -19,6 +19,9 @@ fn descriptor() -> Descriptor {
             image_id: IMAGE_ID.to_owned(),
             reference: "mostrop2p/mostro:v0.18.7".to_owned(),
             repository_digest: None,
+        },
+        DaemonProvenance::Image {
+            requested: "mostrop2p/mostro:v0.18.7".to_owned(),
         },
         DeclaredLimits {
             order_expiration_secs: 900,
@@ -283,6 +286,42 @@ fn the_identity_and_image_in_effect_are_named() {
     assert!(rendered.contains("daemon identity: 8f3a"), "{rendered}");
     assert!(
         rendered.contains("daemon image: mostrop2p/mostro:v0.18.7"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("daemon source: image mostrop2p/mostro:v0.18.7"),
+        "{rendered}"
+    );
+}
+
+/// A daemon built from a branch or pull request is only meaningful with
+/// the exact commit it was built from.
+#[test]
+fn a_built_daemon_names_its_selector_ref_and_commit() {
+    // Arrange
+    let revision = "0123456789abcdef0123456789abcdef01234567";
+    let mut status = ready();
+    let descriptor = status.descriptor.as_mut().unwrap();
+    descriptor.daemon_image.reference = super::super::image::commit_tag(revision);
+    descriptor.daemon_source = DaemonProvenance::GitRef(crate::git_source::RemoteSelection {
+        repository: crate::mostro_source::REPOSITORY.to_owned(),
+        requested: "https://github.com/MostroP2P/mostro/pull/963".to_owned(),
+        git_ref: "refs/pull/963/head".to_owned(),
+        revision: revision.to_owned(),
+    });
+
+    // Act
+    let rendered = status.render();
+
+    // Assert
+    assert!(
+        rendered.contains(&format!("daemon image: mortsom/mostro:git-{revision}")),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains(&format!(
+            "daemon source: https://github.com/MostroP2P/mostro/pull/963 (refs/pull/963/head at {revision})"
+        )),
         "{rendered}"
     );
 }

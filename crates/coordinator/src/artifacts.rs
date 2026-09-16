@@ -130,6 +130,10 @@ impl RunArtifacts {
             ));
         }
         stack.daemon_image.validate().map_err(io::Error::other)?;
+        stack
+            .daemon_source
+            .validate(&stack.daemon_image)
+            .map_err(io::Error::other)?;
         nostr_sdk::prelude::PublicKey::parse(&stack.daemon_pubkey).map_err(io::Error::other)?;
         let mut tree = self.redacted_value(value)?;
         let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());
@@ -383,6 +387,7 @@ mod metadata_tests {
             "daemon_pubkey":key,"relay_url":"ws://127.0.0.1:7000","wallet_endpoints":{},
             "daemon_image":{"image_id":format!("sha256:{}", "a".repeat(64)),
                 "reference":format!("mostrop2p/mostro@{digest}"),"repository_digest":digest},
+            "daemon_source":{"kind":"pinned-image"},
             "declared_limits":{"order_expiration_secs":300,"hold_invoice_expiry_secs":120,
                 "buyer_invoice_deadline_secs":120,"payout_invoice_min_expiry_secs":300}
         }))
@@ -419,6 +424,52 @@ mod metadata_tests {
             .unwrap();
         let text = std::fs::read_to_string(artifacts.file(files::SUMMARY).unwrap()).unwrap();
         assert!(!text.contains(key));
+    }
+
+    #[test]
+    fn a_built_daemon_keeps_its_exact_commit_in_run_metadata() {
+        // Arrange
+        let root = tempfile::tempdir().unwrap();
+        let revision = "0123456789abcdef0123456789abcdef01234567";
+        let source = serde_json::json!({"kind":"git-ref",
+            "repository":"https://github.com/MostroP2P/mostro.git",
+            "requested":"https://github.com/MostroP2P/mostro/pull/963",
+            "git_ref":"refs/pull/963/head","revision":revision});
+        let stack: crate::stack::StackSnapshot = serde_json::from_value(serde_json::json!({
+            "daemon_pubkey":"8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51",
+            "relay_url":"ws://127.0.0.1:7000","wallet_endpoints":{},
+            "daemon_image":{"image_id":format!("sha256:{}", "a".repeat(64)),
+                "reference":format!("mortsom/mostro:git-{revision}"),"repository_digest":null},
+            "daemon_source":source,
+            "declared_limits":{"order_expiration_secs":300,"hold_invoice_expiry_secs":120,
+                "buyer_invoice_deadline_secs":120,"payout_invoice_min_expiry_secs":300}
+        }))
+        .unwrap();
+        let artifacts = RunArtifacts::create(root.path(), RunId::new(), Redactor::new()).unwrap();
+        let value = serde_json::json!({"stack":stack});
+
+        // Act
+        artifacts
+            .write_metadata_json(files::ENVIRONMENT, &value, Some(&stack), None, None)
+            .unwrap();
+
+        // Assert
+        let saved: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(artifacts.file(files::ENVIRONMENT).unwrap()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(saved["stack"]["daemon_source"], source);
+        assert_eq!(
+            saved["stack"]["daemon_image"]["reference"],
+            format!("mortsom/mostro:git-{revision}")
+        );
+        let mut forged = stack.clone();
+        forged.daemon_image.reference = "mortsom/mostro:latest".into();
+        assert!(
+            artifacts
+                .write_metadata_json(files::ENVIRONMENT, &value, Some(&forged), None, None)
+                .is_err()
+        );
     }
 }
 

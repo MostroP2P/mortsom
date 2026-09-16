@@ -1,8 +1,8 @@
 //! `stack up`: builds the whole world from nothing, skipping what exists.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use mortsom_ui_driver::process::{Command, CommandRunner};
+use mortsom_ui_driver::process::CommandRunner;
 use nostr_sdk::prelude::{Keys, ToBech32};
 
 use super::compose::{
@@ -11,7 +11,9 @@ use super::compose::{
 use super::descriptor::{Descriptor, load_limits};
 use super::layout::Layout;
 use super::metadata::DaemonImage;
-use super::{InfoProbe, StackError, connections::Connections, image, nodes, ownership};
+use super::{
+    DaemonSource, InfoProbe, StackError, connections::Connections, daemon, image, nodes, ownership,
+};
 
 /// Channel each actor opens to the escrow node, and what it pushes across,
 /// so both sides can pay a hold and receive a payout (spec section 5).
@@ -25,7 +27,6 @@ pub const ACTORS: [&str; 2] = ["alice", "bob"];
 pub const ESCROW_NODE: &str = "carol";
 const ALL_NODES: [&str; 3] = ["alice", "bob", "carol"];
 
-const PULL_TIMEOUT: Duration = Duration::from_secs(600);
 const START_TIMEOUT: Duration = Duration::from_secs(600);
 const STEP_TIMEOUT: Duration = Duration::from_secs(120);
 const NSEC_PLACEHOLDER: &str = "__NSEC__";
@@ -51,8 +52,10 @@ impl Default for Timing {
 /// What `up` needs beyond the directory.
 #[derive(Debug, Clone)]
 pub struct UpOptions {
-    /// Daemon image reference to pull.
-    pub image: String,
+    /// Which daemon to run.
+    pub daemon: DaemonSource,
+    /// Object cache and disposable checkouts for [`DaemonSource::Ref`].
+    pub source_cache: PathBuf,
     /// Service wait policy.
     pub timing: Timing,
     /// Remove a project this directory cannot be shown to own -- another
@@ -77,15 +80,8 @@ pub async fn up(
     }
     let limits = load_limits(&layout.limits_file())?;
 
-    // A failed pull is an error, never permission to use a cached image.
-    tracing::info!(image = options.image, "pulling the daemon image");
-    require(
-        runner,
-        &Command::new("docker", &["pull", &options.image]),
-        PULL_TIMEOUT,
-    )
-    .await?;
-    let expected = image::resolve(runner, &options.image).await?;
+    let (expected, provenance) =
+        daemon::prepare(runner, &options.daemon, &options.source_cache).await?;
     let compose = Compose::new(layout, Some(&expected.reference));
 
     tracing::info!("starting chain, nodes and relay");
@@ -113,6 +109,7 @@ pub async fn up(
                 .rsplit_once('@')
                 .map(|(_, digest)| digest.to_owned()),
         },
+        provenance,
         limits,
     )?;
     descriptor.write(layout)?;

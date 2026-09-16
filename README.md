@@ -134,8 +134,26 @@ needed: the chain mines its own coins.
 against), starts the chain, nodes and relay, funds the nodes, opens one balanced channel from each actor to
 Carol, mints a daemon identity for this stack, starts the daemon as your user and waits for its info event on
 the relay. It is re-runnable: funded wallets and open channels are left alone. Every `up` mints a new daemon
-identity, after which both clients must be rebuilt, so do not run it before every scenario. Pass
-`--mostro-image <reference>` to install another build; the reference is recorded in the stack fingerprint.
+identity, after which both clients must be rebuilt, so do not run it before every scenario.
+
+The daemon comes from exactly one of three sources, all recorded in `public.json`, the stack fingerprint,
+`stack status` and run artifacts:
+
+```sh
+./target/debug/mortsom stack up                                   # pinned release: normal app review
+./target/debug/mortsom stack up --mostro-image <reference>        # a daemon image published elsewhere
+./target/debug/mortsom stack up --mostro-ref main                 # a Mostro branch...
+./target/debug/mortsom stack up \
+  --mostro-ref https://github.com/MostroP2P/mostro/pull/963       # ...or pull request, built here
+```
+
+Review app pull requests against the pinned daemon. `--mostro-ref` is for protocol changes, coordinated
+app/daemon pull requests and explicit compatibility testing: it fetches the branch or the pull request's head
+(fork contributions included) on every run into `.mortsom/mostro`, builds that exact commit with Mostro's
+`docker/Dockerfile` as `mortsom/mostro:git-<commit>` and starts the daemon from it. The first build of a
+commit compiles `mostrod` and takes several minutes; the layer cache makes a repeated commit quick. A failed
+fetch or build stops `stack up`; it never falls back to an older image. The two options are mutually
+exclusive.
 
 Generated state lives in the gitignored `stack/local/`: the actors' node credentials, the daemon's settings
 (which hold its key, owner-only) and database, and `public.json`, the descriptor every command reads to
@@ -345,7 +363,7 @@ run is refused while a journal is unresolved. Details and failure categories are
 
 | Command | Purpose |
 |---|---|
-| `stack up`, `stack status`, `stack logs [service]`, `stack down` | Regtest environment lifecycle and service logs |
+| `stack up [--mostro-image <ref> \| --mostro-ref <branch-or-pr-url>]`, `stack status`, `stack logs [service]`, `stack down` | Regtest environment lifecycle, daemon selection and service logs |
 | `doctor --platform linux\|web` | Read-only prerequisite and readiness checks |
 | `run <scenario>... [--tag <family>] [--platform linux\|web]` | Scenarios with isolated clients, caps and cleanup; one run per scenario |
 | `cleanup <run-id>` | Recover a run's identities and orders |
