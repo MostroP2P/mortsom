@@ -269,12 +269,12 @@ fn pending_recovery_message_names_the_exact_cleanup_command() {
 
     // Assert
     let plain = pending.message(false);
-    assert_eq!(
-        plain,
-        format!(
+    assert!(
+        plain.starts_with(&format!(
             "run {run_id} retains unresolved recovery state; run `mortsom cleanup {run_id}` before starting another desktop scenario"
-        )
+        ))
     );
+    assert!(plain.contains(&format!("--preserve-legacy-recovery {run_id}")));
     assert!(!plain.contains('\u{1b}'), "{plain:?}");
     let styled = pending.message(true);
     assert!(

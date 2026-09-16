@@ -259,10 +259,20 @@ struct Flags {
 /// Hands out fake sessions in place of Linux and Web clients.
 struct FakeClients(Flags);
 struct FakeSession(Flags);
+struct FakeWebServer;
+#[async_trait]
+impl DesktopServer for FakeWebServer {
+    fn url(&self) -> &str {
+        "http://127.0.0.1:12345"
+    }
+    async fn stop(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+}
 #[async_trait]
 impl DesktopFactory for FakeClients {
     async fn server(&self, _: &DesktopOptions) -> Result<Box<dyn DesktopServer>, String> {
-        Err("the fixture drives Linux clients, which need no server".into())
+        Ok(Box::new(FakeWebServer))
     }
     fn session(
         &self,
@@ -899,6 +909,7 @@ async fn run_on_nodes(
 
 fn opts_in(world: &World, names: &[&str]) -> RunOptions {
     RunOptions {
+        recovery_isolation: None,
         desktop: desktop_options(world),
         stack: Some(stack()),
         stack_dir: None,
@@ -910,6 +921,7 @@ fn opts_in(world: &World, names: &[&str]) -> RunOptions {
 mod behavior;
 mod desktop;
 mod evidence;
+mod isolation;
 mod recovery;
 
 mod phase5;

@@ -24,6 +24,15 @@ pub struct LiveFacts {
 pub trait StackInspector: Send + Sync {
     /// Inspects `recorded` and `selected` and the Compose project.
     async fn facts(&self, recorded: &Path, selected: &Path) -> Result<LiveFacts, String>;
+    /// Compare identities using the journal's digest schema, not today's schema.
+    async fn facts_for(
+        &self,
+        recorded: &Path,
+        selected: &Path,
+        _original: &StackFingerprint,
+    ) -> Result<LiveFacts, String> {
+        self.facts(recorded, selected).await
+    }
 }
 
 /// Whether a recorded stack identity still exists anywhere on the host.

@@ -130,10 +130,14 @@ impl RunArtifacts {
             ));
         }
         stack.daemon_image.validate().map_err(io::Error::other)?;
-        stack
-            .daemon_source
-            .validate(&stack.daemon_image)
-            .map_err(io::Error::other)?;
+        // Reports must retain explicitly unknown legacy provenance. New stack
+        // descriptors still require a validated source; never fabricate one here.
+        if stack.daemon_source != crate::stack::DaemonProvenance::Unrecorded {
+            stack
+                .daemon_source
+                .validate(&stack.daemon_image)
+                .map_err(io::Error::other)?;
+        }
         nostr_sdk::prelude::PublicKey::parse(&stack.daemon_pubkey).map_err(io::Error::other)?;
         let mut tree = self.redacted_value(value)?;
         let redactor = self.redactor.read().unwrap_or_else(|p| p.into_inner());

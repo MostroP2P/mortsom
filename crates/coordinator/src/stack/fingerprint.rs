@@ -12,24 +12,60 @@ pub struct StackFingerprint {
 }
 
 impl StackSnapshot {
+    /// Compare in the recorded schema: a v1-to-v2 upgrade alone is never
+    /// evidence of a different stack. Unknown algorithms fail closed.
+    pub fn matches_recorded(&self, recorded: &StackFingerprint) -> Result<bool, String> {
+        let current = match recorded.algorithm.as_str() {
+            "sha256-mortsom-stack-v2" => self.fingerprint()?,
+            "sha256-mortsom-stack-v1" => self.legacy_fingerprint()?,
+            _ => return Err("unsupported recovery stack fingerprint algorithm".into()),
+        };
+        Ok(current == *recorded)
+    }
+
+    pub(crate) fn legacy_fingerprint(&self) -> Result<StackFingerprint, String> {
+        // Field order and framing are exactly the v1 wire representation.
+        #[derive(Serialize)]
+        struct Legacy<'a> {
+            daemon_pubkey: &'a str,
+            relay_url: &'a str,
+            wallet_endpoints: &'a std::collections::BTreeMap<String, String>,
+            daemon_image: &'a super::DaemonImage,
+            declared_limits: &'a super::DeclaredLimits,
+        }
+        let encoded = serde_json::to_vec(&Legacy {
+            daemon_pubkey: &self.daemon_pubkey,
+            relay_url: &self.relay_url,
+            wallet_endpoints: &self.wallet_endpoints,
+            daemon_image: &self.daemon_image,
+            declared_limits: &self.declared_limits,
+        })
+        .map_err(|_| "cannot encode legacy public stack configuration")?;
+        Ok(fingerprint(&encoded, "v1"))
+    }
+
     /// Hashes daemon identity/image/source, relay/wallet endpoints and declared limits.
     /// Version 2 added the daemon source.
     pub fn fingerprint(&self) -> Result<StackFingerprint, String> {
-        use sha2::{Digest, Sha256};
         let encoded =
             serde_json::to_vec(self).map_err(|_| "cannot encode public stack configuration")?;
-        let mut hash = Sha256::new();
-        hash.update(b"mortsom-stack-v2\0");
-        hash.update((encoded.len() as u64).to_be_bytes());
-        hash.update(encoded);
-        Ok(StackFingerprint {
-            algorithm: "sha256-mortsom-stack-v2".into(),
-            digest: hash
-                .finalize()
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect(),
-        })
+        Ok(fingerprint(&encoded, "v2"))
+    }
+}
+
+fn fingerprint(encoded: &[u8], version: &str) -> StackFingerprint {
+    use sha2::{Digest, Sha256};
+    let mut hash = Sha256::new();
+    hash.update(format!("mortsom-stack-{version}\0").as_bytes());
+    hash.update((encoded.len() as u64).to_be_bytes());
+    hash.update(encoded);
+    StackFingerprint {
+        algorithm: format!("sha256-mortsom-stack-{version}"),
+        digest: hash
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
     }
 }
 

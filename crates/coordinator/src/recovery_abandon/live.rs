@@ -16,7 +16,27 @@ pub struct LiveStacks<'a> {
 
 #[async_trait]
 impl StackInspector for LiveStacks<'_> {
+    async fn facts_for(
+        &self,
+        recorded: &Path,
+        selected: &Path,
+        original: &crate::stack::StackFingerprint,
+    ) -> Result<LiveFacts, String> {
+        self.inspect(recorded, selected, Some(original)).await
+    }
+
     async fn facts(&self, recorded: &Path, selected: &Path) -> Result<LiveFacts, String> {
+        self.inspect(recorded, selected, None).await
+    }
+}
+
+impl LiveStacks<'_> {
+    async fn inspect(
+        &self,
+        recorded: &Path,
+        selected: &Path,
+        original: Option<&crate::stack::StackFingerprint>,
+    ) -> Result<LiveFacts, String> {
         // Canonical like the recorded directory, so one physical stack
         // directory reads as one path in the evidence.
         let selected = selected
@@ -26,13 +46,23 @@ impl StackInspector for LiveStacks<'_> {
         let project = stack::project_owner(self.runner)
             .await
             .map_err(|e| e.to_string())?;
+        let mut cache = std::collections::BTreeMap::new();
+        let mut identity = |dir: &Path| {
+            cache
+                .entry(dir.to_path_buf())
+                .or_insert_with(|| match original {
+                    Some(original) => stack::recorded_identity_for(dir, original),
+                    None => stack::recorded_identity(dir),
+                })
+                .clone()
+        };
         let project_identity = match &project {
-            ProjectOwner::Directory(dir) => Some(stack::recorded_identity(dir)),
+            ProjectOwner::Directory(dir) => Some(identity(dir)),
             _ => None,
         };
         Ok(LiveFacts {
-            recorded: (recorded.to_path_buf(), stack::recorded_identity(recorded)),
-            selected: (selected.clone(), stack::recorded_identity(&selected)),
+            recorded: (recorded.to_path_buf(), identity(recorded)),
+            selected: (selected.clone(), identity(&selected)),
             project,
             project_identity,
         })

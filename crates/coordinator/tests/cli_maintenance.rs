@@ -230,3 +230,57 @@ fn stack_down_fails_closed_while_a_pending_journal_cannot_be_checked() {
         .stdout(predicates::str::is_empty());
     assert!(still_pending(&journal_root));
 }
+
+#[test]
+fn run_help_explains_explicit_legacy_preservation() {
+    cargo_bin_cmd!("mortsom")
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("--preserve-legacy-recovery"));
+}
+
+#[test]
+fn resolved_cleanup_retries_prepared_evidence_after_close_before_discard() {
+    use mortsom_coordinator::{recovery_abandon, recovery_store::FileJournal};
+    let root = tempfile::tempdir().unwrap();
+    let (run, journal_root) = journal(root.path(), true);
+    let path = journal_root.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    manifest["environment"]["artifacts_dir"] = serde_json::json!(root.path().join("artifacts"));
+    std::fs::write(&path, manifest.to_string()).unwrap();
+    let saved = FileJournal::open(&journal_root).unwrap();
+    let artifacts = root.path().join("artifacts").join(&run);
+    std::fs::create_dir_all(&artifacts).unwrap();
+    let evidence = recovery_abandon::AbandonmentEvidence {
+        run_id: run.parse().unwrap(),
+        reason: mortsom_coordinator::recovery_store::AbandonReason::StackDestroyed,
+        original_stack: saved.snapshot().stack,
+        current_stack_present: true,
+        checks_passed: vec![],
+        abandoned_at: chrono::Utc::now(),
+        resolution_verified: false,
+        statement: recovery_abandon::NOT_VERIFIED.into(),
+        finalized: false,
+    };
+    let marker = artifacts.join(recovery_abandon::ARTIFACT_FILE);
+    std::fs::write(&marker, serde_json::to_vec(&evidence).unwrap()).unwrap();
+    // Inject process death at the durable close boundary, before discard.
+    saved.confirm_resolution().unwrap();
+    saved.close().unwrap();
+    drop(saved);
+    command(root.path())
+        .args(["cleanup", &run])
+        .assert()
+        .success();
+    assert!(
+        !marker.exists(),
+        "resolved cleanup must retry reconciliation"
+    );
+    assert!(!recovery_abandon::abandonment(&artifacts).is_abandoned());
+    command(root.path())
+        .args(["cleanup", &run])
+        .assert()
+        .success();
+}

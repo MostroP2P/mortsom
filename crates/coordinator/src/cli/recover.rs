@@ -148,6 +148,7 @@ async fn recover(
     match manifest.state() {
         crate::recovery_store::RecoveryOutcome::Pending => {}
         crate::recovery_store::RecoveryOutcome::Resolved => {
+            crate::recovery_abandon::discard_prepared(&manifest)?;
             println!("recovery {} already completed", manifest.run_id);
             return Ok(ExitCode::SUCCESS);
         }
@@ -180,7 +181,13 @@ async fn recover(
     }
     let (config, stack) =
         crate::desktop::load(config_path, stack_dir, &TokioRunner, &RealHost).await?;
-    if stack.fingerprint()? != manifest.stack {
+    if !stack.matches_recorded(&manifest.stack)? {
+        if manifest.environment.is_none() {
+            eprintln!(
+                "{}",
+                crate::recovery_isolation::legacy_hint(&manifest.run_id)
+            );
+        }
         return Err("recovery stack identity changed; preserve evidence and resolve the recorded environment first".into());
     }
     if !attributions.is_empty() {
@@ -252,6 +259,7 @@ async fn recover(
         observer: &LiveObserver,
     };
     let options = RunOptions {
+        recovery_isolation: None,
         desktop,
         stack: Some(stack),
         stack_dir: stack_dir.canonicalize().ok(),

@@ -125,6 +125,7 @@ mod tests {
 
     fn a_run(scenarios: &[&str], tag: Option<&str>) -> Command {
         Command::Run {
+            preserve_legacy_recovery: Vec::new(),
             platform: mortsom_desktop_driver::Platform::Linux,
             app_artifact: None,
             source: Default::default(),

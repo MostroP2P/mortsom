@@ -98,8 +98,7 @@ when, and only when, every gate below is met. The command refuses otherwise:
 - `--confirm-run` repeats the run id exactly;
 - the journal recorded its artifact directory and that directory still exists. Journals written before
   Mortsom recorded these facts are refused; the selected configuration is never proof of where a run's
-  reports live. Such a journal stays pending and blocks new runs until a trustworthy record of the missing
-  facts exists (issue #43).
+  reports live. Such a journal stays pending; explicit continuation below does not abandon it (issue #43).
 
 The command writes a prepared `recovery-abandonment.json` into the run's artifact directory, then
 `abandonment.json` into the journal directory, then turns the journal terminal, then finalizes the public
@@ -108,11 +107,45 @@ removal fails. From the first write on, `cleanup`, `accounting`, `parity` and `p
 abandoned, whether the record is prepared, finalized or unreadable; a present record is never ignored. If
 the command dies at any point, rerun it: a pending journal is proved again, a terminal one only finishes
 the record and the removal. If instead `cleanup` verifies resolution of a journal whose abandonment died
-before it turned terminal, cleanup discards the prepared record; a finalized or unreadable record next to a
-resolved journal is left for investigation and keeps the run failed. The run stays failed:
+before it turned terminal, cleanup discards only a valid prepared record for the same run and stack.
+Cleanup retries that reconciliation even when the journal is already Resolved (issue #46), and removal
+or directory-sync errors remain errors until a retry succeeds. Finalized, unreadable, unsafe or
+mismatched evidence next to a resolved journal is preserved and refuses successful cleanup. An abandoned run stays failed:
 `cleanup` reports it as abandoned with exit code 1, `accounting` counts it as a leftover, `parity` never
 accepts it and `publish` marks it failed. Abandonment never verifies an order or a payment and never counts
 as a clean cleanup. Never delete or edit journals by hand.
+
+### Continuing while preserving ambiguous legacy recovery
+
+For journals written before `RecoveryEnvironment`, there may be no trustworthy way to reconstruct the
+old network, wallets or artifact location. Do not fill these fields from current configuration or mark
+the old run resolved. The supported alternative is invocation-scoped continuation on a different stack:
+
+```sh
+mortsom run --tag smoke --platform linux \
+  --app-ref https://github.com/MostroP2P/app/pull/456 \
+  --preserve-legacy-recovery <legacy-run-id>
+```
+
+The option is an acknowledgement that recovery remains pending, not a declaration that the old stack
+was regtest or destroyed. Repeat it for every exact pending legacy ID and for every new invocation.
+There is no persisted bypass, automatic expiry, terminal transition, old-report rewrite or storage deletion.
+The new run records the preserved IDs and fingerprints in `recovery-isolation.json`, with explicit
+unverified wording, before any client starts. The old run remains unaccepted and its accounting is unchanged.
+
+The command refuses unknown/duplicate/omitted IDs, modern pending journals, the same current stack
+(including across fingerprint v1/v2), unreadable journals, missing/unsafe actor directories, and active
+runtime markers. Never remove a marker to make it pass. It verifies current Compose ownership, descriptor
+integrity, both configured stack LND endpoints and live regtest networks. Current mainnet permission or
+canary always refuses. Wallet networks are rechecked before clients start even for non-payment scenarios.
+If the new run fails and leaves recovery, use ordinary `cleanup <new-run-id>` before another scenario.
+Budgets, caps, fresh identities and the host mutation lock are unchanged.
+
+Legacy stack descriptors can be read in place with their original fingerprint verified and daemon source
+explicitly shown as unrecorded. Upgrading the descriptor format alone never proves a different stack.
+Stack lifecycle warnings name continuation as conditional guidance; they do not establish the old network
+or destruction. Continue to resolve current-stack recovery before `stack up`, `--replace` or `stack down`.
+Manual acceptance of the legacy incident remains required; do not automatically close issue #43.
 
 ## 6. Secrets
 

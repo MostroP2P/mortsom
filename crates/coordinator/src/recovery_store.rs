@@ -77,6 +77,8 @@ impl RecoveryManifest {
 pub enum PendingRecovery {
     /// A previous run still holds identities that `mortsom cleanup` must resolve.
     Unresolved(RunId),
+    /// Missing historical environment facts; only explicit regtest isolation is possible.
+    Legacy(RunId),
     /// The recovery directory could not be inspected.
     Io(String),
 }
@@ -87,6 +89,11 @@ impl PendingRecovery {
         const BOLD: &str = "\u{1b}[1m";
         const RESET: &str = "\u{1b}[0m";
         match self {
+            Self::Legacy(run_id) => format!(
+                "{}\n{}",
+                Self::Unresolved(run_id.clone()).message(color),
+                crate::recovery_isolation::legacy_hint(run_id)
+            ),
             Self::Unresolved(run_id) => {
                 let command = format!("mortsom cleanup {run_id}");
                 let highlighted = if color {
@@ -124,6 +131,9 @@ impl FileJournal {
     /// Refuse new work while any previous protected identity needs recovery.
     pub fn refuse_pending(base: &Path) -> Result<(), PendingRecovery> {
         match Self::pending(base).map_err(PendingRecovery::Io)?.first() {
+            Some(manifest) if manifest.environment.is_none() => {
+                Err(PendingRecovery::Legacy(manifest.run_id.clone()))
+            }
             Some(manifest) => Err(PendingRecovery::Unresolved(manifest.run_id.clone())),
             None => Ok(()),
         }

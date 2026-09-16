@@ -57,14 +57,30 @@ fn manifest(run_id: RunId, environment: Option<RecoveryEnvironment>) -> Recovery
     }
 }
 
-struct Fixture {
+pub(super) struct Fixture {
     dir: tempfile::TempDir,
     run_id: RunId,
-    journal: PathBuf,
+    pub(super) journal: PathBuf,
 }
 
 impl Fixture {
-    fn new(tweak: impl FnOnce(&mut RecoveryEnvironment)) -> Self {
+    pub(super) fn prepared(&self) {
+        let manifest = FileJournal::open(&self.journal).unwrap().snapshot();
+        let evidence = AbandonmentEvidence {
+            run_id: manifest.run_id,
+            reason: AbandonReason::StackDestroyed,
+            original_stack: manifest.stack,
+            current_stack_present: true,
+            checks_passed: vec![],
+            abandoned_at: Utc::now(),
+            resolution_verified: false,
+            statement: NOT_VERIFIED.into(),
+            finalized: false,
+        };
+        write_evidence(&self.artifacts(), ARTIFACT_FILE, &evidence).unwrap();
+    }
+
+    pub(super) fn new(tweak: impl FnOnce(&mut RecoveryEnvironment)) -> Self {
         Self::with(|stack, artifacts| {
             let mut environment = environment(stack, artifacts);
             tweak(&mut environment);
@@ -105,7 +121,7 @@ impl Fixture {
         }
     }
 
-    fn artifacts(&self) -> PathBuf {
+    pub(super) fn artifacts(&self) -> PathBuf {
         self.dir.path().join("artifacts").join(self.run_id.as_str())
     }
 
@@ -737,38 +753,6 @@ fn every_present_record_counts_as_abandonment_and_only_a_missing_one_does_not() 
     );
     assert!(unreadable.is_abandoned());
     assert!(unreadable.evidence().is_none());
-}
-
-/// Cleanup that verifies resolution after an abandonment died before its
-/// journal turned terminal discards the prepared record; anything else next
-/// to a resolved journal stays, so the contradiction is investigated.
-#[test]
-fn a_resolved_journal_discards_only_a_prepared_record() {
-    let fixture = Fixture::new(|_| {});
-    let journal = FileJournal::open(&fixture.journal).unwrap();
-    write_incomplete_test_artifacts(&fixture.artifacts(), false);
-    assert!(discard_prepared(&journal.snapshot()).is_ok());
-    assert!(
-        abandonment(&fixture.artifacts()).is_abandoned(),
-        "a pending journal discards nothing"
-    );
-
-    journal.close().unwrap();
-    discard_prepared(&journal.snapshot()).unwrap();
-    assert_eq!(abandonment(&fixture.artifacts()), Abandonment::None);
-
-    for corrupt in [false, true] {
-        if corrupt {
-            write_incomplete_test_artifacts(&fixture.artifacts(), true);
-        } else {
-            write_test_artifact(&fixture.artifacts());
-        }
-        discard_prepared(&journal.snapshot()).unwrap();
-        assert!(
-            abandonment(&fixture.artifacts()).is_abandoned(),
-            "{corrupt}"
-        );
-    }
 }
 
 #[test]

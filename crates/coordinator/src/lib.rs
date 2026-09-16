@@ -41,3 +41,5 @@ pub mod recovery_outcome;
 
 /// Terminal abandonment of recovery whose regtest stack was destroyed.
 pub mod recovery_abandon;
+/// Explicit regtest continuation that preserves ambiguous legacy recovery.
+pub mod recovery_isolation;

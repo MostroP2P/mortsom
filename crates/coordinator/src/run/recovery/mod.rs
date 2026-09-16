@@ -17,12 +17,11 @@ pub(super) fn prepare(
             .recovery
             .as_ref()
             .ok_or("recovery manifest missing")?;
-        if options
+        if !options
             .stack
             .as_ref()
             .ok_or("recovery stack missing")?
-            .fingerprint()?
-            != journal.snapshot().stack
+            .matches_recorded(&journal.snapshot().stack)?
         {
             return Err(
                 "recovery stack identity changed; refusing actions with retained identities".into(),
@@ -32,7 +31,24 @@ pub(super) fn prepare(
     }
     let home = (deps.env)("HOME").ok_or("HOME is required for protected desktop recovery")?;
     let base = FileJournal::directory(Path::new(&home))?;
-    FileJournal::refuse_pending(&base)?;
+    if let Some(isolation) = &options.recovery_isolation {
+        let stack = options
+            .stack
+            .as_ref()
+            .ok_or("isolation requires a current stack")?;
+        isolation
+            .revalidate(&base, config, stack, options.stack_dir.as_deref())
+            .map_err(|error| error.to_string())?;
+        // Persist new-run evidence before fresh identities start. Never edit
+        // the old journal or infer its unknown artifact location.
+        let path = Path::new(&config.run.artifacts_dir)
+            .join(run.as_str())
+            .join("recovery-isolation.json");
+        let json = serde_json::to_string_pretty(isolation).map_err(|error| error.to_string())?;
+        crate::artifacts::persist::atomic_json(&path, &json).map_err(|error| error.to_string())?;
+    } else {
+        FileJournal::refuse_pending(&base)?;
+    }
     let stack = options
         .stack
         .as_ref()
