@@ -201,19 +201,30 @@ impl Status {
         out
     }
 
-    /// One line per node. A node answering about channels but holding none
-    /// is up and idle; rounding that to "unreachable" would hide which half
-    /// is wrong.
+    /// One line per node, from two independent `lncli` calls: a node
+    /// answering about channels but holding none is up and idle, and one
+    /// answering about only half of it has a probe that failed. Both the
+    /// detail and the badge are read off the pair, so a green badge never
+    /// sits beside a fact that never arrived.
     fn nodes_block(&self, paint: &impl Fn(&str, &str) -> String) -> String {
         let mut out = String::new();
         for node in &self.nodes {
-            let detail = match (node.active_channels, node.confirmed_sats) {
-                (Some(channels), Some(sats)) => {
-                    format!("{channels} active channel(s), {sats} confirmed sats")
-                }
-                _ => "unreachable".to_owned(),
+            let (detail, usable) = match (node.active_channels, node.confirmed_sats) {
+                (Some(channels), Some(sats)) => (
+                    format!("{channels} active channel(s), {sats} confirmed sats"),
+                    channels > 0,
+                ),
+                (Some(channels), None) => (
+                    format!("{channels} active channel(s), balance did not answer"),
+                    false,
+                ),
+                (None, Some(sats)) => (
+                    format!("channels did not answer, {sats} confirmed sats"),
+                    false,
+                ),
+                (None, None) => ("unreachable".to_owned(), false),
             };
-            let badge = if node.active_channels.is_some_and(|count| count > 0) {
+            let badge = if usable {
                 paint(GREEN, "[OK]")
             } else {
                 paint(RED, "[--]")
