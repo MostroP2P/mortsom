@@ -246,7 +246,7 @@ async fn stack_cli(stack_dir: &std::path::Path, action: StackAction) -> ExitCode
         }
         StackAction::Status => match stack::status(&TokioRunner, &layout).await {
             Ok(status) => {
-                print!("{}", status.render());
+                print!("{}", status.render_with_color(use_color()));
                 // Non-zero until usable, so the command can be waited on.
                 return if status.is_ready() {
                     ExitCode::SUCCESS
