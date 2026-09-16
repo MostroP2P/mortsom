@@ -11,10 +11,32 @@ pub struct StackFingerprint {
     pub digest: String,
 }
 
+impl StackFingerprint {
+    /// Reject unknown schemas and noncanonical digests before using identity evidence.
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if !matches!(
+            self.algorithm.as_str(),
+            "sha256-mortsom-stack-v1" | "sha256-mortsom-stack-v2"
+        ) {
+            return Err("unsupported recovery stack fingerprint algorithm".into());
+        }
+        if self.digest.len() != 64
+            || !self
+                .digest
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err("invalid recovery stack fingerprint digest: expected 64 lowercase hexadecimal characters".into());
+        }
+        Ok(())
+    }
+}
+
 impl StackSnapshot {
     /// Compare in the recorded schema: a v1-to-v2 upgrade alone is never
     /// evidence of a different stack. Unknown algorithms fail closed.
     pub fn matches_recorded(&self, recorded: &StackFingerprint) -> Result<bool, String> {
+        recorded.validate()?;
         let current = match recorded.algorithm.as_str() {
             "sha256-mortsom-stack-v2" => self.fingerprint()?,
             "sha256-mortsom-stack-v1" => self.legacy_fingerprint()?,

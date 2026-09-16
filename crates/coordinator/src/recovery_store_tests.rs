@@ -5,7 +5,7 @@ fn manifest() -> RecoveryManifest {
     RecoveryManifest {
         run_id: RunId::new(),
         stack: StackFingerprint {
-            algorithm: "test".into(),
+            algorithm: "sha256-mortsom-stack-v1".into(),
             digest: "a".repeat(64),
         },
         platform: Platform::Linux,

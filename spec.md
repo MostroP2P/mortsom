@@ -474,7 +474,9 @@ payments. The old runs remain unresolved and unaccepted. No historical fields ar
 
 Continuation requires exact acknowledgement of the entire pending inventory, readable private journals,
 both old actor directories with verified runtime shutdown, and a different current stack fingerprint
-compared in the original digest schema (v1 or v2; unknown schemes refuse). Journals with recorded
+compared in the original digest schema (v1 or v2; unknown schemes refuse). Recorded digests must be
+exactly 64 lowercase ASCII hexadecimal characters; malformed or noncanonical fingerprints are errors,
+never evidence of a different stack, and journals containing them are left untouched. Journals with recorded
 environments must use normal cleanup or proven abandonment and cannot take this route. The current
 Compose project and descriptor must belong to the selected Mortsom stack, configuration must bind both
 actors to that stack's LND endpoints, mainnet permission must be disabled, the lane must not be canary,

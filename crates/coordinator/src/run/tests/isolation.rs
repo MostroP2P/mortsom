@@ -331,3 +331,85 @@ async fn a_new_pending_journal_or_changed_network_still_blocks_the_next_scenario
         assert!(summary.results.iter().all(|result| result.attempts == 0));
     }
 }
+
+fn malformed_digests() -> Vec<String> {
+    vec![
+        String::new(),
+        "a".repeat(63),
+        "a".repeat(65),
+        "g".repeat(64),
+        "A".repeat(64),
+        format!("{} ", "a".repeat(63)),
+        "é".repeat(32),
+    ]
+}
+
+#[test]
+fn malformed_fingerprints_are_errors_not_stack_inequality() {
+    let current = stack();
+    for valid in [
+        current.legacy_fingerprint().unwrap(),
+        current.fingerprint().unwrap(),
+    ] {
+        assert!(current.matches_recorded(&valid).unwrap());
+        for digest in malformed_digests() {
+            let malformed = crate::stack::StackFingerprint {
+                digest,
+                ..valid.clone()
+            };
+            assert!(
+                current.matches_recorded(&malformed).is_err(),
+                "{malformed:?}"
+            );
+        }
+        let mut changed = current.clone();
+        changed.daemon_pubkey = "different".into();
+        assert!(!changed.matches_recorded(&valid).unwrap());
+        let unknown = crate::stack::StackFingerprint {
+            algorithm: "unknown".into(),
+            ..valid
+        };
+        assert!(current.matches_recorded(&unknown).is_err());
+    }
+}
+
+#[tokio::test]
+async fn malformed_fingerprints_refuse_journal_loading_and_isolation_without_mutation() {
+    let world = world(false);
+    let journal = legacy(&world);
+    let ids = [journal.snapshot().run_id];
+    let path = journal.root().join("manifest.json");
+    for algorithm in [
+        "sha256-mortsom-stack-v1",
+        "sha256-mortsom-stack-v2",
+        "unknown",
+    ] {
+        for digest in malformed_digests().into_iter().chain(["a".repeat(64)]) {
+            if algorithm != "unknown" && digest == "a".repeat(64) {
+                continue;
+            }
+            let mut manifest = journal.snapshot();
+            manifest.stack = crate::stack::StackFingerprint {
+                algorithm: algorithm.into(),
+                digest,
+            };
+            let bytes = serde_json::to_vec(&manifest).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
+            assert!(
+                FileJournal::open(journal.root()).is_err(),
+                "{:?}",
+                manifest.stack
+            );
+            assert!(
+                authorization(&world, &ids, &inspector(&world), "regtest")
+                    .await
+                    .unwrap_err()
+                    .contains("stack fingerprint")
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            for actor in Actor::ALL {
+                assert!(journal.root().join("actors").join(actor.as_str()).is_dir());
+            }
+        }
+    }
+}

@@ -60,6 +60,7 @@ impl RecoveryManifest {
     }
 
     fn validate(&self) -> Result<(), String> {
+        self.stack.validate()?;
         if self.state().is_pending() == self.closed {
             return Err("recovery manifest outcome contradicts its closed flag".into());
         }
