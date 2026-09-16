@@ -178,6 +178,34 @@ fn an_unreachable_node_is_told_apart_from_an_idle_one() {
     );
 }
 
+/// The two facts on a node line come from two separate `lncli` calls, so
+/// one can answer while the other fails. A green badge beside a detail
+/// saying a probe never came back tells the operator two different things,
+/// and the failed probe is the one they would miss.
+#[test]
+fn a_node_with_one_failed_probe_is_not_badged_ok() {
+    // Arrange: alice answers about channels but not balance; bob the
+    // other way round.
+    let mut status = ready();
+    status.nodes[0] = node("alice", Some(1), None);
+    status.nodes[1] = node("bob", None, Some(99_000));
+
+    // Act
+    let rendered = status.render();
+
+    // Assert
+    assert!(
+        rendered.contains("[--] lnd-alice: 1 active channel(s), balance did not answer"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("[--] lnd-bob: channels did not answer, 99000 confirmed sats"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("[OK] lnd-alice"), "{rendered}");
+    assert!(!rendered.contains("[OK] lnd-bob"), "{rendered}");
+}
+
 /// The rule carries no newline of its own, so a report that forgets one
 /// prints the heading welded to the first service.
 #[test]
