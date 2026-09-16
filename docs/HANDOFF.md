@@ -33,6 +33,15 @@ then exposed a report-startup rejection of the legacy descriptor's unrecorded da
 regression reproduced it before the fix; reports now preserve that explicit unknown while modern
 descriptor validation remains strict. Both Linux and Web runner tests cover that combination.
 
+The final live Linux smoke on the same app revision created `20260916T155537Z-af7ee1867161`, recorded
+isolation evidence and launched both clients. It did **not** pass: both clients timed out waiting for
+`keys.public_key` during onboarding, before any scenario body or order/payment event. Its new pending
+journal correctly blocked the next family member. Ordinary cleanup succeeded offline, resolved that
+new empty journal and removed its inactive storage; failed reports remain in artifacts. The original
+legacy manifest is unchanged (SHA-256 `226aa0c69ab3fe719d343aa298eb02f23b76d601efdd6a751deeff40eeac1be7`),
+still pending and unverified. PR #47 records the evidence; CI passed format/lint, tests and coverage on
+`0426636`. App onboarding and live Linux/Web business-flow acceptance remain outstanding.
+
 Manual acceptance for issue #43 is still required. Keep PR language non-closing until it is recorded;
 automated tests and agent-run smoke are not a substitute for that acceptance.
 
