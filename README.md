@@ -36,7 +36,9 @@ cargo build -p mortsom-coordinator --bin mortsom
 
 Every `run` creates fresh Alice and Bob identities, runs one scenario, resolves every order it created and
 removes its clients. `--tag` runs a whole family the same way: one run per scenario, in sequence, with a
-report at the end. Results land in `artifacts/<run-id>/`. The exit status is non-zero when a run fails.
+report at the end. Every reported scenario carries the wall-clock it took, so a slow cell is visible
+without opening an artifact. Results land in `artifacts/<run-id>/`. The exit status is non-zero when a run
+fails.
 
 ## Requirements
 
