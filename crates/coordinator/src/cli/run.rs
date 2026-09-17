@@ -105,14 +105,12 @@ impl Attempt {
     /// never started.
     fn view(&self, name: &str) -> Option<RunView> {
         let summary = self.summary.as_ref()?;
+        let result = summary.results.iter().find(|result| result.name == name);
         Some(RunView {
             run_id: summary.run_id.to_string(),
             run_passed: summary.passed,
-            outcome: summary
-                .results
-                .iter()
-                .find(|result| result.name == name)
-                .map(|result| result.outcome.clone()),
+            outcome: result.map(|result| result.outcome.clone()),
+            duration: result.map(|result| result.duration).unwrap_or_default(),
             cleanup_clean: summary.cleanup.as_ref().map(|report| report.is_clean()),
         })
     }
@@ -125,6 +123,8 @@ struct RunView {
     run_passed: bool,
     outcome: Option<mortsom_scenario_kit::outcome::Outcome>,
     cleanup_clean: Option<bool>,
+    /// Wall-clock the scenario itself took, zero when it never ran.
+    duration: std::time::Duration,
 }
 
 /// The outcome of a family run as a sequence of single-scenario runs.
@@ -182,7 +182,8 @@ impl Batch {
             None => "no cleanup report",
         };
         self.lines.push(format!(
-            "{name:<28} {label} · cleanup {cleanup} · run {}",
+            "{name:<28} {label} · {} · cleanup {cleanup} · run {}",
+            crate::run::human_elapsed(run.duration),
             run.run_id
         ));
     }
@@ -329,12 +330,7 @@ async fn run_once(
     match run_scenarios(&config, &options, &deps).await {
         Ok(summary) => {
             print!("{}", summary.checks.render_with_color(use_color()));
-            for result in &summary.results {
-                println!(
-                    "{:<28} {:?} (attempts {})",
-                    result.name, result.outcome, result.attempts
-                );
-            }
+            print!("{}", crate::run::render_results(&summary.results));
             println!("artifacts: {}/{}", config.run.artifacts_dir, summary.run_id);
             let code = if summary.passed {
                 ExitCode::SUCCESS
@@ -495,12 +491,31 @@ mod batch_tests {
     use mortsom_scenario_kit::outcome::Outcome;
 
     fn view(outcome: Option<Outcome>, clean: Option<bool>) -> RunView {
+        let outcome_timed = outcome.is_some();
         RunView {
             run_id: "run-1".into(),
             run_passed: clean != Some(false),
             outcome,
             cleanup_clean: clean,
+            // A run that produced no result for the scenario timed nothing.
+            duration: if outcome_timed {
+                std::time::Duration::from_secs(252)
+            } else {
+                std::time::Duration::ZERO
+            },
         }
+    }
+
+    /// A family is read to find the slow cell, so every line carries the
+    /// time its scenario took.
+    #[test]
+    fn every_family_line_reports_how_long_its_scenario_took() {
+        let mut batch = Batch::default();
+        batch.record("happy_sell", Some(view(Some(Outcome::Passed), Some(true))));
+
+        let report = batch.render();
+
+        assert!(report.contains("4m 12s"), "{report}");
     }
 
     /// A scenario's own pass is not the family's when its run left an
@@ -536,7 +551,11 @@ mod batch_tests {
         );
         assert_eq!(batch.code(), ExitCode::SUCCESS);
         let report = batch.render();
-        assert!(report.contains("happy_sell                   passed · cleanup clean · run run-1"));
+        assert!(
+            report.contains(
+                "happy_sell                   passed · 4m 12s · cleanup clean · run run-1"
+            )
+        );
         assert!(report.contains("skipped: profile lacks range-order"));
         assert!(report.ends_with("1 passed, 0 failed, 1 skipped, 0 not run"));
 
@@ -554,7 +573,7 @@ mod batch_tests {
         assert!(
             batch
                 .render()
-                .contains("failed (product): no rate · cleanup UNRESOLVED")
+                .contains("failed (product): no rate · 4m 12s · cleanup UNRESOLVED")
         );
     }
 
@@ -593,7 +612,9 @@ mod batch_tests {
         );
         let report = batch.render();
         assert!(
-            report.contains("session deleted (Session info: chrome=152) · cleanup UNRESOLVED"),
+            report.contains(
+                "session deleted (Session info: chrome=152) · 4m 12s · cleanup UNRESOLVED"
+            ),
             "{report}"
         );
     }
@@ -608,7 +629,7 @@ mod batch_tests {
         assert!(
             batch
                 .render()
-                .contains("produced no result for it · cleanup no cleanup report")
+                .contains("produced no result for it · - · cleanup no cleanup report")
         );
     }
 }
