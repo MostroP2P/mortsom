@@ -86,12 +86,7 @@ async fn fill_create_form(
     )
     .await?;
     enter_fiat_amount(device, draft.fiat).await?;
-    type_into(
-        device,
-        Ids::ORDER_CREATE_PAYMENT_METHOD,
-        &draft.payment_method,
-    )
-    .await?;
+    choose_payment_method(device, &draft.payment_method).await?;
     enter_price(device, draft).await?;
     // The last field is numeric, so the keyboard is still up over the
     // bottom of the form -- submit included.
@@ -122,7 +117,25 @@ async fn submit_ready(device: &DeviceContext<'_>) -> Result<bool, AdapterError> 
     }
 }
 
-/// Fills the fiat side of the form: one amount, or the range toggle and
+/// Chooses the method on the payment-method screen. Any method, listed for
+/// the currency or not, goes through the free-text sheet: the app selects
+/// the listed entry when the name matches one, and confirm is the only way
+/// the choice reaches the form.
+async fn choose_payment_method(
+    device: &DeviceContext<'_>,
+    method: &str,
+) -> Result<(), AdapterError> {
+    tap(device, Ids::ORDER_CREATE_PAYMENT_METHOD_ADD).await?;
+    tap(device, Ids::ORDER_CREATE_PAYMENT_METHOD_CUSTOM_OPEN).await?;
+    type_into(device, Ids::ORDER_CREATE_PAYMENT_METHOD, method).await?;
+    tap(device, Ids::ORDER_CREATE_PAYMENT_METHOD_CUSTOM_ADD).await?;
+    tap(device, Ids::ORDER_CREATE_PAYMENT_METHODS_CONFIRM).await?;
+    // Back on the form: `Add` lives there only, clear of the keyboard that
+    // may still cover submit.
+    expect(device, Ids::ORDER_CREATE_PAYMENT_METHOD_ADD).await
+}
+
+/// Fills the fiat side of the form: one amount, or the range segment and
 /// its two bounds.
 async fn enter_fiat_amount(
     device: &DeviceContext<'_>,
@@ -133,16 +146,17 @@ async fn enter_fiat_amount(
             type_into(device, Ids::ORDER_CREATE_FIAT_AMOUNT, &amount.to_string()).await
         }
         FiatAmount::Range { min, max } => {
-            tap(device, Ids::ORDER_CREATE_RANGE).await?;
+            tap(device, Ids::ORDER_CREATE_AMOUNT_RANGE).await?;
             type_into(device, Ids::ORDER_CREATE_FIAT_MIN, &min.to_string()).await?;
             type_into(device, Ids::ORDER_CREATE_FIAT_MAX, &max.to_string()).await
         }
     }
 }
 
-/// Sets the price type. The form starts on market price and the toggle
-/// reveals the sats field; a range order locks the toggle on market, since
-/// the protocol prices ranges at market only.
+/// Sets the price type. The form starts on market price and the fixed
+/// segment reveals the sats field; a range order locks the control on
+/// market, since the protocol prices ranges at market only. The control
+/// names the whole and has no action of its own: a segment is tapped.
 ///
 /// Whether the form already offers a sats field is a question about the
 /// whole form, not about the part of it the keyboard has not covered.
@@ -156,7 +170,7 @@ async fn enter_price(device: &DeviceContext<'_>, draft: &OrderDraft) -> Result<(
                 ));
             }
             if !sats_listed {
-                tap(device, Ids::ORDER_CREATE_PRICE_TYPE).await?;
+                tap(device, Ids::ORDER_CREATE_PRICE_FIXED).await?;
             }
             type_into(
                 device,
@@ -174,7 +188,7 @@ async fn enter_price(device: &DeviceContext<'_>, draft: &OrderDraft) -> Result<(
                 ));
             }
             if sats_listed {
-                tap(device, Ids::ORDER_CREATE_PRICE_TYPE).await?;
+                tap(device, Ids::ORDER_CREATE_PRICE_MARKET).await?;
             }
             Ok(())
         }

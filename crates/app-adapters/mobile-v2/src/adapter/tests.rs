@@ -423,11 +423,14 @@ fn app_with_orders() -> FakeUi {
         &[
             Ids::ORDER_CREATE_CURRENCY,
             Ids::ORDER_CREATE_FIAT_AMOUNT,
-            Ids::ORDER_CREATE_PAYMENT_METHOD,
+            Ids::ORDER_CREATE_PAYMENT_METHOD_ADD,
             Ids::ORDER_CREATE_PRICE_TYPE,
+            Ids::ORDER_CREATE_PRICE_MARKET,
+            Ids::ORDER_CREATE_PRICE_FIXED,
             Ids::ORDER_CREATE_SUBMIT,
         ],
     );
+    payment_method_screen(&ui);
     ui.on_tap(
         Ids::ORDER_CREATE_CURRENCY,
         &[
@@ -443,8 +446,13 @@ fn app_with_orders() -> FakeUi {
             "order.create.currency.USD",
         ],
     );
+    // The price control names the whole; only its segments act.
     ui.on_tap(
-        Ids::ORDER_CREATE_PRICE_TYPE,
+        Ids::ORDER_CREATE_PRICE_FIXED,
+        &[Ids::ORDER_CREATE_SATS_AMOUNT],
+    );
+    ui.on_tap_hide(
+        Ids::ORDER_CREATE_PRICE_MARKET,
         &[Ids::ORDER_CREATE_SATS_AMOUNT],
     );
     ui.on_tap(Ids::ORDER_CREATE_SUBMIT, &[Ids::ORDER_CONFIRM_HOME]);
@@ -498,6 +506,25 @@ fn app_with_orders() -> FakeUi {
     ui
 }
 
+/// The payment-method screen as the real app draws it: `Add` on the form
+/// opens it, the dashed row opens the free-text sheet, the sheet's `Add`
+/// turns the text into a chip and closes it, and confirm carries the choice
+/// back to the form.
+fn payment_method_screen(ui: &FakeUi) {
+    let screen = [
+        Ids::ORDER_CREATE_PAYMENT_METHOD_CUSTOM_OPEN,
+        Ids::ORDER_CREATE_PAYMENT_METHODS_CONFIRM,
+    ];
+    let sheet = [
+        Ids::ORDER_CREATE_PAYMENT_METHOD,
+        Ids::ORDER_CREATE_PAYMENT_METHOD_CUSTOM_ADD,
+    ];
+    ui.on_tap(Ids::ORDER_CREATE_PAYMENT_METHOD_ADD, &screen);
+    ui.on_tap(Ids::ORDER_CREATE_PAYMENT_METHOD_CUSTOM_OPEN, &sheet);
+    ui.on_tap_hide(Ids::ORDER_CREATE_PAYMENT_METHOD_CUSTOM_ADD, &sheet);
+    ui.on_tap_hide(Ids::ORDER_CREATE_PAYMENT_METHODS_CONFIRM, &screen);
+}
+
 fn draft() -> OrderDraft {
     OrderDraft::fixed(OrderKind::Sell, 1000, "USD", 1, "cash")
 }
@@ -514,7 +541,38 @@ async fn create_order_returns_the_new_trade_id_and_state() {
     assert_eq!(order.state, OrderState::Pending);
     let calls = ui.calls();
     assert!(calls.contains(&"tap order.create.currency.USD".to_owned()));
+    assert!(calls.contains(&"tap order.create.price.fixed".to_owned()));
+    assert!(!calls.contains(&"tap order.create.price_type".to_owned()));
     assert!(calls.contains(&"type order.create.sats_amount (4 chars)".to_owned()));
+}
+
+/// The method is typed on the payment-method screen's free-text sheet,
+/// added as a chip and confirmed back to the form before the price is set.
+#[tokio::test]
+async fn the_payment_method_is_added_on_its_own_screen_and_confirmed() {
+    let ui = app_with_orders();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    adapter()
+        .create_order(&device(&ui), &draft())
+        .await
+        .unwrap();
+    let calls = ui.calls();
+    let at = |call: &str| {
+        calls
+            .iter()
+            .position(|c| c == call)
+            .unwrap_or_else(|| panic!("{call} missing from {calls:?}"))
+    };
+    let steps = [
+        at("tap order.create.payment_method.add"),
+        at("tap order.create.payment_method.custom_open"),
+        at("type order.create.payment_method (4 chars)"),
+        at("tap order.create.payment_method.custom_add"),
+        at("tap order.create.payment_methods.confirm"),
+        at("tap order.create.price.fixed"),
+    ];
+    assert!(steps.is_sorted(), "{calls:?}");
+    assert!(!ui.has(Ids::ORDER_CREATE_PAYMENT_METHODS_CONFIRM));
 }
 
 /// A create form that keeps submit disabled with every field filled gets
