@@ -12,12 +12,13 @@ use mortsom_app_contract::{
 use mortsom_common::Secret;
 
 use super::nav::go_home;
+use super::trades_list::trade_ids;
 use super::{SCREEN_POLL, dismiss_keyboard, expect, label, listed, present, tap, type_into};
 use crate::selectors::Ids;
 use crate::states::from_v2_label;
 
 /// Prefix of trade rows in the trades list.
-const TRADES_ITEM_PREFIX: &str = "trades.item.";
+pub(super) const TRADES_ITEM_PREFIX: &str = "trades.item.";
 /// Poll interval while waiting for the new trade row.
 const NEW_TRADE_POLL: std::time::Duration = std::time::Duration::from_millis(500);
 
@@ -722,14 +723,6 @@ pub async fn cancel_payment(
     tap(device, Ids::TRADE_CANCEL_CONFIRM).await
 }
 
-/// Ids of the trades currently listed.
-pub async fn trade_ids(device: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
-    go_home(device).await?;
-    tap(device, Ids::NAV_TRADES).await?;
-    let xml = page_source(device).await?;
-    Ok(ids_with_prefix(&xml, TRADES_ITEM_PREFIX))
-}
-
 async fn new_trade_id(
     device: &DeviceContext<'_>,
     known: &[String],
@@ -750,7 +743,7 @@ async fn new_trade_id(
     }
 }
 
-async fn page_source(device: &DeviceContext<'_>) -> Result<String, AdapterError> {
+pub(super) async fn page_source(device: &DeviceContext<'_>) -> Result<String, AdapterError> {
     device
         .ui
         .page_source()
