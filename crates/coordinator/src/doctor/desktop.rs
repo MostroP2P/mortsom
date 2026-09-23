@@ -134,7 +134,6 @@ fn check_tools(
             "dbus-daemon",
             "gnome-keyring-daemon",
             "import",
-            "/usr/libexec/at-spi-bus-launcher",
             "/usr/libexec/at-spi2-registryd",
         ] {
             check_tool(tool, None, host, report);
