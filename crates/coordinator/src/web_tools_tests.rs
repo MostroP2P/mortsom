@@ -13,6 +13,9 @@ struct Host {
 
 #[async_trait]
 impl HostProbe for Host {
+    fn resolve(&self, path: &Path) -> Option<PathBuf> {
+        Some(path.to_path_buf())
+    }
     fn env(&self, name: &str) -> Option<String> {
         self.env.get(name).map(|v| (*v).to_owned())
     }

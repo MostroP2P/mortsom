@@ -41,6 +41,9 @@ pub trait HostProbe: Send + Sync {
     fn is_file(&self, path: &Path) -> bool;
     /// True only for a regular file with executable permissions.
     fn is_executable(&self, path: &Path) -> bool;
+    /// The real path of `path`, every symlink followed; `None` when it
+    /// does not resolve.
+    fn resolve(&self, path: &Path) -> Option<PathBuf>;
     /// Runs a program with arguments and captures its output.
     async fn run(&self, program: &Path, args: &[&str]) -> Result<CommandOutput, String>;
 }
@@ -73,6 +76,10 @@ impl HostProbe for RealHost {
     fn is_executable(&self, path: &Path) -> bool {
         use rustix::fs::{Access, AtFlags, CWD, accessat};
         path.is_file() && accessat(CWD, path, Access::EXEC_OK, AtFlags::EACCESS).is_ok()
+    }
+
+    fn resolve(&self, path: &Path) -> Option<PathBuf> {
+        std::fs::canonicalize(path).ok()
     }
 
     async fn run(&self, program: &Path, args: &[&str]) -> Result<CommandOutput, String> {
@@ -116,6 +123,24 @@ mod tests {
             .unwrap()
             .success();
         assert_eq!(RealHost.is_executable(&file), executable);
+    }
+
+    /// A tool on `PATH` is often a symlink into its real installation, as
+    /// `/usr/bin/clang++` is into `/usr/lib/llvm-14/bin`.
+    #[test]
+    fn resolve_follows_symlinks_to_the_real_file() {
+        let root = tempfile::tempdir().unwrap();
+        let real = root.path().join("llvm").join("clang");
+        std::fs::create_dir_all(real.parent().unwrap()).unwrap();
+        std::fs::write(&real, b"clang").unwrap();
+        let link = root.path().join("clang++");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        assert_eq!(
+            RealHost.resolve(&link),
+            Some(std::fs::canonicalize(&real).unwrap())
+        );
+        assert_eq!(RealHost.resolve(&root.path().join("missing")), None);
     }
 
     #[test]
