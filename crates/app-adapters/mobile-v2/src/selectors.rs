@@ -36,7 +36,6 @@ impl Ids {
     pub const SETTINGS_MOSTRO_NODE: &'static str = "settings.mostro_node";
     pub const SETTINGS_MOSTRO_NODE_PUBKEY: &'static str = "settings.mostro_node.pubkey";
     pub const NODE_CUSTOM_PUBKEY: &'static str = "node.custom.pubkey";
-    pub const NODE_USE_DEFAULT: &'static str = "node.use_default";
     pub const NODE_CUSTOM_CONFIRM: &'static str = "node.custom.confirm";
     pub const NODE_CUSTOM_CANCEL: &'static str = "node.custom.cancel";
     pub const SETTINGS_RELAYS: &'static str = "settings.relays";
@@ -45,7 +44,6 @@ impl Ids {
     pub const SETTINGS_RELAYS_ADD_CONFIRM: &'static str = "settings.relays.add.confirm";
     pub const SETTINGS_RELAYS_ADD_CANCEL: &'static str = "settings.relays.add.cancel";
     pub const SETTINGS_WALLET: &'static str = "settings.wallet";
-    pub const WALLET_SETTINGS_CONNECT: &'static str = "wallet.settings.connect";
     pub const WALLET_SETTINGS_DISCONNECT: &'static str = "wallet.settings.disconnect";
     pub const WALLET_NWC_URI: &'static str = "wallet.nwc.uri";
     pub const WALLET_NWC_PASTE: &'static str = "wallet.nwc.paste";
@@ -90,7 +88,6 @@ impl Ids {
     pub const ORDER_TAKE_AMOUNT: &'static str = "order.take.amount";
     pub const ORDER_TAKE_AMOUNT_CONFIRM: &'static str = "order.take.amount.confirm";
     pub const ORDER_TAKE_CONFIRM: &'static str = "order.take.confirm";
-    pub const ORDER_TAKE_CLOSE: &'static str = "order.take.close";
     // Trade detail.
     pub const ORDER_ID: &'static str = "order.id";
     pub const ORDER_STATUS: &'static str = "order.status";
@@ -151,7 +148,6 @@ impl Ids {
         Self::SETTINGS_MOSTRO_NODE,
         Self::SETTINGS_MOSTRO_NODE_PUBKEY,
         Self::NODE_CUSTOM_PUBKEY,
-        Self::NODE_USE_DEFAULT,
         Self::NODE_CUSTOM_CONFIRM,
         Self::NODE_CUSTOM_CANCEL,
         Self::SETTINGS_RELAYS,
@@ -160,7 +156,6 @@ impl Ids {
         Self::SETTINGS_RELAYS_ADD_CONFIRM,
         Self::SETTINGS_RELAYS_ADD_CANCEL,
         Self::SETTINGS_WALLET,
-        Self::WALLET_SETTINGS_CONNECT,
         Self::WALLET_SETTINGS_DISCONNECT,
         Self::WALLET_NWC_URI,
         Self::WALLET_NWC_PASTE,
@@ -193,7 +188,6 @@ impl Ids {
         Self::ORDER_TAKE_AMOUNT,
         Self::ORDER_TAKE_AMOUNT_CONFIRM,
         Self::ORDER_TAKE_CONFIRM,
-        Self::ORDER_TAKE_CLOSE,
         Self::ORDER_ID,
         Self::ORDER_STATUS,
         Self::TRADE_PAY_INVOICE,

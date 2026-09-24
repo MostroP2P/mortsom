@@ -63,11 +63,7 @@ fn fresh_app() -> FakeUi {
     );
     ui.on_tap(
         Ids::SETTINGS_MOSTRO_NODE,
-        &[
-            Ids::NODE_CUSTOM_PUBKEY,
-            Ids::NODE_CUSTOM_CONFIRM,
-            Ids::NODE_USE_DEFAULT,
-        ],
+        &[Ids::NODE_CUSTOM_PUBKEY, Ids::NODE_CUSTOM_CONFIRM],
     );
     ui.on_tap(Ids::SETTINGS_RELAYS, &[Ids::SETTINGS_RELAYS_ADD]);
     ui.on_tap(
@@ -78,9 +74,9 @@ fn fresh_app() -> FakeUi {
         ],
     );
     ui.on_tap(Ids::SETTINGS_RELAYS_ADD_CONFIRM, &[RELAY_ROW]);
-    ui.on_tap(Ids::SETTINGS_WALLET, &[Ids::WALLET_SETTINGS_CONNECT]);
+    // With no wallet configured, the wallet entry opens the connect form.
     ui.on_tap(
-        Ids::WALLET_SETTINGS_CONNECT,
+        Ids::SETTINGS_WALLET,
         &[Ids::WALLET_NWC_URI, Ids::WALLET_NWC_CONNECT],
     );
     ui.on_tap(Ids::WALLET_NWC_CONNECT, &[Ids::WALLET_CONNECTION]);
