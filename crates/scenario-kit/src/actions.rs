@@ -383,7 +383,8 @@ pub async fn wait_app_state_in(
 /// order at all. App v2 drops a trade that never went active from its list
 /// once the daemon closes it, so for a cancelled or expired take there is no
 /// status to read on the screen -- the absence is what the app shows, and
-/// the relay is the proof the daemon closed it.
+/// the relay is the proof the daemon closed it. The absence counts only
+/// because `owned_orders` answers on a loaded list.
 pub async fn expect_closed(
     ctx: &Context,
     actor: Actor,

@@ -5,6 +5,7 @@ pub mod nav;
 pub mod onboarding;
 pub mod orders;
 pub mod settings;
+pub mod trades_list;
 pub mod wallet;
 
 use mortsom_app_contract::{AdapterError, DeviceContext};

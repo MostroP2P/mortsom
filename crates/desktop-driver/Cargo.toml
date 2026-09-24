@@ -21,6 +21,8 @@ atspi = { version = "0.30.0", default-features = false, features = ["proxies", "
 [dev-dependencies]
 tempfile.workspace = true
 wiremock.workspace = true
+# Peer-to-peer connections let tests serve a fake AT-SPI tree without a bus.
+zbus = { version = "5.19.0", default-features = false, features = ["tokio", "p2p"] }
 
 [lints]
 workspace = true

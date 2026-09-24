@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use atspi::proxy::bus::{BusProxy, StatusProxy};
 use atspi::zbus;
 use mortsom_ui_driver::error::UiError;
 use mortsom_ui_driver::process::{ChildProcess, Command, CommandRunner, run_ok};
@@ -154,8 +153,8 @@ impl LinuxSession {
         })
         .await
         .map_err(error)??;
-        let address = format!("unix:path={}/bus", root.display());
-        let env = std::collections::BTreeMap::from([
+        let address = bus_address(root, "bus");
+        let mut env = std::collections::BTreeMap::from([
             ("DBUS_SESSION_BUS_ADDRESS".into(), address.clone()),
             ("DISPLAY".into(), display),
             (
@@ -176,62 +175,16 @@ impl LinuxSession {
             ("GSETTINGS_BACKEND".into(), "memory".into()),
             ("GIO_USE_VFS".into(), "local".into()),
             ("GTK_USE_PORTAL".into(), "0".into()),
-            ("ATSPI_DBUS_IMPLEMENTATION".into(), "dbus-daemon".into()),
         ]);
-        let bus_config = root.join("bus.conf");
-        std::fs::write(&bus_config, format!(r#"<busconfig><type>session</type><listen>{address}</listen><auth>EXTERNAL</auth><policy context="default"><allow send_destination="*"/><allow receive_sender="*"/><allow own="*"/></policy></busconfig>"#)).map_err(error)?;
-        let mut bus = Command::new(
-            "dbus-daemon",
-            &[
-                "--nofork",
-                &format!("--config-file={}", bus_config.display()),
-            ],
-        );
-        bus.env = env.clone();
+        let (bus, _) = private_bus(root, "bus", "session", &env)?;
         services.push(self.runner.spawn(&bus, None).await?);
         let connection = connect_bus(&address).await?;
-        let mut accessibility = Command::new(
-            "/usr/libexec/at-spi-bus-launcher",
-            &["--launch-immediately"],
-        );
-        accessibility.env = env.clone();
+        // The accessibility bus is ours too: GTK and the registry find it
+        // through AT_SPI_BUS_ADDRESS, so no host launcher decides which
+        // daemon runs it.
+        let (accessibility, a11y) = private_bus(root, "a11y", "accessibility", &env)?;
         services.push(self.runner.spawn(&accessibility, None).await?);
-        let bus_proxy = zbus::fdo::DBusProxy::new(&connection)
-            .await
-            .map_err(error)?;
-        tokio::time::timeout(Duration::from_secs(15), async {
-            let mut tick = tokio::time::interval(Duration::from_millis(100));
-            loop {
-                tick.tick().await;
-                if bus_proxy
-                    .name_has_owner("org.a11y.Bus".try_into().map_err(error)?)
-                    .await
-                    .map_err(error)?
-                {
-                    return Ok::<_, UiError>(());
-                }
-            }
-        })
-        .await
-        .map_err(error)??;
-        let status = StatusProxy::new(&connection)
-            .await
-            .map_err(|e| error(format!("status proxy: {e}")))?;
-        status
-            .set_is_enabled(true)
-            .await
-            .map_err(|e| error(format!("enable accessibility: {e}")))?;
-        status
-            .set_screen_reader_enabled(true)
-            .await
-            .map_err(|e| error(format!("enable screen reader: {e}")))?;
-        let a11y = BusProxy::new(&connection)
-            .await
-            .map_err(error)?
-            .get_address()
-            .await
-            .map_err(error)?;
-        let mut env = env;
+        drop(connect_bus(&a11y).await?);
         env.insert("AT_SPI_BUS_ADDRESS".into(), a11y.clone());
         let mut registry = Command::new("/usr/libexec/at-spi2-registryd", &[]);
         registry.env = env.clone();
@@ -339,6 +292,29 @@ async fn wait_for_keyring(connection: &zbus::Connection) -> Result<(), UiError> 
     })
     .await
     .map_err(error)?
+}
+
+fn bus_address(root: &Path, name: &str) -> String {
+    format!("unix:path={}", root.join(name).display())
+}
+
+/// A private `dbus-daemon` of `kind` listening on `root/name`, open to the
+/// actor's own processes only.
+fn private_bus(
+    root: &Path,
+    name: &str,
+    kind: &str,
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<(Command, String), UiError> {
+    let address = bus_address(root, name);
+    let config = root.join(format!("{name}.conf"));
+    std::fs::write(&config, format!(r#"<busconfig><type>{kind}</type><listen>{address}</listen><auth>EXTERNAL</auth><policy context="default"><allow send_destination="*"/><allow receive_sender="*"/><allow own="*"/></policy></busconfig>"#)).map_err(error)?;
+    let mut bus = Command::new(
+        "dbus-daemon",
+        &["--nofork", &format!("--config-file={}", config.display())],
+    );
+    bus.env = env.clone();
+    Ok((bus, address))
 }
 
 async fn connect_bus(address: &str) -> Result<zbus::Connection, UiError> {

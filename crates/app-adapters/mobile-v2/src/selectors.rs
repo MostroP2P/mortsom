@@ -15,6 +15,10 @@ impl Ids {
     pub const APPBAR_BACK: &'static str = "appbar.back";
     pub const NAV_ORDER_BOOK: &'static str = "nav.order_book";
     pub const NAV_TRADES: &'static str = "nav.trades";
+    // My Trades loaded with nothing to show, and failed to load. With
+    // neither and no row, the list is still loading.
+    pub const TRADES_EMPTY: &'static str = "trades.empty";
+    pub const TRADES_ERROR: &'static str = "trades.error";
     pub const NAV_CHAT: &'static str = "nav.chat";
     pub const DRAWER_ACCOUNT: &'static str = "drawer.account";
     pub const DRAWER_SETTINGS: &'static str = "drawer.settings";
@@ -56,12 +60,28 @@ impl Ids {
     pub const ORDER_CREATE_CURRENCY: &'static str = "order.create.currency";
     pub const ORDER_CREATE_CURRENCY_SEARCH: &'static str = "order.create.currency.search";
     pub const ORDER_CREATE_FIAT_AMOUNT: &'static str = "order.create.fiat_amount";
-    // Range orders: the toggle replaces the single amount with a min/max pair.
+    // Range orders: the `Single | Range` control swaps the single amount
+    // for a min/max pair. The control names the whole; a driver taps the
+    // segment.
     pub const ORDER_CREATE_RANGE: &'static str = "order.create.range";
+    pub const ORDER_CREATE_AMOUNT_RANGE: &'static str = "order.create.amount.range";
     pub const ORDER_CREATE_FIAT_MIN: &'static str = "order.create.fiat_min";
     pub const ORDER_CREATE_FIAT_MAX: &'static str = "order.create.fiat_max";
+    // Payment methods are chosen on their own screen, opened from the form.
+    // A free-text method goes through a sheet: its field, then `Add`; the
+    // screen's confirm is the only way the choice reaches the form.
+    pub const ORDER_CREATE_PAYMENT_METHOD_ADD: &'static str = "order.create.payment_method.add";
+    pub const ORDER_CREATE_PAYMENT_METHOD_CUSTOM_OPEN: &'static str =
+        "order.create.payment_method.custom_open";
     pub const ORDER_CREATE_PAYMENT_METHOD: &'static str = "order.create.payment_method";
+    pub const ORDER_CREATE_PAYMENT_METHOD_CUSTOM_ADD: &'static str =
+        "order.create.payment_method.custom_add";
+    pub const ORDER_CREATE_PAYMENT_METHODS_CONFIRM: &'static str =
+        "order.create.payment_methods.confirm";
+    // `Market | Fixed` control, as a whole and per segment.
     pub const ORDER_CREATE_PRICE_TYPE: &'static str = "order.create.price_type";
+    pub const ORDER_CREATE_PRICE_MARKET: &'static str = "order.create.price.market";
+    pub const ORDER_CREATE_PRICE_FIXED: &'static str = "order.create.price.fixed";
     pub const ORDER_CREATE_SATS_AMOUNT: &'static str = "order.create.sats_amount";
     pub const ORDER_CREATE_SUBMIT: &'static str = "order.create.submit";
     pub const ORDER_CREATE_CANCEL: &'static str = "order.create.cancel";
@@ -115,6 +135,8 @@ impl Ids {
         Self::APPBAR_BACK,
         Self::NAV_ORDER_BOOK,
         Self::NAV_TRADES,
+        Self::TRADES_EMPTY,
+        Self::TRADES_ERROR,
         Self::NAV_CHAT,
         Self::DRAWER_ACCOUNT,
         Self::DRAWER_SETTINGS,
@@ -153,10 +175,17 @@ impl Ids {
         Self::ORDER_CREATE_CURRENCY_SEARCH,
         Self::ORDER_CREATE_FIAT_AMOUNT,
         Self::ORDER_CREATE_RANGE,
+        Self::ORDER_CREATE_AMOUNT_RANGE,
         Self::ORDER_CREATE_FIAT_MIN,
         Self::ORDER_CREATE_FIAT_MAX,
+        Self::ORDER_CREATE_PAYMENT_METHOD_ADD,
+        Self::ORDER_CREATE_PAYMENT_METHOD_CUSTOM_OPEN,
         Self::ORDER_CREATE_PAYMENT_METHOD,
+        Self::ORDER_CREATE_PAYMENT_METHOD_CUSTOM_ADD,
+        Self::ORDER_CREATE_PAYMENT_METHODS_CONFIRM,
         Self::ORDER_CREATE_PRICE_TYPE,
+        Self::ORDER_CREATE_PRICE_MARKET,
+        Self::ORDER_CREATE_PRICE_FIXED,
         Self::ORDER_CREATE_SATS_AMOUNT,
         Self::ORDER_CREATE_SUBMIT,
         Self::ORDER_CREATE_CANCEL,

@@ -514,9 +514,19 @@ impl AppAdapter for Adapter {
         order: &OrderReference,
     ) -> Result<CancelOutcome, AdapterError> {
         self.action("cancel", device.actor);
+        // App v2 drops a trade that never went active from My Trades once
+        // it is cancelled; it never shows it cancelled.
+        let silent = self
+            .state
+            .lock()
+            .unwrap()
+            .misbehaviour
+            .never_publishes_cancel;
         if order.id == REMAINDER {
-            self.state.lock().unwrap().remainder = Some(OrderState::Cancelled);
-            self.publish(REMAINDER, "canceled", &[]).await;
+            self.state.lock().unwrap().remainder = None;
+            if !silent {
+                self.publish(REMAINDER, "canceled", &[]).await;
+            }
             return Ok(CancelOutcome::Cancelled);
         }
         let (state, lone_closes) = {
@@ -528,8 +538,11 @@ impl AppAdapter for Adapter {
         };
         match state {
             OrderState::Pending => {
-                self.transition(&order.id, OrderState::Cancelled, "canceled")
-                    .await;
+                self.state.lock().unwrap().dropped.push(order.id.clone());
+                if !silent {
+                    self.transition(&order.id, OrderState::Cancelled, "canceled")
+                        .await;
+                }
                 Ok(CancelOutcome::Cancelled)
             }
             // A taker walking away puts the order back on the book.

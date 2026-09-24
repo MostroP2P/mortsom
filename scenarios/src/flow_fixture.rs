@@ -65,6 +65,9 @@ pub struct Misbehaviour {
     pub accepts_short_invoices: bool,
     /// Payouts to one destination are dispatched past the cap.
     pub ignores_payout_cap: bool,
+    /// A cancel of an order that never went active is never published:
+    /// the app drops the trade all the same.
+    pub never_publishes_cancel: bool,
 }
 
 /// What the fixture knows about an invoice one of its nodes issued.

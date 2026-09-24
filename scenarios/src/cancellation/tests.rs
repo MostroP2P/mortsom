@@ -30,6 +30,24 @@ async fn cancel_before_taken_is_the_makers_alone_to_close() {
     assert_eq!(cleanup.entries[0].result, Some(CleanupResult::Resolved));
 }
 
+/// The app dropping the trade is not a cancellation: without the daemon's
+/// `canceled` on the relay the scenario fails, whatever the app shows.
+#[tokio::test]
+async fn a_cancel_the_daemon_never_publishes_fails_the_scenario() {
+    let fixture = Fixture::with(Misbehaviour {
+        never_publishes_cancel: true,
+        ..Misbehaviour::default()
+    })
+    .await;
+
+    let error = (scenario("cancel_before_taken").run)(&fixture.context)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.category, mortsom_common::FailureCategory::Relay);
+    assert_eq!(fixture.relay_states(ORDER), ["pending"]);
+}
+
 /// An abandoned take is reaped by the daemon: back to pending, which the
 /// scenario leaves open for the cleanup sweep, or closed, which it resolves.
 #[tokio::test]

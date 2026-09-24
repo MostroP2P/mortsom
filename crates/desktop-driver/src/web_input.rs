@@ -100,14 +100,35 @@ async fn replace(session: &Session, id: &str, text: &str) -> Result<bool, UiErro
 /// has a size. Errors that mean the click was never delivered are retried
 /// until `timeout`; a delivered click is never repeated, because the
 /// business action behind it may already be on its way.
+///
+/// `timeout` bounds the wait for a resting node, never a click already
+/// sent: a slow browser can take seconds to answer one, and cutting it
+/// short would report as unsent a click the app may have acted on.
 pub(crate) async fn press(session: &Session, id: &str, timeout: Duration) -> Result<(), UiError> {
-    tokio::time::timeout(timeout, async {
+    let deadline = tokio::time::Instant::now() + timeout;
+    loop {
+        let node = resting(session, id, deadline).await?;
+        match session.click(&node).await.map_err(UiError::from) {
+            Ok(()) => return Ok(()),
+            Err(cause) if transient(&cause) => {}
+            Err(cause) => return Err(cause),
+        }
+    }
+}
+
+/// The node of `id` once it rests with a size, looked for until `deadline`.
+async fn resting(
+    session: &Session,
+    id: &str,
+    deadline: tokio::time::Instant,
+) -> Result<Element, UiError> {
+    tokio::time::timeout_at(deadline, async {
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         loop {
             tick.tick().await;
-            match press_once(session, id).await {
-                Ok(true) => return Ok(()),
-                Ok(false) => {}
+            match resting_once(session, id).await {
+                Ok(Some(node)) => return Ok(node),
+                Ok(None) => {}
                 Err(cause) if transient(&cause) => {}
                 Err(cause) => return Err(cause),
             }
@@ -117,8 +138,8 @@ pub(crate) async fn press(session: &Session, id: &str, timeout: Duration) -> Res
     .unwrap_or_else(|_| Err(error(format!("press deadline: `{id}` never came to rest"))))
 }
 
-/// One attempt: `Ok(false)` when the node was still moving or had no size.
-async fn press_once(session: &Session, id: &str) -> Result<bool, UiError> {
+/// One look: `None` when the node was still moving or had no size.
+async fn resting_once(session: &Session, id: &str) -> Result<Option<Element>, UiError> {
     let node = session.find_element(Locator::XPath, &selector(id)?).await?;
     session
         .post(
@@ -133,10 +154,9 @@ async fn press_once(session: &Session, id: &str) -> Result<bool, UiError> {
     tokio::time::sleep(Duration::from_millis(100)).await;
     let after = rect(session, &node).await?;
     if before != after || after.2 <= 0.0 || after.3 <= 0.0 {
-        return Ok(false);
+        return Ok(None);
     }
-    session.click(&node).await?;
-    Ok(true)
+    Ok(Some(node))
 }
 
 /// `(x, y, width, height)` of the node as the browser lays it out now.

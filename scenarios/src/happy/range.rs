@@ -77,10 +77,7 @@ pub async fn settle_remainder(
             remainder.id
         )));
     }
-    actions::wait_app_state(ctx, maker, &remainder, OrderState::Cancelled).await?;
-    actions::wait_relay_state(ctx, &remainder, OrderState::Cancelled).await?;
-    actions::mark_resolved(ctx, &remainder);
-    Ok(())
+    crate::flow::expect_cancelled_before_active(ctx, maker, &remainder).await
 }
 
 /// Waits for `maker`'s app to list one new order besides `parent` and

@@ -20,6 +20,18 @@ pub struct Node {
     pub name: String,
 }
 
+/// Reads children by count and index, as libatspi does. Flutter's view is an
+/// accessibility socket, and at-spi2-atk before its merge into at-spi2-core
+/// (2.38, Ubuntu 22.04) leaves the socket's embedded tree out of GetChildren.
+async fn children(proxy: &AccessibleProxy<'_>) -> Result<Vec<atspi::ObjectRefOwned>, AccessError> {
+    let count = proxy.child_count().await.map_err(classify)?;
+    let mut children = Vec::new();
+    for index in 0..count {
+        children.push(proxy.get_child_at_index(index).await.map_err(classify)?);
+    }
+    Ok(children)
+}
+
 /// Converts transport errors without exposing application data.
 pub fn error(cause: impl std::fmt::Display) -> UiError {
     UiError::WebDriver(WebDriverError::Transport(
@@ -78,6 +90,11 @@ impl Native {
         Ok(Self { connection })
     }
 
+    #[cfg(test)]
+    fn from_connection(connection: Connection) -> Self {
+        Self { connection }
+    }
+
     async fn proxy<'a>(&'a self, node: &'a Node) -> Result<AccessibleProxy<'a>, AccessError> {
         AccessibleProxy::builder(&self.connection)
             .cache_properties(zbus::proxy::CacheProperties::No)
@@ -108,7 +125,7 @@ impl Native {
             }
             let proxy = self.proxy(&node).await?;
             let name = proxy.name().await.map_err(classify)?;
-            let children = proxy.get_children().await.map_err(classify)?;
+            let children = children(&proxy).await?;
             drop(proxy);
             node.name = name;
             for child in children {
@@ -399,3 +416,7 @@ mod tests {
         assert_eq!(label("[mortsom:order.status"), None);
     }
 }
+
+#[cfg(test)]
+#[path = "native_tree_tests.rs"]
+mod tree_tests;

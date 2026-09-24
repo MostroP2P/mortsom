@@ -3,9 +3,9 @@
 use super::*;
 use mortsom_app_contract::OrderKind;
 
-/// The order form as the real app draws it: the range toggle swaps the one
-/// amount field for a min/max pair, and the price toggle reveals the sats
-/// field. Taking the range order asks its amount right after the take
+/// The order form as the real app draws it: the range segment swaps the one
+/// amount field for a min/max pair, and the fixed-price segment reveals the
+/// sats field. Taking the range order asks its amount right after the take
 /// button; the completed trade offers the rate action.
 fn app_with_pricing() -> FakeUi {
     let ui = app_with_orders();
@@ -14,17 +14,23 @@ fn app_with_pricing() -> FakeUi {
         &[
             Ids::ORDER_CREATE_CURRENCY,
             Ids::ORDER_CREATE_FIAT_AMOUNT,
-            Ids::ORDER_CREATE_PAYMENT_METHOD,
+            Ids::ORDER_CREATE_PAYMENT_METHOD_ADD,
             Ids::ORDER_CREATE_PRICE_TYPE,
+            Ids::ORDER_CREATE_PRICE_MARKET,
+            Ids::ORDER_CREATE_PRICE_FIXED,
             Ids::ORDER_CREATE_SUBMIT,
             Ids::ORDER_CREATE_RANGE,
+            Ids::ORDER_CREATE_AMOUNT_RANGE,
         ],
     );
     ui.on_tap(
-        Ids::ORDER_CREATE_RANGE,
+        Ids::ORDER_CREATE_AMOUNT_RANGE,
         &[Ids::ORDER_CREATE_FIAT_MIN, Ids::ORDER_CREATE_FIAT_MAX],
     );
-    ui.on_tap_hide(Ids::ORDER_CREATE_RANGE, &[Ids::ORDER_CREATE_FIAT_AMOUNT]);
+    ui.on_tap_hide(
+        Ids::ORDER_CREATE_AMOUNT_RANGE,
+        &[Ids::ORDER_CREATE_FIAT_AMOUNT],
+    );
     ui.on_tap(
         Ids::ORDER_TAKE_CONFIRM,
         &[Ids::ORDER_TAKE_AMOUNT, Ids::ORDER_TAKE_AMOUNT_CONFIRM],
@@ -58,31 +64,40 @@ async fn form_calls(draft: &OrderDraft) -> Vec<String> {
     ui.calls()
 }
 
-/// A range order is the toggle plus both bounds, and it never touches the
-/// price type: the app locks a range to market pricing.
+/// A range order is the range segment plus both bounds, and it never
+/// touches the price: the app locks a range to market pricing.
 #[tokio::test]
 async fn a_range_order_enters_both_bounds_and_leaves_the_price_on_market() {
     let calls = form_calls(&OrderDraft::range(OrderKind::Sell, "USD", 1, 3, "cash")).await;
 
     assert!(
-        calls.contains(&"tap order.create.range".to_owned()),
+        calls.contains(&"tap order.create.amount.range".to_owned()),
         "{calls:?}"
     );
+    assert!(!calls.contains(&"tap order.create.range".to_owned()));
     assert!(calls.contains(&"type order.create.fiat_min (1 chars)".to_owned()));
     assert!(calls.contains(&"type order.create.fiat_max (1 chars)".to_owned()));
     assert!(!calls.iter().any(|c| c.contains("order.create.fiat_amount")));
-    assert!(!calls.contains(&"tap order.create.price_type".to_owned()));
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.starts_with("tap order.create.price"))
+    );
     assert!(!calls.iter().any(|c| c.contains("order.create.sats_amount")));
 }
 
 /// The form starts on market price, so a market order types no sats and
-/// leaves the toggle alone.
+/// leaves the price control alone.
 #[tokio::test]
 async fn a_market_order_types_no_sats_and_keeps_the_default_price_type() {
     let calls = form_calls(&OrderDraft::market(OrderKind::Sell, "USD", 1, "cash")).await;
 
     assert!(calls.contains(&"type order.create.fiat_amount (1 chars)".to_owned()));
-    assert!(!calls.contains(&"tap order.create.price_type".to_owned()));
+    assert!(
+        !calls
+            .iter()
+            .any(|c| c.starts_with("tap order.create.price"))
+    );
     assert!(!calls.iter().any(|c| c.contains("order.create.sats_amount")));
 }
 
@@ -97,8 +112,10 @@ async fn a_form_left_on_fixed_price_is_switched_back_to_market() {
         &[
             Ids::ORDER_CREATE_CURRENCY,
             Ids::ORDER_CREATE_FIAT_AMOUNT,
-            Ids::ORDER_CREATE_PAYMENT_METHOD,
+            Ids::ORDER_CREATE_PAYMENT_METHOD_ADD,
             Ids::ORDER_CREATE_PRICE_TYPE,
+            Ids::ORDER_CREATE_PRICE_MARKET,
+            Ids::ORDER_CREATE_PRICE_FIXED,
             Ids::ORDER_CREATE_SATS_AMOUNT,
             Ids::ORDER_CREATE_SUBMIT,
         ],
@@ -114,7 +131,7 @@ async fn a_form_left_on_fixed_price_is_switched_back_to_market() {
 
     assert!(
         ui.calls()
-            .contains(&"tap order.create.price_type".to_owned())
+            .contains(&"tap order.create.price.market".to_owned())
     );
 }
 
