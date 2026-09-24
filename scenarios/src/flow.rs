@@ -227,6 +227,22 @@ pub async fn expect_cancelled(
     Ok(())
 }
 
+/// A cancelled order that never went active, so no sats moved: the relay
+/// shows it `canceled`, then `maker`'s app no longer holds it open. App v2
+/// drops such a trade from My Trades rather than showing it cancelled, so
+/// the daemon's event is the proof and the app only has to let go of it.
+/// Marks it resolved.
+pub async fn expect_cancelled_before_active(
+    ctx: &Context,
+    maker: Actor,
+    order: &OrderReference,
+) -> Result<(), ScenarioError> {
+    actions::wait_relay_state(ctx, order, OrderState::Cancelled).await?;
+    actions::expect_closed(ctx, maker, order, ctx.state_timeout).await?;
+    actions::mark_resolved(ctx, order);
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "flow_tests.rs"]
 mod tests;

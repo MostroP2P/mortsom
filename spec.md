@@ -296,14 +296,20 @@ needs the daemon's exchange-rate source to be reachable from the stack.
 
 | Scenario | Narrative | Required evidence |
 |---|---|---|
-| `cancel_before_taken` | Alice creates a sell order and cancels it while pending. | Both apps and the relay show the order cancelled. No payment. |
-| `cancel_after_take_unpaid` | Alice creates a sell order. Bob takes it and never provides an invoice. | After the daemon's taker window it publishes the order as pending again, cancelled or expired — a revision later than the take, never the original `pending`. Alice's app shows the same state. A republished order is closed by the cleanup sweep. |
+| `cancel_before_taken` | Alice creates a sell order and cancels it while pending. | The relay shows the order `canceled`; Alice's app then no longer holds it open. No payment. |
+| `cancel_after_take_unpaid` | Alice creates a sell order. Bob takes it and never provides an invoice. | After the daemon's taker window it publishes the order as pending again, cancelled or expired — a revision later than the take, never the original `pending`. Alice's app shows it pending again, or no longer holds a closed one open. A republished order is closed by the cleanup sweep. |
 | `taker_cancel_at_taken` | Alice creates a sell order. Bob takes it, provides his invoice and cancels before Alice pays. | The relay republishes the order as pending after the cancel; Alice's app shows it pending. The cleanup sweep closes it. |
 | `cooperative_cancel` | Alice creates, Bob takes, Alice funds. Alice asks to cancel; Bob agrees. | Bob's app keeps the order active for the whole quiet window after Alice's request. After Bob's agreement both apps and the relay show it cancelled and Alice's hold payment fails (the escrow returns). |
 | `unilateral_cancel_rejected` | As `cooperative_cancel` up to Alice's request; Bob does not agree during the window. | Bob's app keeps the order active and the relay publishes no `canceled` for the whole quiet window. Bob then agrees, which returns the escrow; that step is teardown, not the assertion. |
 
 The maker's own screen is never proof of a cancellation: app v2 marks a funded order cancelled on the
 request alone, while the daemon has only opened the cooperative flow and still holds the escrow.
+
+An order cancelled before it ever went active (pending, or waiting for an invoice or a payment) leaves
+app v2's My Trades instead of reading cancelled there. The daemon's `canceled` on the relay is the proof;
+the app's evidence is that it no longer holds the order open: shown closed, or no longer listed. A missing
+row counts only on a list the app shows as loaded (a row, `trades.empty`), never while it is loading or on
+`trades.error`. The range remainders of section 8.2 are closed the same way.
 
 ### 8.4 Expirations
 
