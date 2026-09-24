@@ -17,15 +17,16 @@ went active is proven by the relay's `canceled`, then by the maker's app no long
 My Trades). App v2 drops such a trade from My Trades since `b06ad0af` instead of showing it cancelled.
 Clients built from app branch `feat/trades-list-state-ids` (`b186733`, `trades.empty` / `trades.error`);
 Mortsom at `cf9c1d3` with the Linux accessibility and create-order adapter fixes applied. Linux: all three
-affected cells. Web: `cancel_before_taken` and `range_order`; `range_buy_order` is still to be re-accepted
-(two attempts stopped before the remainder on a stale `order.id` read, see the attempts below).
+affected cells. Web: `cancel_before_taken` and `range_order`; `range_buy_order` was re-accepted later the
+same day (`20260924T204640Z-d7b1ffaaa5f6`, app `main` at `f15e6bc`), once Web reads found a replaced node
+again: two earlier attempts had stopped before the remainder on a stale `order.id` read.
 
 | Scenario | Family | Linux | Web |
 |---|---|---|---|
 | `happy_sell` | happy-path | **Accepted** 2026-09-08, run `20260908T190151Z-d027fc8a5528`; again 2026-09-10 in the smoke family run, `20260910T010851Z-c8c1699bbd7d` | **Accepted** 2026-09-09, run `20260909T025026Z-034b13e4fb91`; again 2026-09-10, `20260910T021340Z-75803664d039` |
 | `happy_buy` | happy-path | **Accepted** 2026-09-08, run `20260908T190424Z-85827b058763`; again 2026-09-10 in the smoke family run, `20260910T010635Z-39af8ec35ee8` | **Accepted** 2026-09-09, run `20260909T033857Z-e7b88a390989`; again 2026-09-10, `20260910T020954Z-4903a85e9ad9` |
 | `range_order` | happy-path | **Accepted** 2026-09-10, run `20260910T005840Z-947a61b7b662`; re-accepted 2026-09-24, `20260924T004714Z-44f29b3921c2` | **Accepted** 2026-09-10, run `20260910T022005Z-f7291e5a978f`; re-accepted 2026-09-24, `20260924T010454Z-6bf23180168e` |
-| `range_buy_order` | happy-path | **Accepted** 2026-09-10, run `20260910T053658Z-e0a210deca14`; re-accepted 2026-09-24, `20260924T005021Z-6104397e4289` | **Accepted** 2026-09-10, run `20260910T054723Z-05e6492912c8`; re-acceptance pending (stale `order.id` read on Web, 2026-09-24) |
+| `range_buy_order` | happy-path | **Accepted** 2026-09-10, run `20260910T053658Z-e0a210deca14`; re-accepted 2026-09-24, `20260924T005021Z-6104397e4289` | **Accepted** 2026-09-10, run `20260910T054723Z-05e6492912c8`; re-accepted 2026-09-24, `20260924T204640Z-d7b1ffaaa5f6` |
 | `market_price_order` | happy-path | **Accepted** 2026-09-10, run `20260910T000326Z-0addeab149ad` | **Accepted** 2026-09-10, run `20260910T021649Z-1e0e801e1aa5` |
 | `full_trade_with_rating` | happy-path | **Accepted** 2026-09-10, run `20260910T010128Z-5fb05c5eaf84`; re-accepted 2026-09-24 with the rating on the trade detail, `20260924T041848Z-0740edc197d1` | **Accepted** 2026-09-10, run `20260910T020544Z-f942ddcef9b1`; re-accepted 2026-09-24 with the rating on the trade detail, `20260924T170122Z-3d9881397ddb` |
 | `cancel_before_taken` | cancellation | **Accepted** 2026-09-10, run `20260910T000205Z-e9bffac02708`; again in the smoke family run, `20260910T010459Z-d19a13953368`; re-accepted 2026-09-24, `20260924T004548Z-77772f303c99` | **Accepted** 2026-09-10, run `20260910T011431Z-eea18b36f496`; re-accepted 2026-09-24, `20260924T010226Z-7b1aa12c201e` |
@@ -49,6 +50,7 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260924T204640Z-d7b1ffaaa5f6` | Web | range_buy_order | **Passed.** Hold 1478 and payout 1464 sats once each; remainder listed pending for Bob, cancelled, relay `canceled`, then no longer listed | None. Bob's `order.id` read answered `stale element reference` once, on the trade detail redrawing for its countdown; the read found the node again and read the order id 22 ms later |
 | `20260924T170122Z-3d9881397ddb` | Web | full_trade_with_rating | **Passed.** Trade completed; Alice, then Bob, rated five stars on the trade detail; the daemon published a reputation update after each | None. Carried the Web press fix (#55) |
 | `20260924T043038Z-bd86b58be364` | Web | full_trade_with_rating | Bob took the order; no hold paid | Test infrastructure: `tap nav.trades: press deadline: never came to rest`. The press deadline cut a click the browser was still answering (3.2 s on this host), reported as unsent. Fixed in #55. Recovery then stalled on the same cut and on reading the state of the never-active trade the app had dropped after the maker's cancel; resolved by `cleanup` once both fixes were in (`20260924T164759Z-e5668bcf5e7a`, relay `canceled`, no payment) |
 | `20260924T041848Z-0740edc197d1` | Linux | full_trade_with_rating | **Passed.** Same as the Web pass | None |
