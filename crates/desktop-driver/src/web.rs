@@ -4,7 +4,7 @@ use mortsom_ui_driver::{
     error::UiError,
     process::{ChildProcess, Command, CommandRunner},
     ui::UiSession,
-    webdriver::{Element, Locator, Session},
+    webdriver::{Locator, Session},
 };
 use serde_json::json;
 use std::{path::PathBuf, sync::Arc, time::Duration};
@@ -68,13 +68,6 @@ impl WebSession {
             .as_ref()
             .and_then(|r| r.session.clone())
             .ok_or_else(|| error("browser session is not ready"))
-    }
-    async fn element(&self, id: &str) -> Result<Element, UiError> {
-        Ok(self
-            .session()
-            .await?
-            .find_element(Locator::XPath, &selector(id)?)
-            .await?)
     }
     async fn wait(&self, id: &str, present: bool, timeout: Duration) -> Result<(), UiError> {
         tokio::time::timeout(timeout, async {
@@ -168,6 +161,9 @@ impl WebSession {
     }
 }
 
+/// How long a read keeps finding again a node the app is still replacing.
+const READ_LIMIT: Duration = Duration::from_secs(2);
+
 /// Environment variable that turns on ChromeDriver's full log for a run:
 /// every DevTools event, including a target crashing or detaching, which
 /// is the only record of why a browser session died.
@@ -225,33 +221,13 @@ impl UiSession for WebSession {
         crate::web_input::enter(&self.session().await?, id, text, Duration::from_secs(5)).await
     }
     async fn text_of(&self, id: &str) -> Result<String, UiError> {
-        let session = self.session().await?;
-        match crate::web_input::read(&session, id).await {
-            Ok(value) => Ok(value),
-            Err(UiError::WebDriver(cause)) if cause.is_no_such_element() => {
-                Ok(session.text(&self.element(id).await?).await?)
-            }
-            Err(cause) => Err(cause),
-        }
+        crate::web_read::text(&self.session().await?, id, READ_LIMIT).await
     }
     async fn label_of(&self, id: &str) -> Result<String, UiError> {
-        let session = self.session().await?;
-        let node = self.element(id).await?;
-        let label = session
-            .get(&format!("element/{}/attribute/aria-label", node.id))
-            .await?;
-        match label.as_str() {
-            Some(value) => Ok(value.to_owned()),
-            None => Ok(session.text(&node).await?.trim().to_owned()),
-        }
+        crate::web_read::label(&self.session().await?, id, READ_LIMIT).await
     }
     async fn is_enabled(&self, id: &str) -> Result<bool, UiError> {
-        let session = self.session().await?;
-        let node = self.element(id).await?;
-        let disabled = session
-            .get(&format!("element/{}/attribute/aria-disabled", node.id))
-            .await?;
-        Ok(disabled.as_str() != Some("true") && session.is_enabled(&node).await?)
+        crate::web_read::enabled(&self.session().await?, id, READ_LIMIT).await
     }
     async fn screenshot_png(&self) -> Result<Vec<u8>, UiError> {
         Ok(self.session().await?.screenshot_png().await?)

@@ -181,3 +181,17 @@ async fn malformed_responses() {
     let decoded: serde_json::Map<String, Value> = decode(json!({"a": 1})).unwrap();
     assert_eq!(decoded["a"], 1);
 }
+
+/// A node the page replaced after it was found answers `stale element
+/// reference`; that, and only that, is a stale element.
+#[test]
+fn only_a_stale_element_reference_is_a_stale_element() {
+    let server = |error: &str| WebDriverError::Server {
+        error: error.into(),
+        message: String::new(),
+    };
+    assert!(server("stale element reference").is_stale_element());
+    assert!(!server("no such element").is_stale_element());
+    assert!(!server("element click intercepted").is_stale_element());
+    assert!(!WebDriverError::Transport("stale element reference".into()).is_stale_element());
+}
