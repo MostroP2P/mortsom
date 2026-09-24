@@ -233,3 +233,33 @@ async fn failed_linux_start_and_end_retain_protected_data_for_resume() {
         b"retained identity"
     );
 }
+
+#[test]
+fn private_buses_run_on_dbus_daemon_with_their_own_socket_and_type() {
+    let root = tempfile::tempdir().unwrap();
+    let env = std::collections::BTreeMap::from([("DISPLAY".to_string(), ":7".to_string())]);
+    let (command, address) = private_bus(root.path(), "a11y", "accessibility", &env).unwrap();
+    assert_eq!(command.program, Path::new("dbus-daemon"));
+    assert_eq!(command.env, env);
+    let socket = root.path().join("a11y");
+    assert_eq!(address, format!("unix:path={}", socket.display()));
+    let config = std::fs::read_to_string(root.path().join("a11y.conf")).unwrap();
+    assert!(config.contains("<type>accessibility</type>"));
+    assert!(config.contains(&format!("<listen>{address}</listen>")));
+    assert!(command.args.contains(&format!(
+        "--config-file={}",
+        root.path().join("a11y.conf").display()
+    )));
+}
+
+#[test]
+fn the_accessibility_bus_never_depends_on_the_host_bus_launcher() {
+    // at-spi-bus-launcher picks dbus-broker whenever it runs inside a systemd
+    // user unit (a GNOME terminal, for one), and dbus-broker cannot start on
+    // a private session bus that has no systemd behind it.
+    let root = tempfile::tempdir().unwrap();
+    let (command, _) =
+        private_bus(root.path(), "a11y", "accessibility", &Default::default()).unwrap();
+    assert!(!command.display().contains("at-spi-bus-launcher"));
+    assert!(!command.display().contains("dbus-broker"));
+}
