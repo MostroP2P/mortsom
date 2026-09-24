@@ -10,6 +10,9 @@ struct Host {
 }
 #[async_trait::async_trait]
 impl HostProbe for Host {
+    fn resolve(&self, path: &Path) -> Option<PathBuf> {
+        Some(path.to_path_buf())
+    }
     fn env(&self, _: &str) -> Option<String> {
         None
     }

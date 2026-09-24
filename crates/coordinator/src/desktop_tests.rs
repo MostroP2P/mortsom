@@ -223,12 +223,23 @@ async fn a_custom_xvfb_path_satisfies_runtime_checks_before_the_build() {
     }
 }
 
+/// Where the fake host's `clang++` resolves to, with its linker and archiver.
+const FAKE_LLVM: &str = "/fake/llvm/bin";
+
 struct BuildHost {
     missing: Option<&'static str>,
 }
 
 #[async_trait::async_trait]
 impl crate::doctor::HostProbe for BuildHost {
+    fn resolve(&self, path: &Path) -> Option<PathBuf> {
+        // Every tool is installed: clang++ resolves into a complete LLVM.
+        Some(if path == Path::new("clang++") {
+            Path::new(FAKE_LLVM).join("clang")
+        } else {
+            path.to_path_buf()
+        })
+    }
     fn env(&self, _: &str) -> Option<String> {
         None
     }
@@ -236,7 +247,7 @@ impl crate::doctor::HostProbe for BuildHost {
         (self.missing != Some(name) && !name.contains('/')).then(|| PathBuf::from(name))
     }
     fn exists(&self, path: &Path) -> bool {
-        path.exists()
+        path.starts_with(FAKE_LLVM) || path.exists()
     }
     fn is_file(&self, path: &Path) -> bool {
         [

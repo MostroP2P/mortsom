@@ -1,5 +1,5 @@
 //! Read-only checks for the app-owned desktop build pipeline.
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use mortsom_desktop_driver::Platform;
 
@@ -51,7 +51,8 @@ pub(super) async fn check(
     }
     match platform {
         Platform::Linux => {
-            for tool in ["clang", "cmake", "ninja", "pkg-config"] {
+            check_c_toolchain(host, report);
+            for tool in ["cmake", "ninja", "pkg-config"] {
                 check_tool(tool, host, report);
             }
             probe(
@@ -69,6 +70,55 @@ pub(super) async fn check(
             .await;
         }
         Platform::Web => check_web(source, host, report).await,
+    }
+}
+
+/// The C toolchain Flutter's Linux build uses: each role, the names it may
+/// have in order of preference, and the package that usually provides it.
+const C_TOOLCHAIN: [(&str, &[&str], &str); 3] = [
+    ("linker", &["ld.lld", "ld"], "lld"),
+    ("compiler", &["clang"], "clang"),
+    ("archiver", &["llvm-ar", "ar"], "llvm"),
+];
+
+/// Flutter's Linux build resolves `clang++` on `PATH` through its symlinks
+/// and takes the linker, compiler and archiver from that directory, or stops
+/// with `Failed to find any of [...]` minutes into the build (`flutter_tools`,
+/// `native_assets/linux/native_assets.dart`). The check looks exactly there.
+fn check_c_toolchain(host: &dyn HostProbe, report: &mut DoctorReport) {
+    let (status, detail) = match c_toolchain(host) {
+        Ok(dir) => (
+            CheckStatus::Pass,
+            format!("{} has a linker, a compiler and an archiver", dir.display()),
+        ),
+        Err(missing) => (CheckStatus::Fail, missing),
+    };
+    report.push("build C toolchain", status, detail);
+}
+
+fn c_toolchain(host: &dyn HostProbe) -> Result<PathBuf, String> {
+    let clang = host.which("clang++").ok_or(
+        "clang++ not found on PATH; Flutter's Linux build compiles with it (install clang)",
+    )?;
+    let dir = host
+        .resolve(&clang)
+        .and_then(|real| real.parent().map(Path::to_path_buf))
+        .ok_or_else(|| format!("{} does not resolve to a file", clang.display()))?;
+    let missing: Vec<String> = C_TOOLCHAIN
+        .iter()
+        .filter(|(_, names, _)| !names.iter().any(|name| host.exists(&dir.join(name))))
+        .map(|(role, names, package)| {
+            format!("no {role} ({}; install {package})", names.join(" or "))
+        })
+        .collect();
+    if missing.is_empty() {
+        Ok(dir)
+    } else {
+        Err(format!(
+            "{} {}: Flutter's Linux build takes them from the directory clang++ resolves to",
+            dir.display(),
+            missing.join(", ")
+        ))
     }
 }
 

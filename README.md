@@ -49,7 +49,7 @@ A fresh installation needs only this repository. App source is fetched automatic
 |---|---|
 | Harness | Rust stable (MSRV 1.89), Cargo, Git, C/C++ linker, `protoc`, Docker Engine and Compose with permission to use them |
 | Source builds | Flutter/Dart on PATH, Bash and standard Unix tools, `flutter_rust_bridge_codegen` matching the app's pin, `cargo-expand` |
-| Linux build | clang/libclang, CMake, Ninja, pkg-config, GTK 3 and libsecret >= 0.18.4 development files |
+| Linux build | clang/libclang with `clang++` on PATH and, in the directory it resolves to, LLVM's linker (`ld.lld`, package `lld`) and archiver; CMake, Ninja, pkg-config, GTK 3 and libsecret >= 0.18.4 development files |
 | Linux runtime | Xvfb, D-Bus, GNOME Keyring, AT-SPI bus and registry, ImageMagick `import` |
 | Web build | wasm-pack, Python 3, rustup nightly with rust-src and the wasm32 target |
 | Web runtime | Matching Chromium and ChromeDriver |
@@ -59,7 +59,7 @@ For Debian/Ubuntu, install the native build and Linux runtime dependencies:
 ```sh
 sudo apt-get update
 sudo apt-get install build-essential git curl unzip xz-utils zip protobuf-compiler \
-  clang libclang-dev cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev \
+  clang libclang-dev lld cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev \
   xvfb dbus gnome-keyring at-spi2-core imagemagick python3
 ```
 
