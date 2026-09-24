@@ -34,8 +34,8 @@ const REAPED: &[OrderState] = &[
 ];
 
 /// The maker cancels while the order is still pending. Nobody else is
-/// involved, so it is immediate and unilateral; both apps and the relay
-/// agree.
+/// involved, so it is immediate and unilateral: the relay shows it
+/// cancelled and the maker's app lets go of it.
 pub async fn cancel_before_taken(ctx: &Context) -> Result<(), ScenarioError> {
     let order = flow::create_pending(ctx).await?;
     let outcome = cancel_order(ctx, Actor::Alice, &order).await?;
@@ -45,7 +45,7 @@ pub async fn cancel_before_taken(ctx: &Context) -> Result<(), ScenarioError> {
             order.id
         )));
     }
-    flow::expect_cancelled(ctx, &order, &[Actor::Alice]).await
+    flow::expect_cancelled_before_active(ctx, Actor::Alice, &order).await
 }
 
 /// The taker takes the order and abandons it without an invoice. The

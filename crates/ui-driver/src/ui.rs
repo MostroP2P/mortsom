@@ -423,12 +423,13 @@ pub mod tests_support {
             Ok(vec![])
         }
         async fn page_source(&self) -> Result<String, UiError> {
-            // Hierarchy dump listing every present id as a resource-id.
-            Ok(self
-                .present
-                .lock()
-                .unwrap()
+            // Hierarchy dump listing every present id as a resource-id; an
+            // element still drawing is not in it yet, and each dump is one
+            // probe of it.
+            let present = self.present.lock().unwrap().clone();
+            Ok(present
                 .iter()
+                .filter(|id| self.drawn(id))
                 .map(|id| format!("<node resource-id=\"{id}\"/>"))
                 .collect())
         }

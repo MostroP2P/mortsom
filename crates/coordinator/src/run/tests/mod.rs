@@ -393,6 +393,12 @@ struct FakeAdapter {
     hides_trades: bool,
     /// The driver stops answering at the moment the scenario fails.
     silence_driver_on_failure: bool,
+    /// The take fails, leaving the maker's order pending for cleanup.
+    fail_take: bool,
+    /// App v2 since `b06ad0af`: a cancelled trade that never went active
+    /// leaves My Trades, so its state can no longer be read.
+    drops_never_active: bool,
+    dropped: Mutex<Vec<String>>,
 }
 
 impl FakeAdapter {
@@ -417,6 +423,9 @@ impl FakeAdapter {
             maker_lied_about: Mutex::new(Vec::new()),
             hides_trades: false,
             silence_driver_on_failure: false,
+            fail_take: false,
+            drops_never_active: false,
+            dropped: Mutex::new(Vec::new()),
         }
     }
     fn set(&self, id: &str, state: OrderState) {
@@ -489,7 +498,13 @@ impl AppAdapter for FakeAdapter {
             .lock()
             .unwrap()
             .push(format!("owned:{}", device.actor));
-        Ok(self.orders().keys().cloned().collect())
+        let dropped = self.dropped.lock().unwrap().clone();
+        Ok(self
+            .orders()
+            .keys()
+            .filter(|id| !dropped.contains(id))
+            .cloned()
+            .collect())
     }
     async fn configure_nwc(
         &self,
@@ -522,6 +537,9 @@ impl AppAdapter for FakeAdapter {
         _: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<(), AdapterError> {
+        if self.fail_take {
+            return Err(AdapterError::product("the take was refused"));
+        }
         self.set(&order.id, OrderState::Taken);
         Ok(())
     }
@@ -605,6 +623,12 @@ impl AppAdapter for FakeAdapter {
         match orders.get(&order.id).copied() {
             None => Ok(CancelOutcome::NotFound),
             Some(state) if state.is_terminal() => Ok(CancelOutcome::AlreadyClosed),
+            Some(OrderState::Pending) if self.drops_never_active => {
+                orders.insert(order.id.clone(), OrderState::Cancelled);
+                self.cancelled.lock().unwrap().push(order.id.clone());
+                self.dropped.lock().unwrap().push(order.id.clone());
+                Ok(CancelOutcome::Cancelled)
+            }
             Some(OrderState::PayoutPending) => Err(AdapterError::contract(
                 "payout-pending has no cancel control",
             )),
@@ -669,6 +693,12 @@ impl AppAdapter for FakeAdapter {
         order: &OrderReference,
     ) -> Result<AppOrderState, AdapterError> {
         self.observed_actors.lock().unwrap().push(device.actor);
+        if self.dropped.lock().unwrap().contains(&order.id) {
+            return Err(AdapterError::contract(format!(
+                "`trades.item.{}` did not appear",
+                order.id
+            )));
+        }
         if self
             .complete_after_observations
             .is_some_and(|count| self.observed_actors.lock().unwrap().len() >= count)

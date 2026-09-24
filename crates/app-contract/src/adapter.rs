@@ -67,7 +67,9 @@ pub trait AppAdapter: Send + Sync {
             "read-only identity recovery is not supported",
         ))
     }
-    /// Order IDs displayed in the actor's own trades list.
+    /// Order IDs displayed in the actor's own trades list, read only once
+    /// the list has loaded: an id missing from the answer is one the app no
+    /// longer lists, never one a list still loading has not drawn yet.
     async fn owned_orders(&self, _device: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
         Err(AdapterError::contract(
             "own-order discovery is not supported",

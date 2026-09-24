@@ -135,3 +135,21 @@ async fn both_parties_rate_and_the_daemon_publishes_each_rating() {
     assert_eq!(fixture.ratings_published(), 2);
     assert!(fixture.context.cleanup.report().is_clean());
 }
+
+/// The maker's app dropping the remainder proves nothing on its own: the
+/// daemon must publish it `canceled`.
+#[tokio::test]
+async fn a_remainder_cancel_the_daemon_never_publishes_fails_the_scenario() {
+    let fixture = crate::flow_fixture::Fixture::with(crate::flow_fixture::Misbehaviour {
+        never_publishes_cancel: true,
+        ..crate::flow_fixture::Misbehaviour::default()
+    })
+    .await;
+
+    let error = (scenario("range_order").run)(&fixture.context)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.category, mortsom_common::FailureCategory::Relay);
+    assert_eq!(fixture.relay_states(REMAINDER), ["pending"]);
+}

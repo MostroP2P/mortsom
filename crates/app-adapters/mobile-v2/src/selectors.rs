@@ -15,6 +15,10 @@ impl Ids {
     pub const APPBAR_BACK: &'static str = "appbar.back";
     pub const NAV_ORDER_BOOK: &'static str = "nav.order_book";
     pub const NAV_TRADES: &'static str = "nav.trades";
+    // My Trades loaded with nothing to show, and failed to load. With
+    // neither and no row, the list is still loading.
+    pub const TRADES_EMPTY: &'static str = "trades.empty";
+    pub const TRADES_ERROR: &'static str = "trades.error";
     pub const NAV_CHAT: &'static str = "nav.chat";
     pub const DRAWER_ACCOUNT: &'static str = "drawer.account";
     pub const DRAWER_SETTINGS: &'static str = "drawer.settings";
@@ -130,6 +134,8 @@ impl Ids {
         Self::APPBAR_BACK,
         Self::NAV_ORDER_BOOK,
         Self::NAV_TRADES,
+        Self::TRADES_EMPTY,
+        Self::TRADES_ERROR,
         Self::NAV_CHAT,
         Self::DRAWER_ACCOUNT,
         Self::DRAWER_SETTINGS,

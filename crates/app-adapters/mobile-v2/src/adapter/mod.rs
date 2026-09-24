@@ -132,7 +132,7 @@ impl AppAdapter for MobileV2Adapter {
         Ok(Identity { public_key })
     }
     async fn owned_orders(&self, device: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
-        orders::trade_ids(device).await
+        crate::screens::trades_list::trade_ids(device).await
     }
     async fn create_order(
         &self,

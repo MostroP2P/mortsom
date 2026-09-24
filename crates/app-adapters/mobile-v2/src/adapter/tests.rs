@@ -460,6 +460,8 @@ fn app_with_orders() -> FakeUi {
         Ids::ORDER_CONFIRM_HOME,
         &["trades.item.o1", Ids::NAV_TRADES, Ids::NAV_ORDER_BOOK],
     );
+    // My Trades loaded: empty until the order is listed.
+    ui.on_tap_hide(Ids::ORDER_CONFIRM_HOME, &[Ids::TRADES_EMPTY]);
     ui.on_tap(
         "trades.item.o1",
         &[
@@ -494,6 +496,7 @@ fn app_with_orders() -> FakeUi {
     ui.on_tap(Ids::ORDER_TAKE_CONFIRM, &[Ids::ORDER_STATUS]);
     ui.present(&[
         Ids::NAV_TRADES,
+        Ids::TRADES_EMPTY,
         Ids::NAV_ORDER_BOOK,
         Ids::ORDER_BOOK_TAB_BUY,
         Ids::ORDER_BOOK_TAB_SELL,
@@ -839,3 +842,5 @@ mod invoice;
 mod pricing;
 #[path = "tests_take.rs"]
 mod take;
+#[path = "tests_trades_list.rs"]
+mod trades_list;
