@@ -220,6 +220,37 @@ async fn a_press_waits_for_the_node_to_rest_and_clicks_exactly_once() {
     assert!(rects >= 3, "the moving node was re-measured: {rects}");
 }
 
+/// The deadline bounds the wait for a resting node, never a click already
+/// sent. A slow browser took 3.2 s to answer one click (2026-09-24, a
+/// recovery on Web): the press was cut at its 5 s deadline and reported as
+/// never delivered while the app had already opened the screen it asked
+/// for. A click in flight is awaited, and it is sent exactly once.
+#[tokio::test]
+async fn a_click_still_answering_at_the_deadline_is_awaited_not_abandoned() {
+    let (server, session) = fixture().await;
+    Mock::given(method("POST"))
+        .and(path("/session/test/element/field/click"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"value":null}))
+                .set_delay(Duration::from_millis(700)),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+
+    press(&session, "drawer.account", Duration::from_millis(400))
+        .await
+        .unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    let clicks = requests
+        .iter()
+        .filter(|r| r.url.path().ends_with("/element/field/click"))
+        .count();
+    assert_eq!(clicks, 1, "{requests:#?}");
+}
+
 /// A node that never settles is never clicked: an unsent press is a plain
 /// failure, a press delivered to the wrong place is not.
 #[tokio::test]
