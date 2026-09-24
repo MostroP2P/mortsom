@@ -54,6 +54,13 @@ impl WebDriverError {
         matches!(self, WebDriverError::Server { error, .. } if error == "no such element")
     }
 
+    /// True for `stale element reference`: the page replaced the node after
+    /// it was found, so the handle no longer names anything. Found again,
+    /// the same identifier names its replacement.
+    pub fn is_stale_element(&self) -> bool {
+        matches!(self, WebDriverError::Server { error, .. } if error == "stale element reference")
+    }
+
     /// True for a request that never got an answer.
     ///
     /// A transport failure says nothing about the app: the screen was never
