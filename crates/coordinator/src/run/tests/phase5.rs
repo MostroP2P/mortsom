@@ -294,3 +294,67 @@ async fn an_unlisted_order_the_relay_shows_closed_counts_as_resolved() {
     let cleanup = summary.cleanup.unwrap();
     assert!(cleanup.is_clean(), "{cleanup:?}");
 }
+
+/// App v2 drops a cancelled trade that never went active from My Trades,
+/// so after the maker's cancel there is no state left to read. The relay
+/// says whether the daemon closed it: when it did, the order is resolved.
+#[tokio::test]
+async fn cleanup_resolves_a_never_active_cancel_the_app_dropped_once_the_relay_closes_it() {
+    mortsom_scenarios::link();
+    let world = world(false);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_take = true;
+    adapter.drops_never_active = true;
+    let adapter = Arc::new(adapter);
+
+    let summary = run(
+        &world,
+        adapter.clone(),
+        opts_in(&world, &["happy_sell"]),
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        !summary.passed,
+        "the take failed; the scenario must not pass"
+    );
+    let cleanup = summary.cleanup.unwrap();
+    assert!(cleanup.is_clean(), "{cleanup:?}");
+    assert_eq!(*adapter.cancelled.lock().unwrap(), ["o1".to_owned()]);
+}
+
+/// The mirror: the app dropping the trade is not the daemon closing it.
+/// Without `canceled` on the relay the order stays unresolved.
+#[tokio::test]
+async fn a_never_active_cancel_the_relay_never_closes_stays_unresolved() {
+    mortsom_scenarios::link();
+    let world = world(false);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_take = true;
+    adapter.drops_never_active = true;
+    let adapter = Arc::new(adapter);
+    let observer = FakeObserver {
+        publish_closed: false,
+        canceled_gate: None,
+    };
+
+    let summary = run_with_observer(
+        &world,
+        adapter,
+        opts_in(&world, &["happy_sell"]),
+        false,
+        &observer,
+    )
+    .await
+    .unwrap();
+
+    let cleanup = summary.cleanup.unwrap();
+    assert_eq!(cleanup.unresolved, vec!["o1".to_owned()]);
+    let entry = &cleanup.entries[0];
+    assert!(
+        matches!(&entry.result, Some(mortsom_scenario_kit::cleanup::CleanupResult::Failed { message }) if message.contains("relay never showed it closed")),
+        "{entry:?}"
+    );
+}

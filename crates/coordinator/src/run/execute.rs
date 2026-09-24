@@ -247,6 +247,12 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
                 message: format!("still {state} after the maker cancelled"),
             };
         }
+        // App v2 drops a cancelled trade that never went active from My
+        // Trades, and its state goes with it. Once the maker's loaded list
+        // no longer shows it, only the relay can say the daemon closed it.
+        None if listed_by(ctx, maker, order).await == Some(false) => {
+            return confirm_unlisted_closed(ctx, order).await;
+        }
         None => {
             return CleanupResult::Failed {
                 message: "state unreadable after the maker cancelled".into(),
@@ -446,4 +452,13 @@ async fn observed_state(ctx: &Context, actor: Actor, order: &OrderReference) -> 
         .await
         .ok()
         .map(|s| s.state))
+}
+
+/// Whether `actor`'s app lists `order`, answered on a loaded My Trades;
+/// `None` when the list cannot be read.
+async fn listed_by(ctx: &Context, actor: Actor, order: &OrderReference) -> Option<bool> {
+    let session = ctx.actor(actor).ok()?;
+    let device = session.device(ctx.ui_timeout);
+    let listed = ctx.adapter.owned_orders(&device).await.ok()?;
+    Some(listed.contains(&order.id))
 }
