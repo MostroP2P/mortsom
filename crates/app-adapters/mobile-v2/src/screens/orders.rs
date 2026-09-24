@@ -229,8 +229,9 @@ pub async fn find_and_take(
     }
 }
 
-/// Rates the counterpart from the trade detail: the rate action, one star,
-/// submit; the app returns to the same trade's detail.
+/// Rates the counterpart on the trade detail, where a completed trade
+/// carries its stars and submit: one star, submit; the app stays on the
+/// same trade's detail.
 pub async fn rate_counterpart(
     device: &DeviceContext<'_>,
     order: &OrderReference,
@@ -242,7 +243,6 @@ pub async fn rate_counterpart(
         )));
     }
     open_trade(device, order).await?;
-    tap(device, Ids::TRADE_RATE).await?;
     tap(device, &Ids::rate_star(score)).await?;
     tap(device, Ids::TRADE_RATE_SUBMIT).await?;
     expect(device, Ids::ORDER_STATUS).await?;
@@ -688,7 +688,9 @@ pub async fn visible_actions(
         (Ids::TRADE_RELEASE, "release"),
         (Ids::TRADE_CANCEL, "cancel"),
         (Ids::TRADE_DISPUTE, "dispute"),
-        (Ids::TRADE_RATE, "rate"),
+        // A completed trade carries the rating itself; its submit is the
+        // rating action.
+        (Ids::TRADE_RATE_SUBMIT, "rate"),
     ] {
         if present(device, id).await? {
             actions.push(name.to_owned());

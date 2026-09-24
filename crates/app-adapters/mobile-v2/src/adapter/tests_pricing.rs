@@ -33,18 +33,18 @@ fn app_with_pricing() -> FakeUi {
         Ids::ORDER_TAKE_AMOUNT_CONFIRM,
         &[Ids::ORDER_STATUS, Ids::ORDER_ID],
     );
+    // The completed trade carries the rating itself: its stars, submit and
+    // close, with no control that opens a rating screen first.
     ui.on_tap(
         "trades.item.o1",
         &[
             Ids::ORDER_STATUS,
             Ids::ORDER_ID,
             Ids::APPBAR_BACK,
-            Ids::TRADE_RATE,
+            "trade.rate.star.5",
+            Ids::TRADE_RATE_SUBMIT,
+            Ids::TRADE_RATE_CLOSE,
         ],
-    );
-    ui.on_tap(
-        Ids::TRADE_RATE,
-        &["trade.rate.star.5", Ids::TRADE_RATE_SUBMIT],
     );
     ui.on_tap_relabel(Ids::TRADE_RATE_SUBMIT, Ids::ORDER_STATUS, "rated");
     ui
@@ -209,9 +209,31 @@ async fn rating_picks_the_star_submits_and_returns_to_the_rated_trade() {
         .position(|c| c == "tap trade.rate.submit")
         .expect("the rating was submitted");
     assert!(star < submit, "{calls:?}");
+    assert!(
+        !calls.iter().any(|c| c == "tap trade.rate"),
+        "the rating is on the trade itself: {calls:?}"
+    );
     let shown = adapter().observe_order(&device(&ui), &order).await.unwrap();
     assert_eq!(shown.raw_label, "rated");
     assert_eq!(shown.state, OrderState::Completed);
+}
+
+/// A completed trade that asks for a rating offers it among its visible
+/// actions: the submit on the trade detail is the rating action.
+#[tokio::test]
+async fn a_completed_trade_offers_its_rating_as_a_visible_action() {
+    let ui = app_with_pricing();
+    adapter().onboard(&device(&ui), &env()).await.unwrap();
+    ui.present(&["trades.item.o1"]);
+    ui.label(Ids::ORDER_STATUS, "pending-rating");
+    let order = OrderReference::with_kind("o1", OrderKind::Sell);
+
+    let actions = adapter()
+        .visible_actions(&device(&ui), &order)
+        .await
+        .unwrap();
+
+    assert!(actions.contains(&"rate".to_owned()), "{actions:?}");
 }
 
 /// The rating screen has five stars; anything else is a harness mistake,

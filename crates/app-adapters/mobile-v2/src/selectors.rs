@@ -83,7 +83,8 @@ impl Ids {
     pub const TRADE_CANCEL_CONFIRM: &'static str = "trade.cancel.confirm";
     pub const TRADE_DISPUTE: &'static str = "trade.dispute";
     pub const TRADE_DISPUTE_CONFIRM: &'static str = "trade.dispute.confirm";
-    pub const TRADE_RATE: &'static str = "trade.rate";
+    // Rating lives on the completed trade's detail: its stars, submit and
+    // close. No control opens a separate rating screen first.
     pub const TRADE_RATE_SUBMIT: &'static str = "trade.rate.submit";
     pub const TRADE_RATE_CLOSE: &'static str = "trade.rate.close";
     // Buyer invoice and hold invoice payment.
@@ -175,7 +176,6 @@ impl Ids {
         Self::TRADE_CANCEL_CONFIRM,
         Self::TRADE_DISPUTE,
         Self::TRADE_DISPUTE_CONFIRM,
-        Self::TRADE_RATE,
         Self::TRADE_RATE_SUBMIT,
         Self::TRADE_RATE_CLOSE,
         Self::INVOICE_NWC_TEXT,
