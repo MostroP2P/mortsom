@@ -47,7 +47,7 @@ A fresh installation needs only this repository. App source is fetched automatic
 
 | For | Requirements |
 |---|---|
-| Harness | Rust stable (MSRV 1.89), Cargo, Git, C/C++ linker, `protoc`, Docker Engine and Compose with permission to use them |
+| Harness | Rust stable (MSRV 1.89), Cargo, Git, C/C++ linker, `protoc` 3.15 or later, Docker Engine and Compose with permission to use them |
 | Source builds | Flutter/Dart on PATH, Bash and standard Unix tools, `flutter_rust_bridge_codegen` matching the app's pin, `cargo-expand` |
 | Linux build | clang/libclang with `clang++` on PATH and, in the directory it resolves to, LLVM's linker (`ld.lld`, package `lld`) and archiver; CMake, Ninja, pkg-config, GTK 3 and libsecret >= 0.18.4 development files |
 | Linux runtime | Xvfb, D-Bus, GNOME Keyring, AT-SPI bus and registry, ImageMagick `import` |
@@ -62,6 +62,19 @@ sudo apt-get install build-essential git curl unzip xz-utils zip protobuf-compil
   clang libclang-dev lld cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev \
   xvfb dbus gnome-keyring at-spi2-core imagemagick python3
 ```
+
+Mortsom's LND client compiles its protobuf definitions at build time, and they use proto3 `optional`
+fields, which need `protoc` 3.15 or later. Ubuntu and Pop!_OS 22.04 package 3.12, and the build then
+stops in `fedimint-tonic-lnd` with `This file contains proto3 optional fields, but
+--experimental_allow_proto3_optional was not set`. Install a release from
+[protocolbuffers/protobuf](https://github.com/protocolbuffers/protobuf/releases) and put its `protoc`
+first on `PATH`, or point `PROTOC` at it for the build:
+
+```sh
+PROTOC=/path/to/protoc/bin/protoc cargo build -p mortsom-coordinator --bin mortsom
+```
+
+`mortsom doctor` cannot check this: it is part of the harness that needs `protoc` to compile.
 
 Install [Rust with rustup](https://www.rust-lang.org/tools/install),
 [Flutter](https://docs.flutter.dev/install) and [Docker Engine with Compose](https://docs.docker.com/engine/install/)
