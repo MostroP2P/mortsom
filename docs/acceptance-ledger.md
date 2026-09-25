@@ -4,7 +4,7 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
-**Accepted: Linux 20/20, Web 19/20.** Every scenario of the happy-path, cancellation, expiration and
+**Accepted: Linux 20/20, Web 20/20.** Every scenario of the happy-path, cancellation, expiration and
 dispute families (spec section 8) is accepted on both platforms. The dispute family ran on 2026-09-10 with
 the clients built from app branch `feat/mortsom-dispute-back-id` (`6222334`, the dispute screen's
 `appbar.back`), each run registering its own solver with the daemon. The expiration
@@ -27,11 +27,17 @@ each with verified cleanup. The run needed Mortsom #60 (a cancelled never-active
 verified by the relay once the maker's app drops it) and #61 (a Web text entry is read back even when the
 browser answers past the deadline). The stack was rebuilt between the Web batches (daemon `5711a98d…`, then
 `9cc66bab…`). `payout_fails_then_replaced` and `payout_slots_capped_per_destination` are accepted on Web
-for the first time. **`payout_invoice_below_expiry_floor` no longer passes against app `main`:** the app
-now checks an invoice's expiry against the daemon's declared window before sending it, keeps submit
-disabled and shows the reason locally, while the scenario waits for the daemon's refusal. The scenario must
-accept either refusal; that needs an app automation id for the local check (`invoice.check`) and a spec 8.6
-change. It stays accepted on Linux on its 2026-09-10 runs and was not run on Web.
+for the first time. `payout_invoice_below_expiry_floor` failed on Linux against that app: the app now checks
+an invoice's expiry against the daemon's declared window before sending it and keeps submit disabled,
+while the scenario waited for the daemon's refusal.
+
+**`payout_invoice_below_expiry_floor` re-accepted 2026-09-25 on both platforms** with the app's own
+verdict: app `main` at `42019bd` (MostroP2P/app#588 adds `invoice.check`), spec 8.6 accepting either
+refusal. On both, the app refused the short invoice before sending it (`expires-too-soon`, submit
+disabled), the order stayed waiting for Bob's invoice, and the proper invoice was judged `valid` and taken
+by the daemon (book `in-progress`); the refused invoice never settled and cleanup was verified. The
+daemon's own refusal, reached while the node's capabilities have not reached the app, did not occur live
+and is covered only by the fixture tests.
 
 | Scenario | Family | Linux | Web |
 |---|---|---|---|
@@ -52,7 +58,7 @@ change. It stays accepted on Linux on its 2026-09-10 runs and was not run on Web
 | `dispute_settled_by_solver` | dispute | **Accepted** 2026-09-10, run `20260910T115327Z-f2a515741b09` (dispute initiated → in-progress → settled; hold and payout settled once each); re-verified 2026-09-24, `20260924T234120Z-2764eb35752f` | **Accepted** 2026-09-10, run `20260910T120310Z-ca276d92a07b`; re-verified 2026-09-25, `20260925T023558Z-db98195dc962` |
 | `dispute_canceled_by_solver` | dispute | **Accepted** 2026-09-10, run `20260910T115609Z-0039c33d54ae` (dispute initiated → in-progress → seller-refunded; hold refunded); re-verified 2026-09-24, `20260924T234416Z-ccbd9dc9ef83` | **Accepted** 2026-09-10, run `20260910T120645Z-b8e2f466b31e` (hold refunded); re-verified 2026-09-25, `20260925T024131Z-c9cdd70ad5ff` |
 | `payout_fails_then_replaced` | payment-failure | **Accepted** 2026-09-10, run `20260910T230415Z-d1899f794311` (hold settled once; withdrawn invoice `1d59302a…` never settled; replacement settled once; both apps completed; again 2026-09-11 in the family run, `20260911T000038Z-bcaf43c223ef`); re-verified 2026-09-24, `20260924T233030Z-ae4a2de252e4` | **Accepted** 2026-09-25, run `20260925T021637Z-254b15825dd8` (hold settled once; withdrawn invoice never settled; replacement settled once; both apps completed) |
-| `payout_invoice_below_expiry_floor` | payment-failure | **Accepted** 2026-09-10, run `20260910T222335Z-0280ef09fd9f` (invoice `7405e1e7…` refused with `invoice.error`, a proper one accepted, no payment; sweep cancelled the order; again 2026-09-11 in the family run, `20260911T000325Z-1d7eb0d00a40`); **fails** 2026-09-24 against app `main` `f15e6bc`, run `20260924T232600Z-161524e6564e` (the app refuses the short-lived invoice locally; see above) | Not run |
+| `payout_invoice_below_expiry_floor` | payment-failure | **Accepted** 2026-09-10, run `20260910T222335Z-0280ef09fd9f` (invoice `7405e1e7…` refused with `invoice.error`, a proper one accepted, no payment; sweep cancelled the order; again 2026-09-11 in the family run, `20260911T000325Z-1d7eb0d00a40`); **fails** 2026-09-24 against app `main` `f15e6bc`, run `20260924T232600Z-161524e6564e` (the app refuses the short-lived invoice locally; see above); **re-accepted** 2026-09-25 with the app's verdict, `20260925T191709Z-1808d0cf2260` (refused by the app as `expires-too-soon`; the proper one `valid`) | **Accepted** 2026-09-25, run `20260925T185803Z-e5379658a4a9` (refused by the app as `expires-too-soon`; the proper one `valid` and taken; no payment) |
 | `payout_slots_capped_per_destination` | payment-failure | **Accepted** 2026-09-10, run `20260910T235331Z-93b77b09d64d` (two payouts held on Bob's node, the third stayed `open` for the quiet window, dispatched after the first settled; three payouts and three holds settled once each; again 2026-09-11 in the family run, `20260911T000523Z-e462512985e1`); re-verified 2026-09-24, `20260924T233414Z-6a1cff03fd4a` | **Accepted** 2026-09-25, run `20260925T022234Z-391adf9a88a4` |
 | `dispute_released_by_seller` | dispute | **Accepted** 2026-09-10, run `20260910T115806Z-c9f7dfc464fd` (dispute initiated → settled on the release); re-verified 2026-09-24, `20260924T234702Z-41d63eaf3b89` | **Accepted** 2026-09-10, run `20260910T120935Z-ee1fb55d8b99`; re-verified 2026-09-25, `20260925T024541Z-262f85f6d2c6` |
 
@@ -62,6 +68,10 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 
 | Run | Platform | Scenario | Reached | Failure |
 |---|---|---|---|---|
+| `20260925T191709Z-1808d0cf2260` | Linux | payout_invoice_below_expiry_floor | **Passed.** The app refused the short invoice before sending it (`expires-too-soon`); the order stayed waiting for Bob's invoice; the proper one was judged `valid` and taken, book `in-progress` | None. App `main` at `42019bd`; cleanup verified |
+| `20260925T185803Z-e5379658a4a9` | Web | payout_invoice_below_expiry_floor | **Passed.** As on Linux | None. Carried the fix for the attempt below |
+| `20260925T182417Z-014717ad87ae` | Web | payout_invoice_below_expiry_floor | The app refused the short invoice (`expires-too-soon`); the proper one was judged `valid`, submitted and taken by the daemon (book `in-progress`) | Test infrastructure: `read invoice.check: webdriver no such element`. After the press, the adapter found `invoice.check` still on screen and read it as the form left for the trade detail. Fixed in the same change: a verdict gone by the read is no verdict yet. Cleanup verified; nothing settled |
+| `20260925T180604Z-cbfc1fbadf15` | Linux | payout_invoice_below_expiry_floor | **Passed.** As `20260925T191709Z-1808d0cf2260`, before the read fix | None |
 | `20260925T034223Z-6953d4bfd937` | Web | pending_order_expires | Bootstrap: Bob's client never rendered | Test infrastructure: Bob's page stayed blank; Chromium aborted the app's WebAssembly load (`WebAssembly compilation aborted: Network error: Response body loading was aborted`), so neither the walkthrough nor the order book appeared. No order was created; cleanup verified. Rerun passed, `20260925T035137Z-37b29b292ec2` |
 | `20260925T025101Z-468de876ac30` | Web | hold_invoice_expires | **Scenario passed.** The hold expired unpaid; the relay showed the order cancelled and neither app listed it | Harness: payment recovery looked for the cancelled never-active order in Alice's My Trades, which app v2 no longer lists (`trades.item.… did not appear`). Fixed in #60; resolved by `cleanup` from `main`, `20260925T032427Z-69670e2dd2dc`: the relay shows it cancelled and Bob's invoice has no settled record |
 | `20260925T005654Z-698c1a59c920` | Web | payout_fails_then_replaced | Hold settled at the release (1005 sats); the daemon's payout failed on the withdrawn invoice and asked Bob for a new one; Bob's replacement form open | Test infrastructure: `type into invoice.text: text-entry deadline: public value mismatch`. The browser answered slowly (the focusing click took 2 s) and the 5 s deadline cut the entry after the keys were sent, before the read-back; the field showed the whole invoice. Fixed in #61. Cleanup cannot hand in a replacement invoice, so the daemon kept Bob's 995 regtest sats: the stack was torn down and the journal closed with `recovery abandon --reason stack-destroyed`. **Abandoned; the run is failed and unverified** |
