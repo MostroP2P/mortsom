@@ -81,12 +81,11 @@ async fn terminal_order_state(
         })
         .ok_or("payment recovery has no known order owner")?;
     let session = ctx.actor(maker).map_err(|e| e.to_string())?;
-    let state = ctx
-        .adapter
-        .observe_order(&session.device(ctx.ui_timeout), &order)
-        .await
-        .map_err(|e| e.to_string())?
-        .state;
+    let device = session.device(ctx.ui_timeout);
+    let state = match ctx.adapter.observe_order(&device, &order).await {
+        Ok(shown) => shown.state,
+        Err(unread) => return closed_off_the_list(ctx, &device, &order, unread.to_string()).await,
+    };
     if matches!(state, OrderState::Completed | OrderState::PayoutPending) {
         for actor in Actor::ALL {
             let shown = mortsom_scenario_kit::actions::wait_app_state(
@@ -126,4 +125,58 @@ async fn terminal_order_state(
     Err(format!(
         "order {order_id} has no verified terminal UI state"
     ))
+}
+
+/// The terminal state of an order the maker's app could not show. App v2
+/// drops a trade that never went active from My Trades once it is
+/// cancelled, so its state goes with the row: only when the loaded list no
+/// longer shows it does the daemon's own status on the relay decide, and
+/// only a cancel or an expiry can, since a completed trade stays listed.
+async fn closed_off_the_list(
+    ctx: &Context,
+    device: &mortsom_app_contract::DeviceContext<'_>,
+    order: &OrderReference,
+    unread: String,
+) -> Result<OrderState, String> {
+    let listed = ctx
+        .adapter
+        .owned_orders(device)
+        .await
+        .map_err(|e| e.to_string())?;
+    if listed.contains(&order.id) {
+        return Err(unread);
+    }
+    let _ = ctx.relay.add_order(&order.id).await;
+    let id = order.id.clone();
+    let closed = ctx
+        .relay
+        .wait_for(ctx.state_timeout, |e| {
+            e.kind == mortsom_scenario_kit::actions::ORDER_EVENT_KIND
+                && e.tag("d") == Some(id.as_str())
+                && e.tag("s")
+                    .and_then(OrderState::from_protocol_status)
+                    .is_some_and(|state| {
+                        matches!(state, OrderState::Cancelled | OrderState::Expired)
+                    })
+        })
+        .await;
+    match closed.and_then(|event| event.tag("s").and_then(OrderState::from_protocol_status)) {
+        Some(state) => {
+            ctx.timeline.push(
+                mortsom_scenario_kit::timeline::TimelineKind::Assertion,
+                None,
+                format!(
+                    "order {}: the maker's app no longer lists it; the relay shows it {state}",
+                    order.id
+                ),
+                None,
+            );
+            Ok(state)
+        }
+        None => Err(format!(
+            "{unread}; the maker's app no longer lists order {} and the relay never showed it \
+             cancelled or expired",
+            order.id
+        )),
+    }
 }
