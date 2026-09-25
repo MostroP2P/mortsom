@@ -282,7 +282,7 @@ async fn an_accepted_invoice_that_should_have_been_refused_is_a_product_failure(
     let node = Arc::new(Node::default());
     let adapter = Arc::new(Verdict(
         StateAdapter(Mutex::new(OrderState::Taken)),
-        InvoiceSubmission::Accepted,
+        InvoiceSubmission::Accepted { check: None },
     ));
     let (ctx, journal) = with_node(adapter, node.clone());
 
@@ -313,7 +313,7 @@ async fn a_lifetime_the_node_did_not_encode_is_caught_before_submission() {
     let node = Arc::new(Node::default());
     let adapter = Arc::new(Verdict(
         StateAdapter(Mutex::new(OrderState::Taken)),
-        InvoiceSubmission::Accepted,
+        InvoiceSubmission::Accepted { check: None },
     ));
     let (ctx, _) = with_node(adapter, node);
 

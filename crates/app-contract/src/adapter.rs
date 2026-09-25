@@ -136,11 +136,12 @@ pub trait AppAdapter: Send + Sync {
         order: &OrderReference,
         invoice: Option<&Secret>,
     ) -> Result<Option<Secret>, AdapterError>;
-    /// Types `invoice` into the manual form, submits it once and reports
-    /// the daemon's verdict: the trade detail (accepted) or the form kept
-    /// open with the reason on screen (rejected). Unlike
+    /// Types `invoice` into the manual form and reports whose verdict
+    /// decided it: the app's own refusal before anything is sent, or,
+    /// once submitted, the daemon's -- the trade detail (accepted) or the
+    /// form kept open with the reason on screen (rejected). Unlike
     /// [`AppAdapter::provide_buyer_invoice`], a refusal is an answer here,
-    /// not a failure: scenarios about invoices the daemon cannot pay ask
+    /// not a failure: scenarios about invoices that cannot be paid ask
     /// exactly that question.
     async fn submit_buyer_invoice(
         &self,

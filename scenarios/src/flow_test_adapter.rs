@@ -445,7 +445,7 @@ impl AppAdapter for Adapter {
         }
         self.provide_buyer_invoice(device, order, Some(invoice))
             .await?;
-        Ok(InvoiceSubmission::Accepted)
+        Ok(InvoiceSubmission::Accepted { check: None })
     }
     async fn confirm_fiat_sent(
         &self,

@@ -272,15 +272,28 @@ pub enum CancelOutcome {
     NotFound,
 }
 
-/// The daemon's verdict on a buyer invoice submitted through the app.
+/// The verdict on a buyer invoice handed in through the app: the app's
+/// own, when it refuses the invoice before sending it, or the daemon's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvoiceSubmission {
     /// The daemon took the invoice: the app returned to the trade detail.
-    Accepted,
+    Accepted {
+        /// The app's own verdict when the invoice was sent (`valid`,
+        /// `address`), or `None` when the app had not judged it: its
+        /// facts had not arrived, and the daemon was the only judge.
+        check: Option<String>,
+    },
     /// The daemon refused it and the app kept the form open, showing why.
     Rejected {
-        /// The reason the app displays, as its stable readout.
+        /// The reason the app displays. It is translated prose, so it is
+        /// evidence, never something to compare.
         reason: String,
+    },
+    /// The app refused it before sending it: `invoice.check` named the
+    /// rule it broke and submit stayed disabled. Nothing reached the daemon.
+    RefusedByApp {
+        /// The app's verdict word, e.g. `expires-too-soon`.
+        check: String,
     },
 }
 

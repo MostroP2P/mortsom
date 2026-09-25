@@ -144,15 +144,151 @@ async fn enter_buyer_invoice(
     ))
 }
 
-/// Submits a supplied invoice once and reports the daemon's verdict: the
-/// trade detail means it was taken; the form kept open with `invoice.error`
-/// showing means it was refused, and the reason is that readout.
+/// Words `invoice.check` uses for an invoice the app refuses to send.
+const REFUSALS: [&str; 6] = [
+    "expires-too-soon",
+    "wrong-amount",
+    "wrong-network",
+    "expired",
+    "malformed",
+    "unrecognized",
+];
+/// Words `invoice.check` uses for an invoice the app lets through.
+const PASSES: [&str; 2] = ["valid", "address"];
+
+/// The app's own reading of the typed invoice, before anything is sent.
+enum Judged {
+    /// It named a broken rule and disabled submit.
+    Refused(String),
+    /// It judged the invoice good and submit accepts a press.
+    Passed(String),
+    /// It had not judged it by the deadline, and submit accepts a press:
+    /// its facts had not arrived, and the daemon is the only judge.
+    Unjudged,
+    /// The app dropped the typed text; it has to be typed again.
+    Dropped,
+}
+
+/// Hands in a supplied invoice and reports whose verdict decided it.
+///
+/// The app judges an invoice before sending it and publishes the verdict
+/// as a word in `invoice.check`; a refusal disables submit and nothing is
+/// sent. The word is waited for, never read once: it is absent until the
+/// facts it needs arrive. An invoice the app lets through, or has not
+/// judged by the deadline, is submitted once, and the daemon decides: the
+/// trade detail means taken, `invoice.error` means refused. The app's
+/// refusal can also land as submit is pressed, when its facts arrive
+/// just then; the form then shows that word and submit stays disabled.
 pub async fn submit_buyer_invoice(
     device: &DeviceContext<'_>,
     order: &OrderReference,
     invoice: &Secret,
 ) -> Result<InvoiceSubmission, AdapterError> {
-    enter_buyer_invoice(device, order, invoice).await?;
+    open_buyer_invoice(device, order).await?;
+    const ENTRIES: usize = 3;
+    for _ in 0..ENTRIES {
+        type_into(device, Ids::INVOICE_TEXT, invoice.expose()).await?;
+        match judge(device, invoice).await? {
+            Judged::Dropped => continue,
+            Judged::Refused(check) => {
+                verify_order_id(device, Ids::INVOICE_ORDER_ID, order).await?;
+                return Ok(InvoiceSubmission::RefusedByApp { check });
+            }
+            Judged::Passed(check) => return send(device, order, Some(check)).await,
+            Judged::Unjudged => return send(device, order, None).await,
+        }
+    }
+    Err(AdapterError::contract(
+        "buyer invoice field did not keep the supplied invoice",
+    ))
+}
+
+/// Waits, up to the UI timeout, for the app's verdict on the typed text.
+async fn judge(device: &DeviceContext<'_>, invoice: &Secret) -> Result<Judged, AdapterError> {
+    let deadline = tokio::time::Instant::now() + device.ui_timeout;
+    loop {
+        if !typed(device, invoice).await? {
+            return Ok(Judged::Dropped);
+        }
+        // A daemon refusal still on screen takes the verdict's slot: no
+        // word will come while it stands, so none is waited for.
+        if present(device, Ids::INVOICE_ERROR).await? {
+            return Ok(Judged::Unjudged);
+        }
+        let check = check_word(device).await?;
+        let enabled = submit_enabled(device).await?;
+        match check.as_deref() {
+            Some(word) if REFUSALS.contains(&word) && !enabled => {
+                return Ok(Judged::Refused(word.to_owned()));
+            }
+            Some(word) if PASSES.contains(&word) && enabled => {
+                return Ok(Judged::Passed(word.to_owned()));
+            }
+            Some(word) if !REFUSALS.contains(&word) && !PASSES.contains(&word) => {
+                return Err(AdapterError::contract(format!(
+                    "`invoice.check` shows `{word}`, which the contract does not define"
+                )));
+            }
+            _ => {}
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return unsettled(check, enabled);
+        }
+        tokio::time::sleep(SCREEN_POLL).await;
+    }
+}
+
+/// The verdict when the deadline passes with the word and submit still
+/// disagreeing, or with no word at all.
+fn unsettled(check: Option<String>, enabled: bool) -> Result<Judged, AdapterError> {
+    match (check, enabled) {
+        (None, true) => Ok(Judged::Unjudged),
+        (None, false) => Err(AdapterError::contract(
+            "`invoice.submit` stayed disabled without a verdict in `invoice.check`",
+        )),
+        (Some(word), true) => Err(AdapterError::contract(format!(
+            "`invoice.check` shows `{word}` while `invoice.submit` stays enabled"
+        ))),
+        (Some(word), false) => Err(AdapterError::contract(format!(
+            "`invoice.check` shows `{word}` while `invoice.submit` stays disabled"
+        ))),
+    }
+}
+
+/// Whether the field still holds the typed invoice.
+async fn typed(device: &DeviceContext<'_>, invoice: &Secret) -> Result<bool, AdapterError> {
+    let entered = device
+        .ui
+        .text_of(Ids::INVOICE_TEXT)
+        .await
+        .map_err(|_| AdapterError::contract("cannot verify buyer invoice text"))?;
+    Ok(entered.trim() == invoice.expose().trim())
+}
+
+/// The word in `invoice.check`, or `None` while the app shows none.
+async fn check_word(device: &DeviceContext<'_>) -> Result<Option<String>, AdapterError> {
+    if !present(device, Ids::INVOICE_CHECK).await? {
+        return Ok(None);
+    }
+    let word = label(device, Ids::INVOICE_CHECK).await?.trim().to_owned();
+    Ok((!word.is_empty()).then_some(word))
+}
+
+async fn submit_enabled(device: &DeviceContext<'_>) -> Result<bool, AdapterError> {
+    device
+        .ui
+        .is_enabled(Ids::INVOICE_SUBMIT)
+        .await
+        .map_err(|e| AdapterError::infrastructure(format!("probe `invoice.submit`: {e}")))
+}
+
+/// Presses submit once and reads whose verdict follows. `check` is the
+/// app's word when the press was sent, carried into an acceptance.
+async fn send(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+    check: Option<String>,
+) -> Result<InvoiceSubmission, AdapterError> {
     // A form kept open after a refusal still shows that refusal's
     // `invoice.error`; the app clears it when it handles the new
     // submission. Reading the verdict before it clears would report the
@@ -164,30 +300,50 @@ pub async fn submit_buyer_invoice(
             "the previous `invoice.error` never cleared after a new submission",
         ));
     }
-    match super::first_present(device, &[Ids::ORDER_STATUS, Ids::INVOICE_ERROR]).await? {
-        Some(id) if id == Ids::ORDER_STATUS => {
+    let deadline = tokio::time::Instant::now() + device.ui_timeout;
+    loop {
+        if present(device, Ids::ORDER_STATUS).await? {
             verify_order_id(device, Ids::ORDER_ID, order).await?;
-            Ok(InvoiceSubmission::Accepted)
+            return Ok(InvoiceSubmission::Accepted { check });
         }
-        Some(_) => {
-            let reason = label(device, Ids::INVOICE_ERROR).await?.trim().to_owned();
-            if reason.is_empty() {
-                return Err(AdapterError::contract(
-                    "`invoice.error` appeared without a reason",
-                ));
-            }
-            // A refusal keeps the same form: the user fixes the invoice
-            // where they typed it.
-            if !present(device, Ids::INVOICE_TEXT).await? {
-                return Err(AdapterError::product(
-                    "the app left the invoice form after the daemon refused the invoice",
-                ));
-            }
+        if present(device, Ids::INVOICE_ERROR).await? {
+            return refused_by_daemon(device, order).await;
+        }
+        if let Some(word) = check_word(device).await?
+            && REFUSALS.contains(&word.as_str())
+            && !submit_enabled(device).await?
+        {
             verify_order_id(device, Ids::INVOICE_ORDER_ID, order).await?;
-            Ok(InvoiceSubmission::Rejected { reason })
+            return Ok(InvoiceSubmission::RefusedByApp { check: word });
         }
-        None => Err(AdapterError::contract(
-            "neither the trade detail nor `invoice.error` appeared after submitting the buyer invoice",
-        )),
+        if tokio::time::Instant::now() >= deadline {
+            return Err(AdapterError::contract(
+                "neither the trade detail, `invoice.error` nor a refusal in `invoice.check` \
+                 appeared after submitting the buyer invoice",
+            ));
+        }
+        tokio::time::sleep(SCREEN_POLL).await;
     }
+}
+
+/// The daemon's refusal: the form stays open with its reason.
+async fn refused_by_daemon(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<InvoiceSubmission, AdapterError> {
+    let reason = label(device, Ids::INVOICE_ERROR).await?.trim().to_owned();
+    if reason.is_empty() {
+        return Err(AdapterError::contract(
+            "`invoice.error` appeared without a reason",
+        ));
+    }
+    // A refusal keeps the same form: the user fixes the invoice where
+    // they typed it.
+    if !present(device, Ids::INVOICE_TEXT).await? {
+        return Err(AdapterError::product(
+            "the app left the invoice form after the daemon refused the invoice",
+        ));
+    }
+    verify_order_id(device, Ids::INVOICE_ORDER_ID, order).await?;
+    Ok(InvoiceSubmission::Rejected { reason })
 }

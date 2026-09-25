@@ -55,7 +55,16 @@ pub async fn submit_rejected_buyer_invoice(
         .await?;
     let reason = match verdict {
         InvoiceSubmission::Rejected { reason } => reason,
-        InvoiceSubmission::Accepted => {
+        // The scenarios that ask for a verdict are about the daemon's
+        // refusal; an invoice the app refuses first never reaches it.
+        InvoiceSubmission::RefusedByApp { check } => {
+            return Err(ScenarioError::product(format!(
+                "the app refused the buyer invoice for order {} before sending it (`{check}`); \
+                 the daemon never judged it ({kind:?})",
+                order.id
+            )));
+        }
+        InvoiceSubmission::Accepted { .. } => {
             return Err(ScenarioError::product(format!(
                 "the daemon accepted a buyer invoice for order {} it should have refused ({kind:?})",
                 order.id
