@@ -266,11 +266,26 @@ async fn typed(device: &DeviceContext<'_>, invoice: &Secret) -> Result<bool, Ada
 }
 
 /// The word in `invoice.check`, or `None` while the app shows none.
+///
+/// The app withdraws the word whenever it judges the field again, and the
+/// whole form when it leaves after a submission, so a word found by one
+/// look can be gone by the read. A failed read of a readout that has left
+/// is no word yet; one that is still there is a real failure.
 async fn check_word(device: &DeviceContext<'_>) -> Result<Option<String>, AdapterError> {
     if !present(device, Ids::INVOICE_CHECK).await? {
         return Ok(None);
     }
-    let word = label(device, Ids::INVOICE_CHECK).await?.trim().to_owned();
+    let word = match device.ui.label_of(Ids::INVOICE_CHECK).await {
+        Ok(word) => word,
+        Err(_) if !present(device, Ids::INVOICE_CHECK).await? => return Ok(None),
+        Err(e) => {
+            return Err(AdapterError::infrastructure(format!(
+                "read `{}`: {e}",
+                Ids::INVOICE_CHECK
+            )));
+        }
+    };
+    let word = word.trim().to_owned();
     Ok((!word.is_empty()).then_some(word))
 }
 

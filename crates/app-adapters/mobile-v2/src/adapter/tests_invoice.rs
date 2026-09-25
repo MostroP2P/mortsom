@@ -407,3 +407,18 @@ async fn an_unknown_verdict_word_is_a_contract_breach() {
     assert!(error.message.contains("probably-fine"), "{error}");
     assert_eq!(submits(&ui), 0);
 }
+
+/// The app withdraws its word whenever it judges the field again, and the
+/// whole form when it leaves after a submission. A word found by one look
+/// and gone by the read is no word yet, not a failure (2026-09-25, Web:
+/// the form left for the trade detail between the two).
+#[tokio::test]
+async fn a_verdict_that_vanishes_as_it_is_read_is_no_verdict_yet() {
+    let (ui, a) = judged_form("valid", true).await;
+    ui.vanishes_after(Ids::INVOICE_CHECK, 1);
+
+    let verdict = submit(&ui, &a).await.unwrap();
+
+    assert_eq!(verdict, InvoiceSubmission::Accepted { check: None });
+    assert_eq!(submits(&ui), 1);
+}
