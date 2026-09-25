@@ -34,33 +34,78 @@ pub(crate) async fn read(session: &Session, id: &str) -> Result<String, UiError>
 }
 
 /// Text replacement is idempotent; every transition uses a new lookup.
+///
+/// `timeout` bounds the wait for a field at rest and the start of each new
+/// edit, never an edit already sent: a slow browser can take seconds to
+/// answer the focusing click and the keys, and an edit cut short before its
+/// read-back would report as a mismatch a value the field already shows.
 pub(crate) async fn enter(
     session: &Session,
     id: &str,
     text: &str,
     timeout: Duration,
 ) -> Result<(), UiError> {
-    let result = tokio::time::timeout(timeout, async {
-        let mut tick = tokio::time::interval(Duration::from_millis(100));
-        loop {
-            tick.tick().await;
-            match replace(session, id, text).await {
-                Ok(true) => return Ok(()),
-                Ok(false) => {}
-                Err(cause) if transient(&cause) => {}
-                Err(cause) => return Err(cause),
-            }
-        }
-    })
-    .await
-    .unwrap_or_else(|_| Err(error("text-entry deadline: public value mismatch")));
+    let deadline = tokio::time::Instant::now() + timeout;
+    let result = entered(session, id, text, deadline).await;
     let redactor = mortsom_common::Redactor::new().with_secret(&mortsom_common::Secret::new(text));
     result.map_err(|cause| error(redactor.redact(&cause.to_string())))
 }
 
-async fn replace(session: &Session, id: &str, text: &str) -> Result<bool, UiError> {
+async fn entered(
+    session: &Session,
+    id: &str,
+    text: &str,
+    deadline: tokio::time::Instant,
+) -> Result<(), UiError> {
+    let mut tick = tokio::time::interval(Duration::from_millis(100));
+    loop {
+        tick.tick().await;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(error("text-entry deadline: public value mismatch"));
+        }
+        match replace(session, id, text, deadline).await {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(cause) if transient(&cause) => {}
+            Err(cause) => return Err(cause),
+        }
+    }
+}
+
+/// One attempt: `true` once the field shows `text`. Only the look before
+/// the edit is cut at `deadline`; an edit that has begun is read back.
+async fn replace(
+    session: &Session,
+    id: &str,
+    text: &str,
+    deadline: tokio::time::Instant,
+) -> Result<bool, UiError> {
+    let ready = tokio::time::timeout_at(deadline, ready_to_edit(session, id, text)).await;
+    match ready {
+        Ok(Ok(Edit::Needed)) => {}
+        Ok(Ok(Edit::Shown)) => return Ok(true),
+        Ok(Ok(Edit::Moving)) | Err(_) => return Ok(false),
+        Ok(Err(cause)) => return Err(cause),
+    }
+    session.click(&input(session, id).await?).await?;
+    session.clear(&input(session, id).await?).await?;
+    session.send_keys(&input(session, id).await?, text).await?;
+    Ok(shows(&read(session, id).await?, text))
+}
+
+/// What the field needs before an edit may be sent.
+enum Edit {
+    /// It already shows the text.
+    Shown,
+    /// It is still moving; clicking it now could land on a neighbour.
+    Moving,
+    /// It rests and shows something else.
+    Needed,
+}
+
+async fn ready_to_edit(session: &Session, id: &str, text: &str) -> Result<Edit, UiError> {
     if shows(&read(session, id).await?, text) {
-        return Ok(true);
+        return Ok(Edit::Shown);
     }
     let node = session.find_element(Locator::XPath, &selector(id)?).await?;
     // Only the public DOM scroll operation; no app state or event injection.
@@ -80,12 +125,9 @@ async fn replace(session: &Session, id: &str, text: &str) -> Result<bool, UiErro
     let before = rect(session, &node).await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
     if rect(session, &node).await? != before {
-        return Ok(false);
+        return Ok(Edit::Moving);
     }
-    session.click(&input(session, id).await?).await?;
-    session.clear(&input(session, id).await?).await?;
-    session.send_keys(&input(session, id).await?, text).await?;
-    Ok(shows(&read(session, id).await?, text))
+    Ok(Edit::Needed)
 }
 
 /// Presses `id` once, after it has come to rest.

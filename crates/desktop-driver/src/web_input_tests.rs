@@ -315,3 +315,90 @@ async fn text_entry_never_clicks_a_field_that_is_still_moving() {
         "{requests:#?}"
     );
 }
+
+/// Typed keys that `value` answers slowly: the field shows `text` once the
+/// keys arrive, `""` before; `sends` counts the edits delivered.
+async fn slow_typing(
+    server: &MockServer,
+    shown_after: &'static str,
+) -> std::sync::Arc<std::sync::atomic::AtomicU32> {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+    };
+    let typed = Arc::new(AtomicBool::new(false));
+    let sends = Arc::new(AtomicU32::new(0));
+    Mock::given(method("POST"))
+        .and(path("/session/test/element/field/value"))
+        .respond_with({
+            let (typed, sends) = (typed.clone(), sends.clone());
+            move |_: &wiremock::Request| {
+                typed.store(true, Ordering::SeqCst);
+                sends.fetch_add(1, Ordering::SeqCst);
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"value":null}))
+                    .set_delay(Duration::from_millis(700))
+            }
+        })
+        .with_priority(1)
+        .mount(server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/session/test/element/field/property/value"))
+        .respond_with(move |_: &wiremock::Request| {
+            let shown = if typed.load(Ordering::SeqCst) {
+                shown_after
+            } else {
+                ""
+            };
+            ResponseTemplate::new(200).set_body_json(json!({"value":shown}))
+        })
+        .mount(server)
+        .await;
+    sends
+}
+
+/// The deadline bounds starting an edit, never one already sent. A slow
+/// browser took 2 s to answer the focusing click on a replacement payout
+/// invoice (2026-09-25, `payout_fails_then_replaced` on Web): the keys were
+/// typed as the 5 s deadline passed, the field showed the whole invoice, and
+/// the entry was reported as a value mismatch without being read back.
+#[tokio::test]
+async fn an_edit_still_answering_at_the_deadline_is_read_back_not_abandoned() {
+    let (server, session) = fixture().await;
+    let sends = slow_typing(&server, "lnbcrt1").await;
+
+    enter(
+        &session,
+        "invoice.text",
+        "lnbcrt1",
+        Duration::from_millis(400),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(sends.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+/// Past the deadline an edit the field did not take fails, and no new one
+/// starts: the bound still holds, it just never cuts a delivered edit.
+#[tokio::test]
+async fn no_new_edit_starts_once_the_deadline_has_passed() {
+    let (server, session) = fixture().await;
+    let sends = slow_typing(&server, "ignored").await;
+
+    let failure = enter(
+        &session,
+        "invoice.text",
+        "lnbcrt1",
+        Duration::from_millis(400),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        failure.to_string().contains("text-entry deadline"),
+        "{failure}"
+    );
+    assert_eq!(sends.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
