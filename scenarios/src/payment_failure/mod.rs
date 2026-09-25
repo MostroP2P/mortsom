@@ -8,7 +8,7 @@
 
 use mortsom_app_contract::{Capability, OrderReference, OrderState};
 use mortsom_common::Actor;
-use mortsom_scenario_kit::actions::{self, BuyerInvoice};
+use mortsom_scenario_kit::actions::{self, BuyerInvoice, Refusal};
 use mortsom_scenario_kit::context::{Context, HoldInvoiceState, ScenarioError};
 
 use crate::flow;
@@ -64,10 +64,17 @@ pub async fn payout_fails_then_replaced(ctx: &Context) -> Result<(), ScenarioErr
     Ok(())
 }
 
+/// The app's word for an invoice that expires within the daemon's window.
+const EXPIRES_TOO_SOON: &str = "expires-too-soon";
+/// The app's word for an invoice it lets through.
+const VALID: &str = "valid";
+
 /// Bob hands in an invoice that expires before the daemon's declared
-/// floor. The daemon refuses it, the app keeps the form open and says why,
-/// and the order stays taken and waiting for an invoice; a proper one is
-/// then accepted. No value moves; the cleanup sweep closes the order.
+/// floor. It is refused: by the app, which never sends it once the node's
+/// capabilities have reached it, or before that by the daemon. Either way
+/// the order stays taken and waiting for an invoice; a proper one, which
+/// the app calls valid, is then accepted. No value moves; the cleanup
+/// sweep closes the order.
 pub async fn payout_invoice_below_expiry_floor(ctx: &Context) -> Result<(), ScenarioError> {
     let floor = ctx
         .limits
@@ -88,10 +95,25 @@ pub async fn payout_invoice_below_expiry_floor(ctx: &Context) -> Result<(), Scen
         BuyerInvoice::Expiring { secs: floor / 2 },
     )
     .await?;
+    if let Refusal::App { check } = &refused.refusal
+        && check != EXPIRES_TOO_SOON
+    {
+        return Err(ScenarioError::product(format!(
+            "the app refused an invoice below the expiry floor as `{check}`, not `{EXPIRES_TOO_SOON}`"
+        )));
+    }
     // Still taken, still waiting for Bob's invoice, on both sides.
     actions::wait_app_label(ctx, Actor::Bob, &order, WAITING_INVOICE).await?;
     actions::wait_app_state(ctx, Actor::Alice, &order, OrderState::Taken).await?;
-    actions::provide_buyer_invoice(ctx, Actor::Bob, &order).await?;
+    let accepted =
+        actions::submit_accepted_buyer_invoice(ctx, Actor::Bob, &order, BuyerInvoice::Standard)
+            .await?;
+    if accepted.check.as_deref() != Some(VALID) {
+        return Err(ScenarioError::product(format!(
+            "the app sent a proper invoice without judging it `{VALID}` (it showed {:?})",
+            accepted.check
+        )));
+    }
     actions::wait_app_state(ctx, Actor::Bob, &order, OrderState::Taken).await?;
     actions::wait_app_state(ctx, Actor::Alice, &order, OrderState::Taken).await?;
     actions::wait_relay_state(ctx, &order, OrderState::Taken).await?;

@@ -368,8 +368,10 @@ that payment cannot be made is a product surface of its own: it retries on the s
 `payment-failed`, and once the retries are spent asks for a new invoice with an `add-invoice` whose order
 still reads `settled-hold-invoice`; the app must show that request as it shows the first one, and the
 replacement goes through the same manual form. Before any of that, an invoice the daemon will not be able
-to pay in time is refused at submission (`invoice_expiration_window`, declared to the run as
-`payout_invoice_min_expiry_secs`). And a payee who never settles what the daemon pays holds an HTLC open
+to pay in time is refused (`invoice_expiration_window`, declared to the run as
+`payout_invoice_min_expiry_secs`): by the app, which judges an invoice against the node's capabilities before
+sending it and names the rule it breaks in `invoice.check`, or, while those capabilities have not reached
+the app, by the daemon at submission. And a payee who never settles what the daemon pays holds an HTLC open
 on the daemon's node for each payout; the daemon caps how many unresolved payouts one destination may
 hold (`max_inflight_payouts_per_destination`) and lets the next one wait, settled escrow and all, until a
 slot frees.
@@ -385,7 +387,7 @@ show failed with no settled record, whatever the order came to.
 | Scenario | Narrative | Required evidence |
 |---|---|---|
 | `payout_fails_then_replaced` | Alice creates, Bob takes and invoices, Alice funds, Bob reports fiat sent. Bob withdraws his invoice on his node. Alice releases. | The hold settles once on Alice's node at the release. The daemon fails to pay, retries as declared, then asks Bob for a new invoice: his app shows `waiting-invoice` again. Bob hands in a replacement through the manual form; both apps show completion, the book `success`, the replacement settled once on Bob's node and the withdrawn invoice failed with no settled record. |
-| `payout_invoice_below_expiry_floor` | Alice creates, Bob takes and hands in an invoice whose lifetime is half the declared floor. | The daemon refuses it (`CantDo`); Bob's app keeps the form open with the reason as `invoice.error`, and the order stays taken and waiting for his invoice on both sides. A proper invoice is then accepted: both apps taken, the book `in-progress`. The refused invoice never settles. No payment; the cleanup sweep closes the order. |
+| `payout_invoice_below_expiry_floor` | Alice creates, Bob takes and hands in an invoice whose lifetime is half the declared floor. | It is refused, and the verdict is waited for, never read once. Bob's app refuses it before sending it: `invoice.check` reads `expires-too-soon` and `invoice.submit` stays disabled. While the node's capabilities have not reached the app it cannot judge the expiry, and the daemon refuses it instead (`CantDo`): the form stays open with the reason as `invoice.error`. Either way the order stays taken and waiting for his invoice on both sides. A proper invoice is then judged `valid` by the app and accepted: both apps taken, the book `in-progress`. The refused invoice never settles. No payment; the cleanup sweep closes the order. |
 | `payout_slots_capped_per_destination` | One more funded trade than the declared cap, each with a hold invoice on Bob's node as the payout invoice, all reported fiat sent. Alice releases them in turn. | Each release settles that hold once on Alice's node. Up to the cap, each hold invoice on Bob's node turns `accepted`: the payout is in flight and held. The next one stays `open` for the whole quiet window: nothing was dispatched to it. Bob settles the first; its payout lands, and the held-back payout is dispatched on its own (its invoice turns `accepted`). Bob settles the rest; every payout settles once, every trade completes on both apps and on the book. |
 
 Rules for every scenario:

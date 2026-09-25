@@ -605,8 +605,9 @@ pub use buyer_invoice::BuyerInvoice;
 #[path = "actions/payout.rs"]
 mod payout;
 pub use payout::{
-    RejectedInvoice, expect_hold_invoice_stays, expect_payout_never_settled, release_held_payouts,
-    settle_buyer_hold_invoice, submit_rejected_buyer_invoice, supersede_buyer_invoice,
+    AcceptedInvoice, Refusal, RejectedInvoice, expect_hold_invoice_stays,
+    expect_payout_never_settled, release_held_payouts, settle_buyer_hold_invoice,
+    submit_accepted_buyer_invoice, submit_rejected_buyer_invoice, supersede_buyer_invoice,
     wait_hold_invoice,
 };
 

@@ -256,7 +256,12 @@ async fn a_refused_invoice_is_superseded_in_the_journal_and_withdrawn_on_the_nod
     .unwrap();
 
     assert_eq!(refused.hash, hash());
-    assert_eq!(refused.reason, "The node rejected this invoice.");
+    assert_eq!(
+        refused.refusal,
+        Refusal::Daemon {
+            reason: "The node rejected this invoice.".into()
+        }
+    );
     assert_eq!(
         node.calls.lock().unwrap().as_slice(),
         ["issue expiring 60".to_owned(), format!("cancel {}", hash())]
@@ -306,6 +311,117 @@ async fn an_accepted_invoice_that_should_have_been_refused_is_a_product_failure(
             .any(|call| call.starts_with("cancel"))
     );
     assert_eq!(journal.events().len(), 1, "prepared, never superseded");
+}
+
+/// Since app `86a8c81` the app judges an invoice before sending it. Its
+/// refusal is an answer as much as the daemon's: the invoice never left,
+/// and it is withdrawn and superseded all the same, so nothing can ever
+/// pay it and a proper one can follow.
+#[tokio::test]
+async fn an_invoice_the_app_refuses_is_superseded_and_withdrawn_too() {
+    let node = Arc::new(Node::default());
+    let adapter = Arc::new(Verdict(
+        StateAdapter(Mutex::new(OrderState::Taken)),
+        InvoiceSubmission::RefusedByApp {
+            check: "expires-too-soon".into(),
+        },
+    ));
+    let (ctx, journal) = with_node(adapter, node.clone());
+
+    let refused = submit_rejected_buyer_invoice(
+        &ctx,
+        Actor::Bob,
+        &OrderReference::new("o1"),
+        BuyerInvoice::Expiring { secs: 60 },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        refused.refusal,
+        Refusal::App {
+            check: "expires-too-soon".into()
+        }
+    );
+    assert_eq!(
+        node.calls.lock().unwrap().as_slice(),
+        ["issue expiring 60".to_owned(), format!("cancel {}", hash())]
+    );
+    assert!(matches!(
+        journal.events().last(),
+        Some(RecoveryEvent::PaymentSuperseded { hash: h, .. }) if *h == hash()
+    ));
+}
+
+/// A proper invoice comes back with the word the app showed as it was
+/// sent, and stays the payment the journal expects.
+#[tokio::test]
+async fn a_proper_invoice_is_accepted_with_the_apps_verdict() {
+    let node = Arc::new(Node::default());
+    let adapter = Arc::new(Verdict(
+        StateAdapter(Mutex::new(OrderState::Taken)),
+        InvoiceSubmission::Accepted {
+            check: Some("valid".into()),
+        },
+    ));
+    let (ctx, journal) = with_node(adapter, node.clone());
+
+    let accepted = submit_accepted_buyer_invoice(
+        &ctx,
+        Actor::Bob,
+        &OrderReference::new("o1"),
+        BuyerInvoice::Standard,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(accepted.hash, hash());
+    assert_eq!(accepted.check.as_deref(), Some("valid"));
+    assert!(
+        !node
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call.starts_with("cancel"))
+    );
+    assert!(matches!(
+        journal.events().as_slice(),
+        [RecoveryEvent::PaymentExpected { hash: h, .. }] if *h == hash()
+    ));
+}
+
+/// Either side refusing an invoice that should pass is the product failure
+/// the step exists to catch.
+#[tokio::test]
+async fn a_proper_invoice_either_side_refuses_is_a_product_failure() {
+    for verdict in [
+        InvoiceSubmission::RefusedByApp {
+            check: "wrong-amount".into(),
+        },
+        InvoiceSubmission::Rejected {
+            reason: "The node rejected this invoice.".into(),
+        },
+    ] {
+        let node = Arc::new(Node::default());
+        let adapter = Arc::new(Verdict(
+            StateAdapter(Mutex::new(OrderState::Taken)),
+            verdict,
+        ));
+        let (ctx, _) = with_node(adapter, node);
+
+        let error = submit_accepted_buyer_invoice(
+            &ctx,
+            Actor::Bob,
+            &OrderReference::new("o1"),
+            BuyerInvoice::Standard,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error.category, FailureCategory::Product, "{error}");
+        assert!(error.message.contains("refused"), "{error}");
+    }
 }
 
 #[tokio::test]

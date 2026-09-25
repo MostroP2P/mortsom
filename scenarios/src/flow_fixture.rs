@@ -61,8 +61,15 @@ pub struct Misbehaviour {
     pub solver_reports_another_order: bool,
     /// A payout to a withdrawn invoice settles anyway.
     pub pays_withdrawn_invoices: bool,
-    /// A buyer invoice below the expiry floor is accepted.
+    /// A buyer invoice below the expiry floor is accepted by the daemon.
     pub accepts_short_invoices: bool,
+    /// The node's capabilities reach the app too late to judge a short
+    /// invoice, which then goes to the daemon.
+    pub capabilities_arrive_late: bool,
+    /// The app refuses a short invoice naming some other rule.
+    pub refuses_for_another_rule: bool,
+    /// The app never publishes `valid` for a proper invoice.
+    pub never_judges_valid: bool,
     /// Payouts to one destination are dispatched past the cap.
     pub ignores_payout_cap: bool,
     /// A cancel of an order that never went active is never published:
