@@ -8,7 +8,7 @@ use mortsom_app_contract::{
 };
 use mortsom_common::Secret;
 
-use crate::screens::{self, label, nav, onboarding, orders, settings, wallet};
+use crate::screens::{self, invoice, label, nav, onboarding, orders, settings, wallet};
 use crate::selectors::Ids;
 
 /// Profile name.
@@ -179,7 +179,7 @@ impl AppAdapter for MobileV2Adapter {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<u64, AdapterError> {
-        orders::buyer_invoice_amount(device, order).await
+        invoice::buyer_invoice_amount(device, order).await
     }
 
     async fn provide_buyer_invoice(
@@ -188,7 +188,7 @@ impl AppAdapter for MobileV2Adapter {
         order: &OrderReference,
         invoice: Option<&Secret>,
     ) -> Result<Option<Secret>, AdapterError> {
-        orders::provide_buyer_invoice(device, order, invoice).await
+        invoice::provide_buyer_invoice(device, order, invoice).await
     }
 
     async fn submit_buyer_invoice(
@@ -197,7 +197,7 @@ impl AppAdapter for MobileV2Adapter {
         order: &OrderReference,
         invoice: &Secret,
     ) -> Result<InvoiceSubmission, AdapterError> {
-        orders::submit_buyer_invoice(device, order, invoice).await
+        invoice::submit_buyer_invoice(device, order, invoice).await
     }
 
     async fn confirm_fiat_sent(
