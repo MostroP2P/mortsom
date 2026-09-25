@@ -770,3 +770,6 @@ async fn resumed_payout_pending_waits_for_completion_without_attempting_cancella
     assert!(summary.cleanup.as_ref().unwrap().is_clean());
     assert!(adapter.cancelled.lock().unwrap().is_empty());
 }
+
+#[path = "recovery_payments.rs"]
+mod payments;
