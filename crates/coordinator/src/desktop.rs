@@ -300,6 +300,11 @@ pub fn build_command(
     if let Some(secs) = order_expiry_secs {
         args.push(format!("--dart-define=MORTSOM_ORDER_EXPIRY_SECS={secs}"));
     }
+    // The engine (CanvasKit) comes from the bundle, not gstatic.com: a
+    // client must never depend on the internet to draw its first frame.
+    if platform == Platform::Web {
+        args.push("--no-web-resources-cdn".to_owned());
+    }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     Command::new("env", &args)
 }
@@ -333,6 +338,18 @@ mod tests {
             cmd.args
                 .contains(&"--dart-define=MORTSOM_RELAYS=ws://127.0.0.1:7001".into())
         );
+    }
+
+    /// Flutter's Web build loads CanvasKit from gstatic.com unless told
+    /// otherwise; a dropped fetch left Bob's page blank before the app ran
+    /// (2026-09-25, `pending_order_expires` on Web). The bundle carries its
+    /// own copy, served from the run's loopback origin.
+    #[test]
+    fn web_build_loads_its_engine_from_the_bundle_not_a_cdn() {
+        let web = build_command(Path::new("/app"), Platform::Web, "public", 7001, None);
+        assert!(web.args.contains(&"--no-web-resources-cdn".into()));
+        let linux = build_command(Path::new("/app"), Platform::Linux, "public", 7001, None);
+        assert!(!linux.args.iter().any(|arg| arg.contains("web-resources")));
     }
 }
 

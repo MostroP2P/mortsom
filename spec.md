@@ -199,7 +199,9 @@ input call is not proof that the app accepted the value.
 
 ### 6.2 Web
 
-The app is built with `flutter build web`, including its Rust/WASM bundle, and driven through W3C WebDriver.
+The app is built with `flutter build web --no-web-resources-cdn`, including its Rust/WASM bundle, and driven
+through W3C WebDriver. The bundle carries its own CanvasKit, so the engine loads from the run's loopback origin,
+never from a CDN.
 
 Mortsom serves the bundle on loopback with `Cross-Origin-Opener-Policy: same-origin` and
 `Cross-Origin-Embedder-Policy: require-corp`, limits requests to the bundle root, and owns every request task.
