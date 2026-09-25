@@ -430,14 +430,22 @@ impl AppAdapter for Adapter {
         order: &OrderReference,
         invoice: &Secret,
     ) -> Result<InvoiceSubmission, AdapterError> {
-        let lifetime = expiry_secs_of(invoice).unwrap();
-        let accepts_short = self
-            .state
-            .lock()
-            .unwrap()
-            .misbehaviour
-            .accepts_short_invoices;
-        if lifetime < EXPIRY_FLOOR_SECS && !accepts_short {
+        let short = expiry_secs_of(invoice).unwrap() < EXPIRY_FLOOR_SECS;
+        let odd = self.state.lock().unwrap().misbehaviour;
+        // The app judges an invoice first once the node's capabilities
+        // are in; one it refuses is never sent.
+        if short && !odd.capabilities_arrive_late {
+            self.action("invoice-refused-by-app", device.actor);
+            let check = if odd.refuses_for_another_rule {
+                "wrong-amount"
+            } else {
+                "expires-too-soon"
+            };
+            return Ok(InvoiceSubmission::RefusedByApp {
+                check: check.into(),
+            });
+        }
+        if short && !odd.accepts_short_invoices {
             self.action("invoice-refused", device.actor);
             return Ok(InvoiceSubmission::Rejected {
                 reason: "The node rejected this invoice.".into(),
@@ -445,7 +453,10 @@ impl AppAdapter for Adapter {
         }
         self.provide_buyer_invoice(device, order, Some(invoice))
             .await?;
-        Ok(InvoiceSubmission::Accepted)
+        let judged = !short && !odd.never_judges_valid;
+        Ok(InvoiceSubmission::Accepted {
+            check: judged.then(|| "valid".into()),
+        })
     }
     async fn confirm_fiat_sent(
         &self,

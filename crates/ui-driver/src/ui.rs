@@ -110,6 +110,9 @@ pub mod tests_support {
         /// Controls that grey out once tapped, the way a submit does while
         /// the app is still working on the request.
         disabled_after_tap: Mutex<Vec<String>>,
+        /// Elements that leave the screen after answering this many more
+        /// probes; reading one that has left fails.
+        vanishing: Mutex<BTreeMap<String, u32>>,
         end_failures: Mutex<u32>,
     }
 
@@ -220,6 +223,24 @@ pub mod tests_support {
             self.swallowed.lock().unwrap().insert(id.into(), taps);
         }
 
+        /// `id` answers `probes` more presence probes and then leaves the
+        /// screen, and a read of it fails from then on: a readout the app
+        /// withdraws between the look that found it and the read of it.
+        pub fn vanishes_after(&self, id: &str, probes: u32) {
+            self.vanishing.lock().unwrap().insert(id.into(), probes);
+        }
+
+        /// Counts one probe of a vanishing `id`, removing it on the last.
+        fn probe_vanishing(&self, id: &str) {
+            let mut vanishing = self.vanishing.lock().unwrap();
+            if let Some(left) = vanishing.get_mut(id) {
+                *left = left.saturating_sub(1);
+                if *left == 0 {
+                    self.present.lock().unwrap().retain(|p| p != id);
+                }
+            }
+        }
+
         /// `id` accepts one press and then greys out: the app took the
         /// request and is still working on it.
         pub fn disables_after_tap(&self, id: &str) {
@@ -284,7 +305,9 @@ pub mod tests_support {
     #[async_trait]
     impl UiSession for ScriptedUi {
         async fn exists(&self, id: &str) -> Result<bool, UiError> {
-            Ok(self.drawn(id) && self.has(id) && !self.covered(id))
+            let there = self.drawn(id) && self.has(id) && !self.covered(id);
+            self.probe_vanishing(id);
+            Ok(there)
         }
         async fn exists_anywhere(&self, id: &str) -> Result<bool, UiError> {
             // An element the screen has not drawn yet is absent below the
@@ -401,6 +424,13 @@ pub mod tests_support {
             Ok(!self.disabled.lock().unwrap().iter().any(|d| d == id))
         }
         async fn label_of(&self, id: &str) -> Result<String, UiError> {
+            if self.vanishing.lock().unwrap().contains_key(id) && !self.has(id) {
+                return Err(UiError::WaitTimeout {
+                    accessibility_id: id.into(),
+                    condition: "not found",
+                    timeout: Duration::ZERO,
+                });
+            }
             {
                 let mut pending = self.label_pending.lock().unwrap();
                 if let Some((interim, left)) = pending.get_mut(id) {

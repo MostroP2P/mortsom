@@ -114,7 +114,9 @@ async fn a_submitted_buyer_invoice_reports_the_daemons_verdict() {
         .submit_buyer_invoice(&device(&ui), &OrderReference::new("o1"), &supplied)
         .await
         .unwrap();
-    assert_eq!(verdict, InvoiceSubmission::Accepted);
+    // The fixture draws no `invoice.check`: an invoice the app has not
+    // judged goes to the daemon, whose verdict is the only one.
+    assert_eq!(verdict, InvoiceSubmission::Accepted { check: None });
 
     let ui = app_without_a_wallet();
     ui.on_tap(Ids::INVOICE_SUBMIT, &[Ids::INVOICE_ERROR]);
@@ -270,7 +272,7 @@ async fn a_stale_invoice_error_is_not_read_as_the_new_verdict() {
         .await
         .unwrap();
 
-    assert_eq!(verdict, InvoiceSubmission::Accepted);
+    assert_eq!(verdict, InvoiceSubmission::Accepted { check: None });
     assert_eq!(
         ui.calls()
             .iter()
@@ -278,4 +280,145 @@ async fn a_stale_invoice_error_is_not_read_as_the_new_verdict() {
             .count(),
         1
     );
+}
+
+/// Taps of `invoice.submit` so far.
+fn submits(ui: &FakeUi) -> usize {
+    ui.calls()
+        .iter()
+        .filter(|call| *call == "tap invoice.submit")
+        .count()
+}
+
+/// The manual form with the app's own verdict on what was typed.
+async fn judged_form(word: &str, submit_enabled: bool) -> (FakeUi, MobileV2Adapter) {
+    let ui = app_without_a_wallet();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    ui.present(&[Ids::INVOICE_CHECK]);
+    ui.label(Ids::INVOICE_CHECK, word);
+    if !submit_enabled {
+        ui.disables(&[Ids::INVOICE_SUBMIT]);
+    }
+    (ui, a)
+}
+
+async fn submit(ui: &FakeUi, a: &MobileV2Adapter) -> Result<InvoiceSubmission, AdapterError> {
+    a.submit_buyer_invoice(
+        &device(ui),
+        &OrderReference::new("o1"),
+        &Secret::new("lnbc1000n1mortsominvoice"),
+    )
+    .await
+}
+
+/// Since app `86a8c81` the app judges an invoice before sending it. One it
+/// refuses keeps submit disabled and is never sent: the verdict is the
+/// app's word, and nothing is pressed.
+#[tokio::test]
+async fn an_invoice_the_app_refuses_is_never_submitted() {
+    let (ui, a) = judged_form("expires-too-soon", false).await;
+
+    let verdict = submit(&ui, &a).await.unwrap();
+
+    assert_eq!(
+        verdict,
+        InvoiceSubmission::RefusedByApp {
+            check: "expires-too-soon".into()
+        }
+    );
+    assert_eq!(submits(&ui), 0);
+    assert!(!ui.calls().join("\n").contains("mortsominvoice"));
+}
+
+/// An invoice the app judged good is sent, and the acceptance carries the
+/// word the app showed when it was.
+#[tokio::test]
+async fn an_invoice_the_app_judged_valid_is_sent_with_its_verdict() {
+    let (ui, a) = judged_form("valid", true).await;
+
+    let verdict = submit(&ui, &a).await.unwrap();
+
+    assert_eq!(
+        verdict,
+        InvoiceSubmission::Accepted {
+            check: Some("valid".into())
+        }
+    );
+    assert_eq!(submits(&ui), 1);
+}
+
+/// The node's capabilities can land as submit is pressed: on the web the
+/// press reaches a button that has just greyed out and does nothing, and
+/// the app's refusal is what the form then shows. That is the app's
+/// verdict, not a missing one.
+#[tokio::test]
+async fn a_refusal_that_lands_as_submit_is_pressed_is_the_apps_verdict() {
+    let ui = app_without_a_wallet();
+    let a = adapter();
+    a.onboard(&device(&ui), &env()).await.unwrap();
+    a.create_order(&device(&ui), &draft()).await.unwrap();
+    // The press leaves the form where it was: no trade detail comes.
+    ui.on_tap(Ids::INVOICE_SUBMIT, &[Ids::INVOICE_CHECK]);
+    ui.on_tap_hide(Ids::INVOICE_SUBMIT, &[Ids::ORDER_STATUS, Ids::ORDER_ID]);
+    ui.on_tap_relabel(Ids::INVOICE_SUBMIT, Ids::INVOICE_CHECK, "expires-too-soon");
+    ui.disables_after_tap(Ids::INVOICE_SUBMIT);
+
+    let verdict = submit(&ui, &a).await.unwrap();
+
+    assert_eq!(
+        verdict,
+        InvoiceSubmission::RefusedByApp {
+            check: "expires-too-soon".into()
+        }
+    );
+    assert_eq!(submits(&ui), 1);
+}
+
+/// A refusal word is a promise that submit is disabled. A form that names
+/// a broken rule and still takes a press is not believed either way.
+#[tokio::test]
+async fn a_refusal_word_with_submit_still_enabled_is_a_contract_breach() {
+    let (ui, a) = judged_form("expires-too-soon", true).await;
+
+    let error = submit(&ui, &a).await.unwrap_err();
+
+    assert_eq!(
+        error.category,
+        mortsom_common::FailureCategory::AutomationContract
+    );
+    assert!(error.message.contains("expires-too-soon"), "{error}");
+    assert_eq!(submits(&ui), 0);
+}
+
+/// The word set is closed: a word the contract does not define is never
+/// read as a pass or as a refusal.
+#[tokio::test]
+async fn an_unknown_verdict_word_is_a_contract_breach() {
+    let (ui, a) = judged_form("probably-fine", true).await;
+
+    let error = submit(&ui, &a).await.unwrap_err();
+
+    assert_eq!(
+        error.category,
+        mortsom_common::FailureCategory::AutomationContract
+    );
+    assert!(error.message.contains("probably-fine"), "{error}");
+    assert_eq!(submits(&ui), 0);
+}
+
+/// The app withdraws its word whenever it judges the field again, and the
+/// whole form when it leaves after a submission. A word found by one look
+/// and gone by the read is no word yet, not a failure (2026-09-25, Web:
+/// the form left for the trade detail between the two).
+#[tokio::test]
+async fn a_verdict_that_vanishes_as_it_is_read_is_no_verdict_yet() {
+    let (ui, a) = judged_form("valid", true).await;
+    ui.vanishes_after(Ids::INVOICE_CHECK, 1);
+
+    let verdict = submit(&ui, &a).await.unwrap();
+
+    assert_eq!(verdict, InvoiceSubmission::Accepted { check: None });
+    assert_eq!(submits(&ui), 1);
 }

@@ -97,7 +97,7 @@ async fn an_invoice_below_the_expiry_floor_is_refused_and_a_proper_one_accepted(
         [
             "create:alice",
             "take:bob",
-            "invoice-refused:bob",
+            "invoice-refused-by-app:bob",
             "cancel-invoice:bob",
             "invoice:bob",
         ]
@@ -120,10 +120,75 @@ async fn an_invoice_below_the_expiry_floor_is_refused_and_a_proper_one_accepted(
     assert_eq!(fixture.context.cleanup.pending().len(), 1);
 }
 
+/// Before the node's capabilities reach the app it cannot judge the
+/// expiry, and the short invoice goes to the daemon, which refuses it.
+/// That refusal answers the scenario as well as the app's would.
+#[tokio::test]
+async fn a_short_invoice_the_app_cannot_judge_yet_is_refused_by_the_daemon() {
+    let fixture = Fixture::with(Misbehaviour {
+        capabilities_arrive_late: true,
+        ..Default::default()
+    })
+    .await;
+
+    (scenario("payout_invoice_below_expiry_floor").run)(&fixture.context)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        fixture.actions(),
+        [
+            "create:alice",
+            "take:bob",
+            "invoice-refused:bob",
+            "cancel-invoice:bob",
+            "invoice:bob",
+        ]
+    );
+    assert_eq!(fixture.relay_states(ORDER), ["pending", "in-progress"]);
+}
+
+/// The app refusing the short invoice for some other rule is not the
+/// expiry floor at work.
+#[tokio::test]
+async fn an_app_that_refuses_a_short_invoice_for_another_rule_fails() {
+    let fixture = Fixture::with(Misbehaviour {
+        refuses_for_another_rule: true,
+        ..Default::default()
+    })
+    .await;
+
+    let error = (scenario("payout_invoice_below_expiry_floor").run)(&fixture.context)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.category, mortsom_common::FailureCategory::Product);
+    assert!(error.message.contains("wrong-amount"), "{error}");
+}
+
+/// A proper invoice sent without the app ever calling it `valid` proves
+/// nothing about the app's check.
+#[tokio::test]
+async fn an_app_that_never_judges_the_proper_invoice_valid_fails() {
+    let fixture = Fixture::with(Misbehaviour {
+        never_judges_valid: true,
+        ..Default::default()
+    })
+    .await;
+
+    let error = (scenario("payout_invoice_below_expiry_floor").run)(&fixture.context)
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.category, mortsom_common::FailureCategory::Product);
+    assert!(error.message.contains("valid"), "{error}");
+}
+
 /// A daemon that takes an invoice below its own floor is a product failure.
 #[tokio::test]
 async fn a_daemon_that_accepts_a_short_invoice_fails() {
     let fixture = Fixture::with(Misbehaviour {
+        capabilities_arrive_late: true,
         accepts_short_invoices: true,
         ..Default::default()
     })

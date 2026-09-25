@@ -320,8 +320,8 @@ Payment failures, all with Alice as seller and Bob as buyer and Bob's invoices i
 holds for him: `payout_fails_then_replaced` (Bob withdraws his payout invoice before Alice releases; the
 daemon settles the escrow, fails to pay, retries as it declares and asks for a new invoice, which Bob hands
 in; only the replacement settles), `payout_invoice_below_expiry_floor` (an invoice shorter than the
-declared floor is refused with the reason kept on screen as `invoice.error`; a proper one is then accepted;
-no payment) and `payout_slots_capped_per_destination` (one more funded trade than the declared
+declared floor is refused, by the app before sending it or, while it cannot judge yet, by the daemon; a
+proper one the app calls `valid` is then accepted; no payment) and `payout_slots_capped_per_destination` (one more funded trade than the declared
 per-destination cap, each paying out to a hold invoice Bob never settles; the daemon dispatches up to the
 cap and holds the next payout back until Bob settles one, then every trade completes). The limits come
 from `stack/limits.toml` (`payout_invoice_min_expiry_secs`, `max_inflight_payouts_per_destination`); the
