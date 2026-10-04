@@ -54,7 +54,7 @@ messages, error strings, and artifacts. No exceptions.
   bumping a crate, check crates.io (`cargo info <crate>`) for the current
   stable release. Do not add a crate at an older version because a reference
   project uses it.
-- Exception: `mostro-core` is pinned exactly (`=0.14.5`), which transitively
+- Exception: `mostro-core` is pinned exactly (`=0.17.0`), which transitively
   fixes `nostr`/`nostr-sdk` at 0.45.1 and `nwc` at 0.45.0. Every Nostr-touching
   crate must stay on that line until the pin moves; move the pin in its own
   commit.
