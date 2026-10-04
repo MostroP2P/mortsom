@@ -145,8 +145,8 @@ The stack is the Compose project in [stack/](stack/): a regtest `bitcoind`, LND 
 Carol (the daemon's escrow node), an ephemeral Nostr relay on `127.0.0.1:7000` and `mostrod`. Nothing else is
 needed: the chain mines its own coins.
 
-`stack up` pulls the pinned daemon release (`mostrop2p/mostro:v0.18.7`, the version the accepted cells ran
-against), starts the chain, nodes and relay, funds the nodes, opens one balanced channel from each actor to
+`stack up` pulls the pinned daemon release (`mostrop2p/mostro:v0.19.2`; the cells in the acceptance ledger
+ran against v0.18.7), starts the chain, nodes and relay, funds the nodes, opens one balanced channel from each actor to
 Carol, mints a daemon identity for this stack, starts the daemon as your user and waits for its info event on
 the relay. It is re-runnable: funded wallets and open channels are left alone. Every `up` mints a new daemon
 identity, after which both clients must be rebuilt, so do not run it before every scenario.
