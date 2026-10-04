@@ -103,7 +103,7 @@ To watch the daemon at the same time: `docker logs -f mortsom-regtest-mostro-1`,
 ## Invariants to preserve
 
 UI-only business actions. Rust harness; app-owned contract changes live in the app repository.
-`mostro-core =0.14.5` pinned. Durable intent before any irreversible action; never resubmit an order or
+`mostro-core =0.17.0` pinned. Durable intent before any irreversible action; never resubmit an order or
 retry an uncertain payment. Budget reserved before payment. Escrow settled is not completed. A screen is
 never taken as proof the daemon closed an order: the relay must show it. Cleanup restores original
 identities, exact bundle and stack; missing or tampered storage refuses. SIGKILL fails closed. Commit each
