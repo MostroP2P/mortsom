@@ -419,6 +419,15 @@ cargo test --workspace --all-targets
 cargo llvm-cov --workspace --all-targets --fail-under-lines 80
 ```
 
+The identifier contract test (`selectors_match_the_v2_app_contract`) checks every identifier the adapter
+uses against the app's registry (`lib/core/automation/automation_ids.dart`) in the checkout
+`MORTSOM_APP_CHECKOUT` names; a relative path is read from the workspace root. Unset, the test skips and
+says so; set to a checkout without the registry, it fails. CI checks out the app's `main` for it.
+
+```sh
+MORTSOM_APP_CHECKOUT=../appv2 cargo test -p mortsom-adapter-mobile-v2 selectors_match_the_v2_app_contract
+```
+
 Everything in this repository is written in English. Read [AGENTS.md](AGENTS.md) and [spec.md](spec.md)
 before contributing.
 
