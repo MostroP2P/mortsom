@@ -17,10 +17,10 @@ pub(super) const SCREEN_POLL: std::time::Duration = std::time::Duration::from_mi
 
 /// How long a control that only has to draw has to answer before the tap
 /// is repeated.
-const TAP_PATIENCE: std::time::Duration = std::time::Duration::from_secs(3);
+pub(super) const TAP_PATIENCE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// How many times a tap is repeated before it is a contract failure.
-const TAP_ATTEMPTS: usize = 3;
+pub(super) const TAP_ATTEMPTS: usize = 3;
 
 /// Waits for `id` within the UI timeout; a missing element is an
 /// automation-contract failure.
