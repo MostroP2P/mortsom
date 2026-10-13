@@ -49,7 +49,17 @@ pub async fn create(
     // request. Submit once, then resolve its outcome through public UI.
     tap(device, Ids::ORDER_CREATE_SUBMIT).await?;
     if super::appears_within(device, Ids::ORDER_CONFIRM_HOME, device.ui_timeout).await? {
-        tap(device, Ids::ORDER_CONFIRM_HOME).await?;
+        // Closing the new order's screen pops back to the book, which is
+        // drawn a moment after the screen leaves. Until then that screen's
+        // back is still up, and a look for the book would press it just as
+        // it goes: wait for the book the close returns to.
+        super::tap_unless_taken(
+            device,
+            Ids::ORDER_CONFIRM_HOME,
+            Ids::ORDER_ADD_FAB,
+            super::TAP_PATIENCE,
+        )
+        .await?;
     }
     let id = new_trade_id(device, &known_before).await?;
     let state = observe(device, &OrderReference::with_kind(id.clone(), draft.kind))

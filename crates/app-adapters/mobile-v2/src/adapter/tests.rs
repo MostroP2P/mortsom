@@ -832,6 +832,8 @@ async fn recovery_refuses_an_empty_identity_without_generating_a_replacement() {
     assert!(!ui.calls().iter().any(|call| call == "tap keys.generate"));
 }
 
+#[path = "tests_create.rs"]
+mod create;
 #[path = "tests_invoice.rs"]
 mod invoice;
 #[path = "tests_onboarding.rs"]
