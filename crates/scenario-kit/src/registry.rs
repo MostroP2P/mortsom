@@ -34,11 +34,41 @@ pub struct ScenarioDef {
     /// True when the scenario needs a dispute solver registered with the
     /// daemon: a run that cannot provide one skips it rather than fail it.
     pub needs_solver: bool,
+    /// Interruptions the scenario must cause beyond what the app offers; a
+    /// run whose clients or relay cannot cause one skips it rather than
+    /// fail it.
+    pub needs: &'static [Need],
     /// Body.
     pub run: ScenarioFn,
 }
 
 inventory::collect!(ScenarioDef);
+
+/// An interruption a scenario causes that lies outside the app itself: in
+/// the client platform or in the run's relay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Need {
+    /// Sending the app to the background and bringing it back.
+    Background,
+    /// Cutting the client's network and restoring it.
+    Connectivity,
+    /// Rotating the device.
+    Rotation,
+    /// Restarting the run relay, or replaying events into it.
+    RelayFaults,
+}
+
+impl Need {
+    /// Stable kebab-case name, as reports print it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Need::Background => "background",
+            Need::Connectivity => "connectivity",
+            Need::Rotation => "rotation",
+            Need::RelayFaults => "relay-faults",
+        }
+    }
+}
 
 /// Every registered scenario, sorted by name.
 pub fn all() -> Vec<&'static ScenarioDef> {
@@ -287,6 +317,7 @@ mod tests {
             moves_value: false,
             needs_app_wallet: false,
             needs_solver: false,
+            needs: &[],
             run: noop,
         }
     }

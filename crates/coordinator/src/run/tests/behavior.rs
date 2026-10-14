@@ -422,6 +422,7 @@ inventory::submit! {
         moves_value: false,
         needs_app_wallet: false,
         needs_solver: false,
+        needs: &[],
         run: flaky_infra,
     }
 }
@@ -453,6 +454,7 @@ inventory::submit! {
         moves_value: false,
         needs_app_wallet: false,
         needs_solver: false,
+        needs: &[],
         run: noop,
     }
 }

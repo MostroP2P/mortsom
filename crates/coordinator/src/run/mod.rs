@@ -5,6 +5,7 @@
 //! sweeps cleanup, and writes the joined evidence.
 
 mod execute;
+mod needs;
 mod observer;
 mod preflight;
 pub(crate) mod recovery;
@@ -171,6 +172,9 @@ pub async fn run_scenarios(
     );
     summary.results.extend(gated);
     let (runnable, gated) = gate_solver(&summary.app_profile, runnable, options.stack.is_some());
+    summary.results.extend(gated);
+    let (runnable, gated) =
+        needs::gate_needs(&summary.app_profile, runnable, needs::DESKTOP_PROVIDES);
     summary.results.extend(gated);
     if runnable.is_empty() {
         return finish(&artifacts, &mut summary).map(|()| summary);
