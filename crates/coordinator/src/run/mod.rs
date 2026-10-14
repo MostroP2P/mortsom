@@ -173,8 +173,11 @@ pub async fn run_scenarios(
     summary.results.extend(gated);
     let (runnable, gated) = gate_solver(&summary.app_profile, runnable, options.stack.is_some());
     summary.results.extend(gated);
-    let (runnable, gated) =
-        needs::gate_needs(&summary.app_profile, runnable, needs::DESKTOP_PROVIDES);
+    let (runnable, gated) = needs::gate_needs(
+        &summary.app_profile,
+        runnable,
+        deps.desktop_factory.interruptions(),
+    );
     summary.results.extend(gated);
     if runnable.is_empty() {
         return finish(&artifacts, &mut summary).map(|()| summary);

@@ -283,6 +283,11 @@ impl DesktopFactory for FakeClients {
     ) -> Result<Arc<dyn UiSession>, String> {
         Ok(Arc::new(FakeSession(self.0.clone())))
     }
+    /// The fake session backgrounds, cuts its network and rotates on request.
+    fn interruptions(&self) -> &'static [mortsom_scenario_kit::registry::Need] {
+        use mortsom_scenario_kit::registry::Need;
+        &[Need::Background, Need::Connectivity, Need::Rotation]
+    }
 }
 impl FakeSession {
     /// A WebDriver request against a driver that stopped answering returns

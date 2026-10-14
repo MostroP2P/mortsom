@@ -4,10 +4,9 @@
 use super::*;
 
 /// Every Phase 5 scenario that moves no value runs end to end against the
-/// fakes; the two relay-replay ones fail honestly because nothing listens
-/// on the fake relay port, the relay restart fails because the stack relay
-/// is not the run's to restart, and the sweep closes what scenarios left
-/// open.
+/// fakes; the relay restart and the two relay replays are skipped, since the
+/// stack relay is not the run's to restart or replay into (spec 8.1), and
+/// the sweep closes what scenarios left open.
 #[tokio::test]
 async fn phase5_no_value_scenarios_run_against_fakes() {
     mortsom_scenarios::link();
@@ -43,13 +42,7 @@ async fn phase5_no_value_scenarios_run_against_fakes() {
             || name == "relay_restart_at_taken"
         {
             assert!(
-                matches!(
-                    outcome,
-                    Outcome::Failed {
-                        category: mortsom_common::FailureCategory::Relay,
-                        ..
-                    }
-                ),
+                matches!(outcome, Outcome::Skipped { reason } if reason.contains("relay-faults")),
                 "{name}: {outcome:?}"
             );
         } else if name == "nwc_cancel_payment" {
@@ -81,7 +74,9 @@ async fn phase5_no_value_scenarios_run_against_fakes() {
             .lock()
             .unwrap()
             .iter()
-            .any(|id| id == "o11"),
+            // Fake ids count every order the run created; the three relay
+            // scenarios are skipped and create none.
+            .any(|id| id == "o8"),
         "the republished order of taker_cancel_at_taken is closed by the sweep: {:?}",
         adapter.cancelled.lock().unwrap()
     );

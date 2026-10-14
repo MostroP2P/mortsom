@@ -1,17 +1,14 @@
-//! Interruptions a run can cause. Desktop clients (Linux, Web) cannot be
-//! sent to the background, cut off the network or rotated, and a run's
-//! relay is the stack's, which it neither restarts nor replays into: a
-//! scenario that needs one of those is skipped with the reason, never
-//! failed (spec 8.1).
+//! Interruptions a run can cause: what its client sessions offer
+//! (`DesktopFactory::interruptions`; Linux and Web offer none) and never a
+//! relay fault, since a run's relay is the stack's, which it neither
+//! restarts nor replays into. A scenario that needs anything else is
+//! skipped with the reason, never failed (spec 8.1).
 
 use std::time::Duration;
 
 use mortsom_scenario_kit::registry::{Need, ScenarioDef};
 
 use super::{Outcome, ScenarioResult};
-
-/// What every run on Linux or Web can cause: none of the interruptions.
-pub(super) const DESKTOP_PROVIDES: &[Need] = &[];
 
 /// Splits `selected` into the scenarios whose needs `provided` covers and
 /// the rest, skipped with the needs that are missing.
@@ -39,7 +36,7 @@ pub(super) fn gate_needs<'a>(
             app_version: None,
             outcome: Outcome::Skipped {
                 reason: format!(
-                    "{} needs {}, which Linux and Web clients and the stack's relay cannot cause",
+                    "{} needs {}, which this run's clients and relay cannot cause",
                     def.name,
                     missing.join(", ")
                 ),
@@ -80,8 +77,7 @@ mod tests {
         let backgrounds = def("backgrounds", &[Need::Background, Need::RelayFaults]);
         let plain = def("plain", &[]);
 
-        let (runnable, skipped) =
-            gate_needs("mobile-v2", vec![&backgrounds, &plain], DESKTOP_PROVIDES);
+        let (runnable, skipped) = gate_needs("mobile-v2", vec![&backgrounds, &plain], &[]);
 
         assert_eq!(
             runnable.iter().map(|d| d.name).collect::<Vec<_>>(),
