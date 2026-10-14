@@ -103,3 +103,51 @@ async fn a_trade_opening_on_the_invoice_form_offers_adding_it_and_cancelling() {
 
     assert_eq!(actions, ["add-invoice", "cancel"]);
 }
+
+/// A screen that never draws any way back has already spent the UI timeout
+/// in that wait; it is reported then, naming what was looked for, instead
+/// of waiting for the book once more.
+#[tokio::test]
+async fn a_screen_with_no_way_back_is_reported_after_one_wait() {
+    let ui = FakeUi::default();
+
+    let error = nav::go_home(&device(&ui)).await.unwrap_err();
+
+    assert_eq!(
+        error.category,
+        mortsom_common::FailureCategory::AutomationContract
+    );
+    assert!(
+        error.message.contains(Ids::NAV_ORDER_BOOK),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains(Ids::APPBAR_BACK),
+        "{}",
+        error.message
+    );
+}
+
+/// A form may draw its marker before its cancel; the cancel a moment later
+/// is still on offer.
+#[tokio::test]
+async fn a_form_cancel_drawn_after_the_form_is_still_offered() {
+    let ui = FakeUi::default();
+    let order = OrderReference::with_kind("o1", OrderKind::Sell);
+    ui.present(&[Ids::ORDER_ADD_FAB, Ids::NAV_TRADES]);
+    ui.on_tap(Ids::NAV_TRADES, &["trades.item.o1"]);
+    ui.on_tap(
+        "trades.item.o1",
+        &[Ids::PAY_INVOICE_TEXT, Ids::PAY_ORDER_ID, Ids::PAY_CANCEL],
+    );
+    ui.label(Ids::PAY_ORDER_ID, "o1");
+    ui.appears_after(Ids::PAY_CANCEL, 2);
+
+    let actions = adapter()
+        .visible_actions(&device(&ui), &order)
+        .await
+        .unwrap();
+
+    assert_eq!(actions, ["pay-invoice", "cancel"]);
+}

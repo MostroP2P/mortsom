@@ -552,7 +552,9 @@ pub async fn visible_actions(
     if let Some((order_id, action, cancel)) = form {
         verify_order_id(device, order_id, order).await?;
         let mut actions = vec![action.to_owned()];
-        if present(device, cancel).await? {
+        // The form can draw its marker a frame before its cancel: one look
+        // would report a way out the form does offer as missing.
+        if super::appears_within(device, cancel, ID_SETTLE).await? {
             actions.push("cancel".to_owned());
         }
         return Ok(actions);
