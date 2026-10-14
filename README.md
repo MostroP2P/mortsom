@@ -31,14 +31,18 @@ cargo build -p mortsom-coordinator --bin mortsom
 ./target/debug/mortsom run happy_sell    # builds app v2, starts Alice and Bob, runs one trade
 ./target/debug/mortsom run happy_buy --platform web
 ./target/debug/mortsom run --tag smoke   # the cheap subset: three scenarios, one run each
+./target/debug/mortsom run               # the whole catalogue: every scenario, one run each
 ./target/debug/mortsom list              # scenarios by family; --details adds capabilities and deadlines
 ```
 
 Every `run` creates fresh Alice and Bob identities, runs one scenario, resolves every order it created and
 removes its clients. `--tag` runs a whole family the same way: one run per scenario, in sequence, with a
-report at the end. Every reported scenario carries the wall-clock it took, so a slow cell is visible
-without opening an artifact. Results land in `artifacts/<run-id>/`. The exit status is non-zero when a run
-fails.
+report at the end. `run` with neither a scenario name nor `--tag` runs every scenario `list` shows, in
+alphabetical order, the same way; a scenario the platform cannot drive is skipped with its reason, never
+failed. If a run is refused before it starts (no stack, a pending recovery journal), the refusal holds for the
+rest of the batch, which is reported as not run. Every reported scenario carries the wall-clock it took, so a
+slow cell is visible without opening an artifact. Results land in `artifacts/<run-id>/`. The exit status is
+non-zero when a run fails.
 
 ## Requirements
 
@@ -403,7 +407,7 @@ no old evidence or protected storage is changed. A new unresolved run blocks the
 |---|---|
 | `stack up [--mostro-image <ref> \| --mostro-ref <branch-or-pr-url>]`, `stack status`, `stack logs [service]`, `stack down` | Regtest environment lifecycle, daemon selection and service logs |
 | `doctor --platform linux\|web` | Read-only prerequisite and readiness checks |
-| `run <scenario>... [--tag <family>] [--platform linux\|web]` | Scenarios with isolated clients, caps and cleanup; one run per scenario |
+| `run [<scenario>...] [--tag <family>] [--platform linux\|web]` | Scenarios with isolated clients, caps and cleanup; one run per scenario; every scenario when none is named |
 | `cleanup <run-id>` | Recover a run's identities and orders |
 | `recovery abandon <run-id> --reason stack-destroyed --confirm-run <run-id>` | Close a journal whose regtest stack is provably destroyed; the run stays failed |
 | `list` | Registered scenarios |

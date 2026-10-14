@@ -162,8 +162,16 @@ pub fn required_on(requires: &[Capability], manual: ManualPayments) -> Vec<Capab
 }
 
 /// Selects scenarios by explicit names and/or a tag. Unknown names are an
-/// error, never silently ignored.
+/// error, never silently ignored. Naming neither selects every scenario,
+/// in registry order.
 pub fn select(names: &[String], tag: Option<&str>) -> Result<Vec<&'static ScenarioDef>, String> {
+    if names.is_empty() && tag.is_none() {
+        let every = all();
+        if every.is_empty() {
+            return Err("no scenario is registered".into());
+        }
+        return Ok(every);
+    }
     let mut selected = Vec::new();
     for name in names {
         let def = find(name).ok_or_else(|| format!("unknown scenario `{name}`"))?;
@@ -185,9 +193,6 @@ pub fn select(names: &[String], tag: Option<&str>) -> Result<Vec<&'static Scenar
                 selected.push(def);
             }
         }
-    }
-    if selected.is_empty() {
-        return Err("no scenario selected: pass names or --tag".into());
     }
     Ok(selected)
 }
@@ -328,7 +333,6 @@ mod tests {
         assert!(find("nope").is_none());
         assert!(select(&["nope".into()], None).is_err());
         assert!(select(&[], Some("no-such-tag")).is_err());
-        assert!(select(&[], None).is_err());
         let by_tag = select(&[], Some("kit-selftest")).unwrap_or_default();
         assert_eq!(by_tag.len(), 1);
         assert!(validate().is_ok());
@@ -340,5 +344,15 @@ mod tests {
         let selected = select(&names, None).unwrap();
 
         assert_eq!(selected.len(), 1, "a scenario must not run twice");
+    }
+
+    #[test]
+    fn naming_neither_a_scenario_nor_a_tag_selects_every_scenario_in_registry_order() {
+        // Act
+        let selected = select(&[], None).unwrap();
+
+        // Assert
+        let names = |defs: &[&ScenarioDef]| defs.iter().map(|d| d.name).collect::<Vec<_>>();
+        assert_eq!(names(&selected), names(&all()));
     }
 }

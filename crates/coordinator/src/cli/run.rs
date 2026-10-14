@@ -17,7 +17,9 @@ pub(super) async fn run_command(
     } = selection;
     let mut prepared = super::prepared::InvocationBuild::default();
     mortsom_scenarios::link();
-    let selected = match mortsom_scenario_kit::registry::select(&scenarios, tag.as_deref()) {
+    let selected = match mortsom_scenario_kit::registry::validate()
+        .and_then(|()| mortsom_scenario_kit::registry::select(&scenarios, tag.as_deref()))
+    {
         Ok(selected) => selected,
         Err(error) => {
             eprintln!("{error}");
@@ -45,6 +47,7 @@ pub(super) async fn run_command(
     // A run starts fresh actors and resolves everything it created before
     // it ends, so a family is a sequence of such runs, one scenario each,
     // and never one run sharing Alice and Bob across scenarios.
+    println!("{}", preamble(&selected));
     let mut batch = Batch::default();
     for def in &selected {
         let attempt = run_once(
@@ -74,6 +77,16 @@ pub(super) async fn run_command(
     }
     println!("{}", batch.render());
     batch.code()
+}
+
+/// What a batch is about to start: one run per scenario, each under its
+/// own spend cap, so the operator sees the size before the first one.
+fn preamble(selected: &[&mortsom_scenario_kit::registry::ScenarioDef]) -> String {
+    let moving = selected.iter().filter(|def| def.moves_value).count();
+    format!(
+        "{} scenarios, {moving} move sats: one run each, in this order, each under its own spend cap",
+        selected.len()
+    )
 }
 
 /// What one `run` invocation was asked to do.
@@ -504,6 +517,27 @@ mod batch_tests {
                 std::time::Duration::ZERO
             },
         }
+    }
+
+    /// A batch says how many runs it starts, and how many move sats, before
+    /// the first one does: each run has its own spend cap.
+    #[test]
+    fn a_batch_announces_how_many_runs_it_starts_and_how_many_move_sats() {
+        // Arrange
+        mortsom_scenarios::link();
+        let every = mortsom_scenario_kit::registry::all();
+        let moving = every.iter().filter(|def| def.moves_value).count();
+
+        // Act
+        let text = preamble(&every);
+
+        // Assert
+        assert!(moving > 0 && moving < every.len());
+        assert!(
+            text.contains(&format!("{} scenarios, {moving} move sats", every.len())),
+            "{text}"
+        );
+        assert!(text.contains("its own spend cap"), "{text}");
     }
 
     /// A family is read to find the slow cell, so every line carries the

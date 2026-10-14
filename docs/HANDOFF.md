@@ -95,6 +95,7 @@ ls $HOME/.local/state/mortsom/recovery/            # a journal not closed blocks
 
 ./target/debug/mortsom run happy_sell --platform linux
 ./target/debug/mortsom run --tag payment-failure --platform web
+./target/debug/mortsom run                        # every scenario, one run each
 ./target/debug/mortsom run --tag smoke --app-ref https://github.com/MostroP2P/app/pull/<n>
 ```
 

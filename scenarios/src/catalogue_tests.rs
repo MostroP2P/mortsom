@@ -160,3 +160,32 @@ fn every_interruption_scenario_declares_what_it_needs() {
         assert!(!def.needs.is_empty(), "{name} declares no need");
     }
 }
+
+#[test]
+fn naming_nothing_selects_every_family_and_never_the_same_scenario_twice() {
+    // Arrange
+    crate::link();
+    let families = [
+        "happy-path",
+        "cancellation",
+        "expiration",
+        "dispute",
+        "payment-failure",
+        "recovery",
+    ];
+
+    // Act
+    let every: Vec<_> = registry::select(&[], None)
+        .unwrap()
+        .into_iter()
+        .map(|def| def.name)
+        .collect();
+
+    // Assert
+    let distinct: BTreeSet<_> = every.iter().copied().collect();
+    assert_eq!(distinct.len(), every.len(), "{every:?}");
+    for family in families {
+        assert!(tagged(family).is_subset(&distinct), "{family}");
+    }
+    assert!(distinct.contains("unauthorized_actions_at_taken"));
+}

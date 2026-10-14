@@ -181,8 +181,9 @@ impl Listing {
             "{}\n",
             paint(
                 DIM,
-                "run one by name: mortsom run <scenario> -- or a whole set \
-                 by any word above: mortsom run --tag smoke"
+                "run one by name: mortsom run <scenario> -- a whole set by \
+                 any word above: mortsom run --tag smoke -- or every \
+                 scenario: mortsom run"
             )
         ));
         if detail.is_full() && !self.baseline.is_empty() {

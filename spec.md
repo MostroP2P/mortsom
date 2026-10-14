@@ -96,6 +96,9 @@ mortsom run happy_buy --platform web
 mortsom run happy_sell --app-ref main
 mortsom run --tag happy-path --platform web --app-ref https://github.com/MostroP2P/app/pull/123
 
+# The whole catalogue: every registered scenario, one run each.
+mortsom run
+
 # Explicit developer checkout (including local changes).
 mortsom run happy_sell --app-source ../mobilev2
 
@@ -261,7 +264,10 @@ narrative; scenario bodies contain no AT-SPI or WebDriver detail.
 
 The catalogue is organised in families. Each scenario carries its family name as a tag, and `--tag` runs
 a whole family; `smoke` cuts across families to mark the cheap subset (`happy_sell`, `happy_buy` and
-`cancel_before_taken`). `mortsom list` prints every scenario with its tags and requirements.
+`cancel_before_taken`). `mortsom list` prints every scenario with its tags and requirements. `run` with
+neither scenario names nor `--tag` selects every registered scenario, in registry (alphabetical) order. Every
+selection runs one scenario per run, each with fresh actors; an unknown name or a tag no scenario carries is
+an error, never a smaller run.
 
 | Family | Tag | What it covers |
 |---|---|---|
@@ -439,6 +445,10 @@ These rules protect real funds, even on regtest, and are never relaxed for conve
 
 - Reserve budget before any payment: the actual invoice amount plus the fee ceiling. Per-order and cumulative
   caps are mandatory; a missing cap is an error. Retries and resets never reset the cumulative budget.
+- Caps and the mainnet guard bind each run. A `run` that selects several scenarios (a tag, or the whole
+  catalogue when nothing is named) is a sequence of runs, each cleared and capped on its own, so it can spend
+  up to its value-moving scenarios times `max_run_spend_sats`; it says how many scenarios it starts, and how
+  many move sats, before the first one.
 - Write durable submission or payment intent before the irreversible UI or RPC action.
 - Never blindly resubmit an order after a missing confirmation, and never retry a payment whose outcome is
   uncertain. An invoked payment without a terminal result stays in flight until accounting succeeds.
