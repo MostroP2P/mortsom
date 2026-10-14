@@ -89,7 +89,7 @@ async fn resolve_source(
 ) -> Result<(Config, Option<crate::app_source::PreparedSource>), String> {
     let mut config = config.clone();
     let managed = if needs_build && config.mobile.source_dir.is_empty() {
-        crate::doctor::desktop::require_tools(platform, xvfb, host)?;
+        crate::doctor::desktop::require_tools(platform, xvfb, host).await?;
         let selector =
             crate::app_source::Selector::parse(config.mobile.app_ref.as_deref().unwrap_or("main"))
                 .map_err(|error| error.to_string())?;
