@@ -13,6 +13,7 @@
 use std::process::ExitCode;
 use std::time::Duration;
 
+use mortsom_common::Lane;
 use mortsom_scenario_kit::outcome::Outcome;
 
 use crate::style::{self, Rgb, Style};
@@ -46,6 +47,8 @@ pub(super) struct Footer<'a> {
     /// The configured artifacts directory; `None` when no run started, so
     /// the report never points at a directory nothing was written to.
     pub artifacts_dir: Option<&'a str>,
+    /// The configured lane; `None` when no run loaded a configuration.
+    pub lane: Option<Lane>,
 }
 
 /// `[FLAKY]`, the widest badge, and the space after it.
@@ -123,6 +126,19 @@ impl Report {
         });
     }
 
+    /// Records a run that started, then failed without a summary.
+    /// It ran, so it is a failure with a run to read, never a refusal; the
+    /// next scenario still gets its own run.
+    pub(super) fn broke(&mut self, name: &str, run_id: &str, message: &str) {
+        self.rows.push(Row {
+            name: name.to_owned(),
+            status: Status::Failed,
+            duration: Duration::ZERO,
+            run_id: Some(run_id.to_owned()),
+            detail: vec![message.to_owned()],
+        });
+    }
+
     /// Records a run the environment refused to start; `reason` says why.
     pub(super) fn refuse(&mut self, name: &str, reason: &str) {
         self.refused = true;
@@ -168,16 +184,18 @@ impl Report {
         }
         out.push_str(&rule);
         out.push_str(&self.counts_line(footer.elapsed, style));
+        if let Some(lane) = footer.lane {
+            out.push_str(&label_line(style, "lane", &lane.to_string()));
+        }
         if let Some(dir) = footer.artifacts_dir {
             let artifacts = match runs.as_slice() {
                 [run] => std::path::Path::new(dir).join(run),
                 _ => std::path::PathBuf::from(dir),
             };
-            out.push_str(&format!(
-                "{}{} {}\n",
-                style::INDENT,
-                style.dim(&style::pad("artifacts", LABEL_WIDTH)),
-                artifacts.display()
+            out.push_str(&label_line(
+                style,
+                "artifacts",
+                &artifacts.display().to_string(),
             ));
         }
         out.push_str(&self.verdict(style));
@@ -363,6 +381,15 @@ fn classify(run: &RunView) -> (Status, Vec<String>) {
         ));
     }
     (Status::Failed, detail)
+}
+
+/// `lane      local`: a dim label in a shared column, then its value.
+fn label_line(style: Style, label: &str, value: &str) -> String {
+    format!(
+        "{}{} {value}\n",
+        style::INDENT,
+        style.dim(&style::pad(label, LABEL_WIDTH))
+    )
 }
 
 /// `✗ 3 scenarios failed`, pluralised and coloured.

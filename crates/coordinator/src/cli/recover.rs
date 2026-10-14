@@ -290,7 +290,9 @@ async fn recover(
         scenarios: Vec::new(),
         tag: None,
     };
-    let summary = run_scenarios(&config, &options, &deps).await?;
+    let summary = run_scenarios(&config, &options, &deps)
+        .await
+        .map_err(|error| error.to_string())?;
     print!("{}", summary.checks.render_with_color(use_color()));
     if !summary.passed {
         // Only what the run left open: discovery may have found a candidate.

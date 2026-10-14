@@ -15,7 +15,9 @@ pub use observer::{LiveObserver, ObserverFactory};
 pub use report::RunSummary;
 use report::finish;
 mod desktop_factory;
+mod error;
 pub use desktop_factory::{DesktopFactory, DesktopServer, RealDesktopFactory};
+pub use error::RunError;
 mod farm;
 use farm::Farm;
 pub use farm::{DesktopOptions, TeardownItem};
@@ -127,11 +129,11 @@ pub async fn run_scenarios(
     config: &Config,
     options: &RunOptions,
     deps: &RunDeps<'_>,
-) -> Result<RunSummary, String> {
+) -> Result<RunSummary, RunError> {
     let selected = if options.desktop.resume {
         vec![&recovery::CLEANUP]
     } else {
-        select(&options.scenarios, options.tag.as_deref())?
+        select(&options.scenarios, options.tag.as_deref()).map_err(RunError::NotStarted)?
     };
     // A scenario needing an interruption the clients cannot cause never
     // reaches a payment: it is skipped before spending is cleared, so it
@@ -141,13 +143,13 @@ pub async fn run_scenarios(
         selected,
         deps.desktop_factory.interruptions(),
     );
-    let clearance = clear_value_moving(config, deps, &selected)?;
+    let clearance = clear_value_moving(config, deps, &selected).map_err(RunError::NotStarted)?;
     let mainnet = match clearance {
         Clearance::Mainnet(c) => Some(c),
         Clearance::NotNeeded | Clearance::PendingRegtest => None,
     };
     let caps = SpendCaps::new(config.run.max_order_sats, config.run.max_run_spend_sats)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| RunError::NotStarted(e.to_string()))?;
 
     let run_id = RunId::new();
     let redactor = Redactor::new().with_secrets(config.wallets.secrets());
@@ -156,8 +158,14 @@ pub async fn run_scenarios(
         run_id.clone(),
         redactor.clone(),
     )
-    .map_err(|e| format!("cannot create artifacts: {e}"))?;
-    attach_run_log(artifacts.dir(), redactor).map_err(|e| format!("cannot attach run log: {e}"))?;
+    .map_err(|e| RunError::NotStarted(format!("cannot create artifacts: {e}")))?;
+    // From here on the run exists: a failure names it, never a refusal.
+    let started = |message: String| RunError::Started {
+        run_id: run_id.clone(),
+        message,
+    };
+    attach_run_log(artifacts.dir(), redactor)
+        .map_err(|e| started(format!("cannot attach run log: {e}")))?;
     info!(run = %run_id, lane = %config.run.lane, scenarios = ?selected.iter().map(|d| d.name).collect::<Vec<_>>(), "run starting");
     let mut summary = report::initial_summary(
         config,
@@ -165,11 +173,12 @@ pub async fn run_scenarios(
         run_id.clone(),
         deps.adapter.profile().name,
         mainnet.is_some(),
-    )?;
+    )
+    .map_err(started)?;
     if options.desktop.resume {
         summary.command = "cleanup".into();
     }
-    report::record_environment(&artifacts, &summary)?;
+    report::record_environment(&artifacts, &summary).map_err(started)?;
     let (runnable, gated) = gate_capabilities(
         deps.adapter.as_ref(),
         &selected,
@@ -183,22 +192,28 @@ pub async fn run_scenarios(
     summary.results.extend(gated);
     summary.results.extend(needs_gated);
     if runnable.is_empty() {
-        return finish(&artifacts, &mut summary).map(|()| summary);
+        return finish(&artifacts, &mut summary)
+            .map(|()| summary)
+            .map_err(started);
     }
 
     if !preflight::check(config, options, deps, &mut summary).await {
         preflight::reject(&runnable, &mut summary);
-        return finish(&artifacts, &mut summary).map(|()| summary);
+        return finish(&artifacts, &mut summary)
+            .map(|()| summary)
+            .map_err(started);
     }
 
-    report::record_environment(&artifacts, &summary)?;
+    report::record_environment(&artifacts, &summary).map_err(started)?;
     let mut options = options.clone();
     if let Err(error) = recovery::prepare(config, &mut options, &run_id, deps) {
         summary
             .checks
             .push("protected-recovery", CheckStatus::Fail, error);
         preflight::reject(&runnable, &mut summary);
-        return finish(&artifacts, &mut summary).map(|()| summary);
+        return finish(&artifacts, &mut summary)
+            .map(|()| summary)
+            .map_err(started);
     }
     if let Some(isolation) = &options.recovery_isolation {
         summary.checks.push(
@@ -237,14 +252,18 @@ pub async fn run_scenarios(
             });
         }
         world.tear_down(&mut summary).await;
-        return finish(&artifacts, &mut summary).map(|()| summary);
+        return finish(&artifacts, &mut summary)
+            .map(|()| summary)
+            .map_err(started);
     }
     for def in &runnable {
         let result = world.execute(config, def, &mut summary).await;
         summary.results.push(result);
     }
     world.tear_down(&mut summary).await;
-    finish(&artifacts, &mut summary).map(|()| summary)
+    finish(&artifacts, &mut summary)
+        .map(|()| summary)
+        .map_err(started)
 }
 
 /// How value-moving scenarios were cleared to run.

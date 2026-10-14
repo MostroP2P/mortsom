@@ -557,7 +557,8 @@ the actor's virtual display, never the operator's desktop.
 `run` prints one report for the whole invocation, after its last run: a row per scenario with its outcome
 (`PASS`, `FAIL`, `SKIP`, `FLAKY` for a pass that needed a retry, `STOP` for one a refused run kept from
 starting) and the time it took, why under anything that did not pass (and, among several runs, which run
-failed), then the counts, the total time, the artifacts directory and a verdict. The scenario narrative
+failed), then the counts, the total time, the lane, the artifacts directory and a verdict. A run that fails
+after its id exists is a failure that names its run, never a refusal. The scenario narrative
 (timeline steps, checks, payments) goes to the run's `run.log` and `timeline.md`, not the terminal, unless
 `RUST_LOG` asks for it.
 

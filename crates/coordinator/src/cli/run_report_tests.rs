@@ -1,7 +1,7 @@
 //! What the `run` report must say, and what colour may and may not change.
 
 use super::*;
-use mortsom_common::FailureCategory;
+use mortsom_common::{FailureCategory, Lane};
 
 const PLAIN: Style = Style::plain();
 
@@ -34,6 +34,7 @@ fn footer() -> Footer<'static> {
     Footer {
         elapsed: Duration::from_secs(760),
         artifacts_dir: Some("artifacts"),
+        lane: Some(Lane::Local),
     }
 }
 
@@ -222,14 +223,74 @@ fn a_refusal_before_any_run_points_at_no_artifacts() {
     let footer = Footer {
         elapsed: Duration::from_millis(30),
         artifacts_dir: None,
+        lane: None,
     };
 
     // Act
     let rendered = report.render(&footer, PLAIN);
 
-    // Assert
+    // Assert: no config was loaded, so neither directory nor lane is known.
     assert!(!rendered.contains("artifacts"), "{rendered}");
+    assert!(!rendered.contains("lane"), "{rendered}");
     assert!(rendered.contains("1 scenario not run"), "{rendered}");
+}
+
+#[test]
+fn a_run_that_broke_after_starting_fails_and_names_its_run() {
+    // Arrange
+    let mut report = Report::default();
+    report.broke(
+        "happy_sell",
+        "20261014T193526Z-e7111efd3bc9",
+        "cannot write summary.json: disk full",
+    );
+
+    // Act
+    let rendered = report.render(&footer(), PLAIN);
+
+    // Assert: it ran, so it is a failure with a run to read, not a refusal.
+    assert_eq!(report.code(), ExitCode::from(1));
+    assert!(rendered.contains("[FAIL]  happy_sell"), "{rendered}");
+    assert!(rendered.contains("cannot write summary.json"), "{rendered}");
+    assert!(
+        rendered.contains("artifacts artifacts/20261014T193526Z-e7111efd3bc9"),
+        "{rendered}"
+    );
+    assert!(!rendered.contains("not run"), "{rendered}");
+}
+
+#[test]
+fn a_run_that_broke_among_several_names_its_run_under_its_row() {
+    // Arrange
+    let mut report = Report::default();
+    report.record("happy_buy", run(Some(Outcome::Passed), 90));
+    report.broke("happy_sell", "20261014T200000Z-0c0234f5afe3", "disk full");
+
+    // Act
+    let rendered = report.render(&footer(), PLAIN);
+
+    // Assert
+    assert!(
+        rendered.contains("run 20261014T200000Z-0c0234f5afe3"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn the_footer_names_the_lane() {
+    // Arrange
+    let mut report = Report::default();
+    report.record("happy_sell", run(Some(Outcome::Passed), 252));
+    let canary = Footer {
+        lane: Some(Lane::Canary),
+        ..footer()
+    };
+
+    // Act
+    let rendered = report.render(&canary, PLAIN);
+
+    // Assert (AGENTS.md: every report names its lane).
+    assert!(rendered.contains("lane      canary\n"), "{rendered}");
 }
 
 #[test]

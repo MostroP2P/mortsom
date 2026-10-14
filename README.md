@@ -57,6 +57,7 @@ The console report is a table and a verdict, nothing more:
           relay cannot cause
   ──────────────────────────────────────────────────────────────────────────────────────────────
   1 passed  1 failed  1 skipped  |  9m 05s
+  lane      local
   artifacts artifacts
   ✗ 1 scenario failed
   failed: happy_sell

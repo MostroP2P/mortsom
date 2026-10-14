@@ -921,7 +921,9 @@ async fn run_with_observer(
     confirm: bool,
     observer: &dyn ObserverFactory,
 ) -> Result<RunSummary, String> {
-    run_on_nodes(world, adapter, options, confirm, observer, "regtest").await
+    run_on_nodes(world, adapter, options, confirm, observer, "regtest")
+        .await
+        .map_err(|error| error.to_string())
 }
 
 async fn run_on_nodes(
@@ -931,7 +933,7 @@ async fn run_on_nodes(
     confirm: bool,
     observer: &dyn ObserverFactory,
     network: &'static str,
-) -> Result<RunSummary, String> {
+) -> Result<RunSummary, RunError> {
     let clients = FakeClients(adapter.flags.clone());
     let docker = Arc::new(FakeDocker::default());
     let env = env_for(world, confirm);

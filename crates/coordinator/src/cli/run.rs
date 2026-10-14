@@ -1,6 +1,7 @@
 //! Run command wiring and actor wallet connections.
 use super::run_report::{self, Footer, Report, RunView};
 use super::*;
+use crate::run::RunError;
 use crate::style::Style;
 use mortsom_common::check::CheckStatus;
 use mortsom_common::terminal::Stream;
@@ -29,7 +30,7 @@ pub(super) async fn run_command(
     // and never one run sharing Alice and Bob across scenarios.
     let mut prepared = super::prepared::InvocationBuild::default();
     let mut report = Report::default();
-    let mut artifacts_dir = None;
+    let mut context = None;
     for (index, def) in selected.iter().enumerate() {
         if selected.len() > 1 {
             let line = run_report::progress(index + 1, selected.len(), def.name, progress);
@@ -37,9 +38,17 @@ pub(super) async fn run_command(
         }
         let one = selection.for_scenario(def.name);
         match run_once(config_path, stack_dir, one, &mut prepared).await {
-            Attempt::Ran { summary, artifacts } => {
-                artifacts_dir.get_or_insert(artifacts);
+            Attempt::Ran { summary, run } => {
+                context.get_or_insert(run);
                 report.record(def.name, view(&summary, def.name));
+            }
+            Attempt::Broke {
+                run_id,
+                message,
+                run,
+            } => {
+                context.get_or_insert(run);
+                report.broke(def.name, &run_id, &message);
             }
             Attempt::Refused(reason) => {
                 // The refusal (a retained journal, a missing stack) holds for
@@ -52,7 +61,10 @@ pub(super) async fn run_command(
     }
     let footer = Footer {
         elapsed: started.elapsed(),
-        artifacts_dir: artifacts_dir.as_deref(),
+        artifacts_dir: context
+            .as_ref()
+            .map(|run: &RunContext| run.artifacts.as_str()),
+        lane: context.as_ref().map(|run: &RunContext| run.lane),
     };
     print!(
         "\n{}",
@@ -89,14 +101,25 @@ impl RunSelection {
 
 /// How one run ended.
 enum Attempt {
-    /// It started and ended; its summary and the artifacts directory it
-    /// wrote under.
+    /// It started and ended with a summary.
     Ran {
         summary: Box<crate::run::RunSummary>,
-        artifacts: String,
+        run: RunContext,
+    },
+    /// It started, then failed without a summary; its artifacts exist.
+    Broke {
+        run_id: String,
+        message: String,
+        run: RunContext,
     },
     /// The environment refused to start it, and why.
     Refused(String),
+}
+
+/// What a run's configuration says that the report repeats.
+struct RunContext {
+    artifacts: String,
+    lane: mortsom_common::Lane,
 }
 
 /// What the report keeps of a finished run for scenario `name`.
@@ -216,12 +239,21 @@ async fn run_once(
         stack: Some(stack),
         stack_dir: stack_dir.canonicalize().ok(),
     };
+    let run = RunContext {
+        artifacts: config.run.artifacts_dir.clone(),
+        lane: config.run.lane,
+    };
     match run_scenarios(&config, &options, &deps).await {
         Ok(summary) => Attempt::Ran {
             summary: Box::new(summary),
-            artifacts: config.run.artifacts_dir.clone(),
+            run,
         },
-        Err(error) => Attempt::Refused(error),
+        Err(RunError::Started { run_id, message }) => Attempt::Broke {
+            run_id: run_id.to_string(),
+            message,
+            run,
+        },
+        Err(RunError::NotStarted(reason)) => Attempt::Refused(reason),
     }
 }
 
