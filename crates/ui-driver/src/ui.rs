@@ -112,6 +112,8 @@ pub mod tests_support {
         disabled_after_tap: Mutex<Vec<String>>,
         /// Controls a tap makes pressable: a confirm that waits for a pick.
         on_tap_enable: Mutex<BTreeMap<String, Vec<String>>>,
+        /// Elements a tap puts on screen a number of looks later.
+        on_tap_draws_after: Mutex<BTreeMap<String, (Vec<String>, u32)>>,
         /// Elements that leave the screen after answering this many more
         /// probes; reading one that has left fails.
         vanishing: Mutex<BTreeMap<String, u32>>,
@@ -249,6 +251,17 @@ pub mod tests_support {
             self.disabled_after_tap.lock().unwrap().push(id.to_owned());
         }
 
+        /// Tapping `id` puts `appear` on screen, each missing its next
+        /// `probes` looks: a route the tap pops back to, drawn a few frames
+        /// after the one it closes has gone.
+        pub fn on_tap_draws_after(&self, id: &str, appear: &[&str], probes: u32) {
+            let appear = appear.iter().map(|s| (*s).to_owned()).collect();
+            self.on_tap_draws_after
+                .lock()
+                .unwrap()
+                .insert(id.into(), (appear, probes));
+        }
+
         /// Tapping `id` makes `enable` pressable again.
         pub fn on_tap_enable(&self, id: &str, enable: &[&str]) {
             self.on_tap_enable
@@ -379,6 +392,13 @@ pub mod tests_support {
                     .retain(|d| !enable.contains(d));
             }
             if let Some(appear) = self.on_tap.lock().unwrap().get(id).cloned() {
+                self.present.lock().unwrap().extend(appear);
+            }
+            if let Some((appear, probes)) = self.on_tap_draws_after.lock().unwrap().get(id).cloned()
+            {
+                for target in &appear {
+                    self.pending.lock().unwrap().insert(target.clone(), probes);
+                }
                 self.present.lock().unwrap().extend(appear);
             }
             if let Some(hide) = self.on_tap_hide.lock().unwrap().get(id).cloned() {
