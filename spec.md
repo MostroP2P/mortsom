@@ -113,9 +113,10 @@ included, fail before anything is built or launched.
 
 ## 5. Stack
 
-Mortsom owns its regtest environment and needs no other tool to create it. `mortsom stack up` builds the
-whole world from nothing on a machine with Docker: a regtest chain, three Lightning nodes with balanced
-channels, a Nostr relay and a `mostrod` with an identity minted for this stack. `stack status` reports it and
+Mortsom owns its regtest environment and needs no other harness to create it. `mortsom stack up` builds the
+whole world from nothing on a machine with Docker, and Git with access to GitHub to fetch the daemon's source
+(Docker alone with `--mostro-image`): a regtest chain, three Lightning nodes with balanced channels, a Nostr
+relay and a `mostrod` with an identity minted for this stack. `stack status` reports it and
 `stack down` removes it, volumes included.
 
 | Service | Role | Host port |

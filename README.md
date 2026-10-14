@@ -13,8 +13,8 @@ Accepted live cells: **Linux 2/2, Web 2/2**. Web required app v2 changes (Indexe
 upstream as MostroP2P/app#408; build the clients from the app's `main`. See [docs/acceptance-ledger.md](docs/acceptance-ledger.md) for every attempt and
 [docs/HANDOFF.md](docs/HANDOFF.md) for the current plan.
 
-The regtest stack is Mortsom's own: `mortsom stack up` builds it from nothing with Docker alone, and both
-Linux cells were re-run against it on 2026-09-09.
+The regtest stack is Mortsom's own: `mortsom stack up` builds it from nothing with Docker and Git (it fetches
+and builds Mostro's `main`), and both Linux cells were re-run against it on 2026-09-09.
 
 ## Quick start
 
