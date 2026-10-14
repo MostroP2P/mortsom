@@ -3,6 +3,7 @@
 //! ids. Events are deduplicated, sequenced and kept as an ordered log that
 //! the coordinator persists as redacted JSONL evidence.
 
+mod opener;
 mod scope;
 
 use std::collections::HashSet;
@@ -10,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::StreamExt;
-use nostr_sdk::prelude::{Client, ClientNotification, Event, RelayUrl, SubscriptionId};
+use nostr_sdk::prelude::{Client, ClientNotification, Event, Keys, RelayUrl, SubscriptionId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -57,6 +58,13 @@ pub struct ObservedEvent {
     /// `None` for direct messages.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub raw: Option<String>,
+    /// The protocol action of an actor's message to the daemon, when the run
+    /// can open it (a Mortsom-owned stack); never the message itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    /// True when that message only reads the daemon's record.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub query: bool,
 }
 
 impl ObservedEvent {
@@ -102,6 +110,9 @@ struct Inner {
     /// refreshes running at once would unsubscribe each other's work and
     /// disagree about what is live.
     refresh: tokio::sync::Mutex<()>,
+    /// The daemon's keys, held only on a stack Mortsom owns, to open the
+    /// actors' messages to it (`opener`).
+    reader: Mutex<Option<Keys>>,
     tx: broadcast::Sender<ObservedEvent>,
 }
 
@@ -147,6 +158,7 @@ impl RelayObserver {
             seen: Mutex::new(HashSet::new()),
             subscriptions: Mutex::new(Vec::new()),
             refresh: tokio::sync::Mutex::new(()),
+            reader: Mutex::new(None),
             tx,
         });
         let observer = Self {
@@ -182,6 +194,7 @@ impl RelayObserver {
                 seen: Mutex::new(HashSet::new()),
                 subscriptions: Mutex::new(Vec::new()),
                 refresh: tokio::sync::Mutex::new(()),
+                reader: Mutex::new(None),
                 tx,
             }),
             task: Arc::new(Mutex::new(None)),
@@ -259,11 +272,14 @@ impl RelayObserver {
             debug!(id = %event.id, kind = %event.kind, "event outside observer scope");
             return None;
         }
-        let mut log = lock(&self.inner.log);
         let id = event.id.to_hex();
+        // A duplicate delivery is dropped before it is opened: opening costs
+        // a signature check and a decryption.
         if !lock(&self.inner.seen).insert(id.clone()) {
             return None;
         }
+        let opened = self.open(event);
+        let mut log = lock(&self.inner.log);
         let observed = ObservedEvent {
             seq: log.len() as u64 + 1,
             received_at_ms: now_ms(),
@@ -275,6 +291,8 @@ impl RelayObserver {
             tags: event.tags.iter().map(|t| t.as_slice().to_vec()).collect(),
             content: scope::keeps_content(event.kind).then(|| event.content.clone()),
             raw: scope::keeps_content(event.kind).then(|| event.as_json()),
+            action: opened.as_ref().map(|o| o.action.clone()),
+            query: opened.is_some_and(|o| o.query),
         };
         log.push(observed.clone());
         drop(log);
@@ -282,6 +300,26 @@ impl RelayObserver {
         // the broadcast is only a wake-up for `wait_for`.
         let _ = self.inner.tx.send(observed.clone());
         Some(observed)
+    }
+
+    /// Opens the actors' messages to the daemon from now on, with its keys:
+    /// only a stack Mortsom owns holds them. Each logged message then names
+    /// its action, so a read-only query is not taken for a trade action.
+    pub fn open_actor_messages_with(&self, daemon: Keys) {
+        *lock(&self.inner.reader) = Some(daemon);
+    }
+
+    /// The action of `event` when it is an actor's message to the daemon and
+    /// the daemon's keys are held.
+    fn open(&self, event: &Event) -> Option<opener::Opened> {
+        if event.kind.as_u16() != PRIVATE_DM_KIND {
+            return None;
+        }
+        let reader = lock(&self.inner.reader);
+        let daemon = reader.as_ref()?;
+        (event.pubkey != daemon.public_key())
+            .then(|| opener::open(event, daemon))
+            .flatten()
     }
 
     /// Live stream of newly logged events.
@@ -308,6 +346,16 @@ impl RelayObserver {
             .iter()
             .filter(|e| e.seq > seq && e.kind == PRIVATE_DM_KIND && e.author != daemon)
             .cloned()
+            .collect()
+    }
+
+    /// The actors' messages after `seq` that act on a trade: every one of
+    /// them, less the read-only queries an opened message shows itself to
+    /// be. Unopened, a message counts as an action.
+    pub fn actor_actions_since(&self, seq: u64) -> Vec<ObservedEvent> {
+        self.actor_messages_since(seq)
+            .into_iter()
+            .filter(|e| !e.query)
             .collect()
     }
 

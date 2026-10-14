@@ -488,6 +488,33 @@ fn walk_text(dir: &Path) -> String {
     out
 }
 
+/// On a stack Mortsom owns the observer opens the actors' messages with the
+/// daemon key. A run that cannot read that key still runs, and says that
+/// every actor message counts as an action.
+#[tokio::test]
+async fn a_run_that_cannot_read_the_daemon_key_counts_every_message() {
+    let world = world(false);
+    let summary = run(
+        &world,
+        Arc::new(FakeAdapter::full()),
+        opts_in(&world, &["zz_runner_noop"]),
+        false,
+    )
+    .await
+    .unwrap();
+    assert!(
+        summary.checks.checks.iter().any(|check| {
+            check.name == "actor-messages"
+                && check.status == CheckStatus::Warn
+                && check
+                    .detail
+                    .contains("every actor message counts as an action")
+        }),
+        "{}",
+        summary.checks.render()
+    );
+}
+
 /// A value-moving scenario the run's clients cannot interrupt never reaches
 /// a payment, so it is skipped with its need before spending is cleared,
 /// not refused for want of mainnet authorization.

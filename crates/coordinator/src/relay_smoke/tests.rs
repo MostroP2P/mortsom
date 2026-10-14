@@ -118,6 +118,8 @@ fn event(kind: u16, tags: &[&[&str]]) -> ObservedEvent {
             .collect(),
         content: Some(String::new()),
         raw: None,
+        action: None,
+        query: false,
     }
 }
 

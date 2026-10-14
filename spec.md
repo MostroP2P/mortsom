@@ -270,11 +270,13 @@ a whole family; `smoke` cuts across families to mark the cheap subset (`happy_se
 | Expirations | `expiration` | The daemon's own clocks reaping what nobody touched |
 | Disputes | `dispute` | Disputes opened, resolved by a solver, or undone by the parties themselves |
 | Payment failures | `payment-failure` | Invoices the daemon cannot pay, how it recovers, and how many unresolved payouts it lets one payee pin |
+| Recovery | `recovery` | An app relaunched mid-trade shows the trade again and repeats no action; interruptions of the client or the relay |
 | Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
 | Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
 
-This version implements the first five families in full. The other two are roadmap (section 14): their
-tags are reserved, and no scenario carries them yet.
+This version implements the first five families in full, and of the recovery family the relaunches
+(section 8.7); its other scenarios need interruptions Linux and Web clients cannot cause and are skipped. The
+last two families are roadmap (section 14): their tags are reserved, and no scenario carries them yet.
 
 A scenario whose profile lacks a required capability is **skipped with a reason, never failed**, and a
 skipped scenario is never counted as accepted.
@@ -403,11 +405,23 @@ Rules for every scenario:
 - A form-derived observation must carry the exact public order ID. A foreign form cannot authorize a payment.
 - Negative assertions observe an explicit interval after the action, with a sequence cursor.
 - Private app keys are never extracted to decrypt messages. Evidence comes from the UI, public relay events
-  and wallet results.
+  and wallet results. On a stack Mortsom owns, the daemon key opens the actors' messages to the daemon so a
+  read-only query is told from a trade action (section 8.7); only the action is kept, never the content.
 
 New scenarios are added one family at a time, each scenario with its own row here and its own live
 acceptance per platform. The earlier twenty-scenario catalogue remains a roadmap in
 [docs/history/spec-v0.3.md](docs/history/spec-v0.3.md), section 10.
+
+### 8.7 Recovery
+
+| Scenario | Narrative | Required evidence |
+|---|---|---|
+| `restart_at_pending`, `restart_at_taken`, `restart_at_active`, `restart_at_fiat_sent`, `restart_at_completed` | The trade reaches that state; the app is force-stopped and relaunched (the maker's alone while pending, both apps otherwise). A trade relaunched while active or fiat-sent then completes as `happy_sell`; one relaunched while pending or taken is cancelled by cleanup. | Each relaunched app shows the trade in the same state, and no actor sends the daemon a trade action during the quiet window after the relaunch. |
+
+An app makes read-only queries on any launch: its own reputation (`user-info`), a session restore, its
+orders. They are not actions. On a stack Mortsom owns, the run opens each actor message to the daemon with
+the daemon key and keeps its action, never its content; a query does not count. Without the daemon key
+every actor message counts as an action, and the run records that it could not tell them apart.
 
 ## 9. Identity and isolation
 

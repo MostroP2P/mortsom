@@ -221,6 +221,7 @@ pub async fn run_scenarios(
     let resuming = options.desktop.resume;
     world.needs_solver =
         runnable.iter().any(|def| def.needs_solver) || (resuming && options.stack.is_some());
+    world.opens_actor_messages = options.stack.is_some();
     if let Err(stage) = world.bring_up(&mut summary).await {
         for def in &runnable {
             summary.results.push(ScenarioResult {
@@ -391,6 +392,9 @@ struct World<'a> {
     desktop: DesktopOptions,
     /// Whether a scenario of this run needs a dispute solver.
     needs_solver: bool,
+    /// True on a stack Mortsom owns: the observer opens the actors' messages
+    /// with the daemon key to tell a read-only query from a trade action.
+    opens_actor_messages: bool,
     /// The solver registered for this run, when one was needed.
     solver: Option<Arc<mortsom_solver::Solver>>,
 }
@@ -421,33 +425,39 @@ impl<'a> World<'a> {
             farm: None,
             desktop: options.desktop.clone(),
             needs_solver: false,
+            opens_actor_messages: false,
             solver: None,
         }
     }
 
-    /// Registers a fresh solver with the daemon, as its operator would,
-    /// and scopes the observer to it. The daemon key is read from the
-    /// stack's owner-only settings and dropped once the registration is
-    /// signed; it is never logged or kept.
-    async fn register_solver(
-        &self,
-        relay_url: &str,
-        daemon: nostr_sdk::prelude::PublicKey,
-    ) -> Result<Arc<mortsom_solver::Solver>, String> {
+    /// The daemon's key, from the stack's owner-only settings: only a stack
+    /// Mortsom owns carries it. Never logged.
+    fn daemon_key(&self) -> Result<mortsom_common::Secret, String> {
         let settings = mortsom_environment::daemon_settings::DaemonSettings::load(Path::new(
             &self.config.mostro.settings_file,
         ))
         .map_err(|e| e.to_string())?;
-        let nsec = settings
+        settings
             .nostr
             .nsec_privkey
             .filter(|s| !s.expose().is_empty())
             .ok_or_else(|| {
                 format!(
-                    "{} carries no daemon key; a solver can only be registered on a Mortsom-owned stack",
+                    "{} carries no daemon key; only a Mortsom-owned stack does",
                     self.config.mostro.settings_file
                 )
-            })?;
+            })
+    }
+
+    /// Registers a fresh solver with the daemon, as its operator would,
+    /// and scopes the observer to it. The daemon key signs the
+    /// registration; it is never logged.
+    async fn register_solver(
+        &self,
+        relay_url: &str,
+        daemon: nostr_sdk::prelude::PublicKey,
+    ) -> Result<Arc<mortsom_solver::Solver>, String> {
+        let nsec = self.daemon_key()?;
         let solver = mortsom_solver::Solver::connect(
             relay_url,
             daemon,
@@ -462,6 +472,33 @@ impl<'a> World<'a> {
             warn!(error = %e, "cannot scope observer to the solver");
         }
         Ok(Arc::new(solver))
+    }
+
+    /// Hands the observer the daemon's keys, so that it opens the actors'
+    /// messages and tells a read-only query from a trade action. Without
+    /// them every actor message counts as an action, and the run says so.
+    fn open_actor_messages(
+        &self,
+        observer: &RelayObserver,
+        daemon: nostr_sdk::prelude::PublicKey,
+        summary: &mut RunSummary,
+    ) {
+        let keys = self.daemon_key().and_then(|nsec| {
+            nostr_sdk::prelude::Keys::parse(nsec.expose()).map_err(|e| e.to_string())
+        });
+        let unopened = match keys {
+            Ok(keys) if keys.public_key() == daemon => {
+                observer.open_actor_messages_with(keys);
+                return;
+            }
+            Ok(_) => "the stack's daemon key is not the configured daemon's".to_owned(),
+            Err(e) => e,
+        };
+        summary.checks.push(
+            "actor-messages",
+            CheckStatus::Warn,
+            format!("{unopened}; every actor message counts as an action"),
+        );
     }
 
     /// Relay, observer, wallets, clients, bootstrap. Returns the failing
@@ -494,6 +531,9 @@ impl<'a> World<'a> {
         summary
             .checks
             .push("relay-observer", CheckStatus::Pass, "subscribed");
+        if self.opens_actor_messages {
+            self.open_actor_messages(&observer, pubkey, summary);
+        }
         self.observer = Some(observer);
         if self.needs_solver {
             let solver = self
