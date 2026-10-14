@@ -133,6 +133,14 @@ pub async fn run_scenarios(
     } else {
         select(&options.scenarios, options.tag.as_deref())?
     };
+    // A scenario needing an interruption the clients cannot cause never
+    // reaches a payment: it is skipped before spending is cleared, so it
+    // cannot demand an authorization it would never use.
+    let (selected, needs_gated) = needs::gate_needs(
+        &deps.adapter.profile().name,
+        selected,
+        deps.desktop_factory.interruptions(),
+    );
     let clearance = clear_value_moving(config, deps, &selected)?;
     let mainnet = match clearance {
         Clearance::Mainnet(c) => Some(c),
@@ -173,12 +181,7 @@ pub async fn run_scenarios(
     summary.results.extend(gated);
     let (runnable, gated) = gate_solver(&summary.app_profile, runnable, options.stack.is_some());
     summary.results.extend(gated);
-    let (runnable, gated) = needs::gate_needs(
-        &summary.app_profile,
-        runnable,
-        deps.desktop_factory.interruptions(),
-    );
-    summary.results.extend(gated);
+    summary.results.extend(needs_gated);
     if runnable.is_empty() {
         return finish(&artifacts, &mut summary).map(|()| summary);
     }

@@ -256,6 +256,8 @@ impl NetProbes for ReadyNet {
 struct Flags {
     online: Arc<std::sync::atomic::AtomicBool>,
     silent_driver: Arc<std::sync::atomic::AtomicBool>,
+    /// Clients that, like real Linux and Web ones, offer no interruption.
+    uninterruptible: Arc<std::sync::atomic::AtomicBool>,
 }
 /// Hands out fake sessions in place of Linux and Web clients.
 struct FakeClients(Flags);
@@ -283,9 +285,17 @@ impl DesktopFactory for FakeClients {
     ) -> Result<Arc<dyn UiSession>, String> {
         Ok(Arc::new(FakeSession(self.0.clone())))
     }
-    /// The fake session backgrounds, cuts its network and rotates on request.
+    /// The fake session backgrounds, cuts its network and rotates on request,
+    /// unless it plays a real Linux or Web client.
     fn interruptions(&self) -> &'static [mortsom_scenario_kit::registry::Need] {
         use mortsom_scenario_kit::registry::Need;
+        if self
+            .0
+            .uninterruptible
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return &[];
+        }
         &[Need::Background, Need::Connectivity, Need::Rotation]
     }
 }
@@ -415,6 +425,7 @@ impl FakeAdapter {
             flags: Flags {
                 online: Arc::new(std::sync::atomic::AtomicBool::new(true)),
                 silent_driver: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                uninterruptible: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             ledger: Arc::new(Ledger::default()),
             capabilities: CapabilitySet::new(Capability::ALL),
