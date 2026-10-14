@@ -4,6 +4,57 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
+**Re-verified 2026-10-14 on Linux against app `main` at `ae3fe214` and mostrod v0.19.3** (stack daemon
+`6f11dd42…`), with the clients built from managed `main` and Mortsom carrying #67 to #76 (this record assumes they are merged: in particular spec 8.5's `released` comes
+with #71): **26 passed, 0
+failed, 8 skipped**, every cleanup clean. Keeping up with the app took the first-run node choice (#68), the
+book a new order's close returns to (#69), `go_home` on a screen still drawing and a cleanup whose maker
+already asked to cancel (#70), the trade actions read on the form a trade opens on (#72), the dispute a seller
+releases under closing as `released` since mostro-core 0.17 (#71), and the app's launch query told from a
+repeated action with mostrod v0.19.3 answering it (#74, #75). The seven interruption scenarios and
+`nwc_cancel_payment` are skipped with their reason (#73). **Web was not re-run**: this host has no Chromium
+(the `chromium-browser` package is the snap's wrapper and the snap is gone; #76 makes `doctor` say so).
+
+| Scenario | Linux run 2026-10-14 |
+|---|---|
+| `happy_sell` | `20261014T045514Z-5722ecfe2ca9` |
+| `happy_buy` | `20261014T045752Z-1bc901e8deea` |
+| `range_order` | `20261014T050046Z-24b8cd4facaf` |
+| `range_buy_order` | `20261014T050343Z-9e2cffd9f5f4` |
+| `market_price_order` | `20261014T050653Z-d7b154c7176e` |
+| `full_trade_with_rating` | `20261014T051003Z-879174d55cbe` |
+| `cancel_before_taken` | `20261014T051424Z-ac923caa87a3` |
+| `cancel_after_take_unpaid` | `20261014T051543Z-1e2ec57edc86` |
+| `taker_cancel_at_taken` | `20261014T052135Z-9b05bc1559ef` |
+| `cooperative_cancel` | `20261014T052559Z-ecdc39616b07` |
+| `unilateral_cancel_rejected` | `20261014T052813Z-831faa0a012c` |
+| `dispute_settled_by_solver` | `20261014T053039Z-dde615b9fd87` |
+| `dispute_canceled_by_solver` | `20261014T053405Z-14c5103aca59` |
+| `dispute_released_by_seller` | `20261014T053622Z-1f556738cc9c` (dispute `initiated` → `released`, the evidence spec 8.5 requires once #71 is merged; before it the spec still says `settled`) |
+| `payout_fails_then_replaced` | `20261014T053925Z-a0108ca8ea03` |
+| `payout_invoice_below_expiry_floor` | `20261014T054321Z-98b7c68dc368` |
+| `payout_slots_capped_per_destination` | `20261014T054835Z-cb63eb7b7e05` |
+| `buyer_invoice_deadline` | `20261014T061753Z-8a2d6e154e41` |
+| `hold_invoice_expires` | `20261014T062152Z-df1b97bd9a3f` |
+| `pending_order_expires` | `20261014T062553Z-fb7e82c618c5` |
+| `unauthorized_actions_at_taken` (regression, first live pass) | `20261014T055549Z-13b7c84f1ea2` |
+| `restart_at_pending` (recovery, first live pass) | `20261014T060021Z-cfd9508c1c6d` |
+| `restart_at_taken` (recovery, first live pass) | `20261014T060359Z-7d2ea42728b4` |
+| `restart_at_active` (recovery, first live pass) | `20261014T060835Z-aefa786b7ba8` |
+| `restart_at_fiat_sent` (recovery, first live pass) | `20261014T061137Z-d7d0eedf7c25` |
+| `restart_at_completed` (recovery, first live pass) | `20261014T061439Z-56f74e05f8f5` |
+
+Failed attempts of 2026-10-13/14 against app `main`, each fixed by the PR named: every scenario stopped at
+onboarding on the new node choice (`20261013T225554Z-32eb7e28e4c3`, #68); order-creating scenarios pressed a
+vanishing `appbar.back` (`20261013T233431Z-e1c2145aa97c` and the batch after it, #69); `cooperative_cancel`
+left Bob mid-navigation and its cleanup stopped at Alice's standing request (`20261014T003806Z-99954a200a88`,
+#70; resolved by `cleanup` with the fix, `20261014T004410Z-d88da34cd0f2`); `dispute_released_by_seller`
+waited for `settled` (`20261014T010246Z-1759d3ea8a20`, #71); `unauthorized_actions_at_taken` waited for the
+detail on the pay form (`20261014T012411Z-e6d593b890f9`, #72); the five `restart_*` counted the launch's
+`user-info` query (`20261014T012902Z-4b2650e58db0` to `20261014T014434Z-fec4d36076e5`, #74 and #75); the
+seven interruption scenarios failed instead of being skipped (`20261014T014710Z-132adc0d236a` to
+`20261014T021237Z-2a687770cdd3`, #73).
+
 **Accepted: Linux 20/20, Web 20/20.** Every scenario of the happy-path, cancellation, expiration and
 dispute families (spec section 8) is accepted on both platforms. The dispute family ran on 2026-09-10 with
 the clients built from app branch `feat/mortsom-dispute-back-id` (`6222334`, the dispute screen's
