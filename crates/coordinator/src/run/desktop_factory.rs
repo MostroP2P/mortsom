@@ -26,6 +26,12 @@ pub trait DesktopFactory: Send + Sync {
         options: &DesktopOptions,
         origin: Option<&str>,
     ) -> Result<Arc<dyn UiSession>, String>;
+    /// Interruptions the sessions it makes can be put through. Linux and Web
+    /// sessions cannot be sent to the background, cut off the network or
+    /// rotated; none of them is offered.
+    fn interruptions(&self) -> &'static [mortsom_scenario_kit::registry::Need] {
+        &[]
+    }
 }
 /// Native processes and Chromium reached only through their public UI.
 pub struct RealDesktopFactory;

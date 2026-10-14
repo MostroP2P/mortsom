@@ -508,5 +508,6 @@ pub(super) static CLEANUP: ScenarioDef = ScenarioDef {
     moves_value: false,
     needs_app_wallet: false,
     needs_solver: false,
+    needs: &[],
     run: |_| Box::pin(async { Ok(()) }),
 };

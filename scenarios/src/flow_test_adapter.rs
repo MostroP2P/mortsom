@@ -488,9 +488,11 @@ impl AppAdapter for Adapter {
             }
         }
         self.dispatch_payout(&order.id).await;
-        // A release under dispute settles the dispute too.
+        // A release under dispute closes the dispute as released, as
+        // mostrod does since mostro-core 0.17 (`Status::Released`).
         if self.state.lock().unwrap().dispute_initiator.is_some() {
-            self.publish_dispute("settled").await;
+            self.publish_dispute(mortsom_scenario_kit::actions::dispute_status::RELEASED)
+                .await;
             self.state.lock().unwrap().dispute_initiator = None;
         }
         let remainder = {

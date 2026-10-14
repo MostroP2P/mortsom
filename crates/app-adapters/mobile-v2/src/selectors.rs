@@ -23,10 +23,11 @@ impl Ids {
     pub const DRAWER_ACCOUNT: &'static str = "drawer.account";
     pub const DRAWER_SETTINGS: &'static str = "drawer.settings";
     pub const DRAWER_ABOUT: &'static str = "drawer.about";
-    // v2 walkthrough has three slides and no community step.
+    // v2 walkthrough has three slides; the first run then asks for a node.
     pub const WALKTHROUGH_SKIP: &'static str = "onboarding.walkthrough.skip";
     pub const WALKTHROUGH_NEXT: &'static str = "onboarding.walkthrough.next";
     pub const WALKTHROUGH_DONE: &'static str = "onboarding.walkthrough.done";
+    pub const COMMUNITY_DONE: &'static str = "onboarding.community.done";
     // Key management (account screen).
     pub const KEYS_GENERATE: &'static str = "keys.generate";
     pub const KEYS_GENERATE_CONFIRM: &'static str = "keys.generate.confirm";
@@ -97,6 +98,7 @@ impl Ids {
     pub const TRADE_RELEASE: &'static str = "trade.release";
     pub const TRADE_RELEASE_CONFIRM: &'static str = "trade.release.confirm";
     pub const TRADE_CANCEL: &'static str = "trade.cancel";
+    pub const TRADE_CANCEL_REQUEST: &'static str = "trade.cancelRequest";
     pub const TRADE_CANCEL_CONFIRM: &'static str = "trade.cancel.confirm";
     pub const TRADE_DISPUTE: &'static str = "trade.dispute";
     pub const TRADE_DISPUTE_CONFIRM: &'static str = "trade.dispute.confirm";
@@ -144,6 +146,7 @@ impl Ids {
         Self::WALKTHROUGH_SKIP,
         Self::WALKTHROUGH_NEXT,
         Self::WALKTHROUGH_DONE,
+        Self::COMMUNITY_DONE,
         Self::KEYS_GENERATE,
         Self::KEYS_GENERATE_CONFIRM,
         Self::KEYS_IMPORT,
@@ -199,6 +202,7 @@ impl Ids {
         Self::TRADE_RELEASE,
         Self::TRADE_RELEASE_CONFIRM,
         Self::TRADE_CANCEL,
+        Self::TRADE_CANCEL_REQUEST,
         Self::TRADE_CANCEL_CONFIRM,
         Self::TRADE_DISPUTE,
         Self::TRADE_DISPUTE_CONFIRM,
@@ -218,6 +222,11 @@ impl Ids {
         Self::PAY_NWC,
         Self::PAY_CANCEL,
     ];
+
+    /// Card of the node `pubkey` (hex) on the first run's node choice.
+    pub fn community_card(pubkey: &str) -> String {
+        format!("onboarding.community.card.{pubkey}")
+    }
 
     /// Row of `order_id` in the order book.
     pub fn order_book_item(order_id: &str) -> String {
@@ -289,37 +298,102 @@ mod tests {
         }
     }
 
+    /// Names the app v2 checkout whose registry the contract test reads.
+    const APP_CHECKOUT_ENV: &str = "MORTSOM_APP_CHECKOUT";
+
+    /// Prefixes of the keyed identifiers the adapter builds at run time.
+    const DYNAMIC_PREFIXES: [&str; 6] = [
+        "settings.relays.item.$",
+        "order.book.item.$",
+        "trades.item.$",
+        "order.create.currency.$",
+        "trade.rate.star.$",
+        "onboarding.community.card.$",
+    ];
+
+    /// Every identifier and dynamic prefix the adapter uses that the
+    /// registry source does not carry literally.
+    fn contract_gaps(dart: &str) -> Vec<String> {
+        let ids = Ids::ALL
+            .iter()
+            .filter(|id| !dart.contains(&format!("'{id}'")));
+        let prefixes = DYNAMIC_PREFIXES.iter().filter(|p| !dart.contains(**p));
+        ids.chain(prefixes).map(|gap| (*gap).to_owned()).collect()
+    }
+
+    /// The registry inside `checkout`; a relative checkout is read from the
+    /// workspace root, where `cargo test` is run, not from this crate.
+    fn registry_path(checkout: &std::path::Path) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .join(checkout)
+            .join(APP_IDS_FILE)
+    }
+
     /// Contract test: every identifier the adapter uses exists literally in
-    /// the v2 app's registry. Runs only once the checkout carries it; until
-    /// the v2 branch adopts the contract this reports the gap and skips.
+    /// the registry of the app checkout `MORTSOM_APP_CHECKOUT` names. Unset,
+    /// it says so and skips; set, a registry it cannot read fails it, so a
+    /// check that was asked for never passes without running.
     #[test]
     fn selectors_match_the_v2_app_contract() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../../../mobilev2")
-            .join(APP_IDS_FILE);
-        let Ok(dart) = std::fs::read_to_string(&path) else {
-            eprintln!(
-                "skipping: {} not found (the v2 app has not adopted the automation contract yet)",
-                path.display()
-            );
+        let Some(checkout) = std::env::var_os(APP_CHECKOUT_ENV) else {
+            eprintln!("skipping: set {APP_CHECKOUT_ENV} to an app v2 checkout to check it");
             return;
         };
-        for id in Ids::ALL {
-            assert!(
-                dart.contains(&format!("'{id}'")),
-                "{id} missing from {}",
+        let path = registry_path(checkout.as_ref());
+        let dart = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+            panic!(
+                "{APP_CHECKOUT_ENV}: cannot read {}: {error}",
                 path.display()
-            );
-        }
-        for prefix in [
-            "settings.relays.item.$",
-            "order.book.item.$",
-            "trades.item.$",
-            "order.create.currency.$",
-            "trade.rate.star.$",
-        ] {
-            assert!(dart.contains(prefix), "dynamic prefix {prefix} missing");
-        }
+            )
+        });
+        let gaps = contract_gaps(&dart);
+        assert!(
+            gaps.is_empty(),
+            "missing from {}: {}",
+            path.display(),
+            gaps.join(", ")
+        );
+    }
+
+    /// A registry carrying every identifier and prefix the adapter uses.
+    fn full_registry() -> String {
+        let ids = Ids::ALL.iter().map(|id| format!("'{id}'"));
+        ids.chain(DYNAMIC_PREFIXES.iter().map(|p| format!("'{p}")))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn a_registry_missing_an_identifier_is_a_contract_gap() {
+        let full = full_registry();
+        assert!(
+            contract_gaps(&full).is_empty(),
+            "{:?}",
+            contract_gaps(&full)
+        );
+        let dropped = Ids::ALL[0];
+        let without = full.replace(&format!("'{dropped}'"), "");
+        assert_eq!(contract_gaps(&without), vec![dropped.to_owned()]);
+    }
+
+    #[test]
+    fn a_registry_missing_a_dynamic_prefix_is_a_contract_gap() {
+        let without = full_registry().replace("trades.item.$", "");
+        assert_eq!(contract_gaps(&without), vec!["trades.item.$".to_owned()]);
+    }
+
+    #[test]
+    fn a_relative_checkout_is_read_from_the_workspace_root() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        assert_eq!(
+            registry_path("../appv2".as_ref()),
+            root.join("../appv2").join(APP_IDS_FILE)
+        );
+        assert_eq!(
+            registry_path("/srv/app".as_ref()),
+            std::path::Path::new("/srv/app").join(APP_IDS_FILE)
+        );
     }
 
     #[test]
@@ -337,6 +411,7 @@ mod tests {
         assert_eq!(Ids::trades_item("o1"), "trades.item.o1");
         assert_eq!(Ids::currency_option("USD"), "order.create.currency.USD");
         assert_eq!(Ids::rate_star(5), "trade.rate.star.5");
+        assert_eq!(Ids::community_card("ab"), "onboarding.community.card.ab");
         assert_eq!(
             Ids::relay_item("ws://127.0.0.1:7000"),
             "settings.relays.item.ws://127.0.0.1:7000"

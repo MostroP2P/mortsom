@@ -280,6 +280,9 @@ last two families are roadmap (section 14): their tags are reserved, and no scen
 
 A scenario whose profile lacks a required capability is **skipped with a reason, never failed**, and a
 skipped scenario is never counted as accepted.
+The same holds for a scenario that needs an interruption the run cannot cause: sending the app to the
+background, cutting its network, rotating the device, or restarting or replaying into the run relay. Linux
+and Web clients cause none of them, and a run's relay is the stack's.
 
 ### 8.2 Happy path
 
@@ -348,8 +351,8 @@ reason, never failed. The solver's public key is scoped into the relay observer,
 run evidence like the actors'.
 
 The daemon publishes a dispute as its own replaceable event (kind 38386). It names the dispute id, the
-dispute status (`initiated`, `in-progress`, `seller-refunded`, `settled`) and who opened it, and never the
-order, so the proof of each step is that event published after a baseline taken before the step, and the
+dispute status (`initiated`, `in-progress`, `seller-refunded`, `settled`, and `released` when the seller
+releases while it is open) and who opened it, and never the order, so the proof of each step is that event published after a baseline taken before the step, and the
 order the dispute is about is what the daemon reports when the solver takes it. A disputed order stays
 `in-progress` on the book until it closes: the book carries `success` or `canceled` at the end, and never
 `dispute`.
@@ -358,7 +361,7 @@ order the dispute is about is what the daemon reports when the solver takes it. 
 |---|---|---|
 | `dispute_settled_by_solver` | Alice creates, Bob takes, Alice funds, Bob reports fiat sent; Alice does not release. Bob opens a dispute; the run's solver takes it and settles the order for Bob. | The relay shows the dispute `initiated` by the buyer, then `in-progress`, then `settled`; the solver's take names this order. Both apps show the order disputed, then completed; the book shows `success`. The hold settled once on Alice's node and the payout settled once on Bob's. |
 | `dispute_canceled_by_solver` | Alice creates, Bob takes, Alice funds; Bob never pays. Alice opens a dispute; the solver takes it and cancels the order for Alice. | The relay shows the dispute `initiated` by the seller, then `in-progress`, then `seller-refunded`. Both apps show the order disputed, then cancelled; the book shows `canceled`. Alice's hold payment fails: the escrow came back. |
-| `dispute_released_by_seller` | As `dispute_settled_by_solver` up to the dispute; then Alice releases anyway. No solver acts. | The relay shows the dispute `initiated` by the buyer and, after the release, `settled`. The trade completes as in `happy_sell`: both apps completed, the book `success`, the hold and the payout each settled once. |
+| `dispute_released_by_seller` | As `dispute_settled_by_solver` up to the dispute; then Alice releases anyway. No solver acts. | The relay shows the dispute `initiated` by the buyer and, after the release, `released` (mostro-core's `Status::Released`, kept apart from a solver's `settled`). The trade completes as in `happy_sell`: both apps completed, the book `success`, the hold and the payout each settled once. |
 
 The cleanup sweep treats a disputed order as out of the parties' hands: when the run has a solver, it takes
 each open dispute the daemon published until one is about the order, and cancels the order so the escrow

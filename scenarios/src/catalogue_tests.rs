@@ -146,3 +146,17 @@ fn every_scenario_name_is_unique_and_the_old_cancel_name_is_gone() {
     assert!(registry::validate().is_ok());
     assert!(registry::find("cancel_pending").is_none());
 }
+
+/// Every interruption lies outside the app, so each scenario that causes
+/// one says which: a run that cannot cause it skips the scenario instead
+/// of failing on a client that has no way to be interrupted.
+#[test]
+fn every_interruption_scenario_declares_what_it_needs() {
+    for name in tagged("interruption")
+        .into_iter()
+        .chain(["wallet_unavailable_then_pay"])
+    {
+        let def = registry::find(name).unwrap();
+        assert!(!def.needs.is_empty(), "{name} declares no need");
+    }
+}

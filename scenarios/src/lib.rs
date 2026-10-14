@@ -32,6 +32,7 @@ macro_rules! register_scenario {
             moves_value: $moves_value,
             needs_app_wallet: false,
             needs_solver: false,
+            needs: &[],
         }
     };
     (
@@ -52,6 +53,7 @@ macro_rules! register_scenario {
             moves_value: $moves_value,
             needs_app_wallet: $needs_app_wallet,
             needs_solver: false,
+            needs: &[],
         }
     };
     (
@@ -64,6 +66,50 @@ macro_rules! register_scenario {
         needs_app_wallet: $needs_app_wallet:expr,
         needs_solver: $needs_solver:expr $(,)?
     ) => {
+        $crate::register_scenario! {
+            name: $name,
+            body: $body,
+            tags: $tags,
+            requires: $requires,
+            timeout_secs: $timeout,
+            moves_value: $moves_value,
+            needs_app_wallet: $needs_app_wallet,
+            needs_solver: $needs_solver,
+            needs: &[],
+        }
+    };
+    (
+        name: $name:literal,
+        body: $body:path,
+        tags: $tags:expr,
+        requires: $requires:expr,
+        timeout_secs: $timeout:expr,
+        moves_value: $moves_value:expr,
+        needs: $needs:expr $(,)?
+    ) => {
+        $crate::register_scenario! {
+            name: $name,
+            body: $body,
+            tags: $tags,
+            requires: $requires,
+            timeout_secs: $timeout,
+            moves_value: $moves_value,
+            needs_app_wallet: false,
+            needs_solver: false,
+            needs: $needs,
+        }
+    };
+    (
+        name: $name:literal,
+        body: $body:path,
+        tags: $tags:expr,
+        requires: $requires:expr,
+        timeout_secs: $timeout:expr,
+        moves_value: $moves_value:expr,
+        needs_app_wallet: $needs_app_wallet:expr,
+        needs_solver: $needs_solver:expr,
+        needs: $needs:expr $(,)?
+    ) => {
         inventory::submit! {
             ::mortsom_scenario_kit::registry::ScenarioDef {
                 name: $name,
@@ -73,6 +119,7 @@ macro_rules! register_scenario {
                 moves_value: $moves_value,
                 needs_app_wallet: $needs_app_wallet,
                 needs_solver: $needs_solver,
+                needs: $needs,
                 run: |ctx| Box::pin($body(ctx)),
             }
         }

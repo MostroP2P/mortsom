@@ -77,6 +77,8 @@ pub struct Row {
     pub needs_solver: bool,
     /// True when it drives the app's own connected wallet.
     pub needs_app_wallet: bool,
+    /// Interruptions it causes outside the app; Linux and Web runs skip it.
+    pub needs: Vec<String>,
 }
 
 /// The rows and what every one of them shares.
@@ -114,6 +116,7 @@ impl Listing {
                 moves_value: def.moves_value,
                 needs_solver: def.needs_solver,
                 needs_app_wallet: def.needs_app_wallet,
+                needs: def.needs.iter().map(|n| n.as_str().to_owned()).collect(),
             })
             .collect();
         Self { rows, baseline }
@@ -170,7 +173,8 @@ impl Listing {
                 DIM,
                 "sats = moves real value | free = no sats move | solver = a \
                  dispute solver must be registered | app-wallet = pays \
-                 through the app's own wallet"
+                 through the app's own wallet | interrupts = needs an \
+                 interruption Linux and Web runs cannot cause, so they skip it"
             )
         );
         out.push_str(&format!(
@@ -228,6 +232,10 @@ impl Row {
         }
         if self.needs_app_wallet {
             line.push_str(&format!(" {}", paint(MAGENTA, "app-wallet")));
+        }
+        if !self.needs.is_empty() {
+            let needs = format!("interrupts:{}", self.needs.join(","));
+            line.push_str(&format!(" {}", paint(MAGENTA, &needs)));
         }
         for label in &self.labels {
             line.push_str(&format!(" {}", paint(CYAN, label)));

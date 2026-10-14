@@ -8,6 +8,7 @@ use mortsom_scenario_kit::context::{Context, ScenarioError};
 use mortsom_scenario_kit::recovery::{
     Replay, background_app, network_outage, replay_order_events, restart_relay, rotate_device,
 };
+use mortsom_scenario_kit::registry::Need;
 
 use super::NO_VALUE_TIMEOUT_SECS;
 use crate::flow;
@@ -91,6 +92,7 @@ crate::register_scenario! {
     requires: flow::TAKE_REQUIRES,
     timeout_secs: NO_VALUE_TIMEOUT_SECS,
     moves_value: false,
+    needs: &[Need::Background],
 }
 crate::register_scenario! {
     name: "network_loss_at_taken",
@@ -99,6 +101,7 @@ crate::register_scenario! {
     requires: flow::TAKE_REQUIRES,
     timeout_secs: NO_VALUE_TIMEOUT_SECS,
     moves_value: false,
+    needs: &[Need::Connectivity],
 }
 crate::register_scenario! {
     name: "relay_restart_at_taken",
@@ -107,6 +110,7 @@ crate::register_scenario! {
     requires: flow::TAKE_REQUIRES,
     timeout_secs: NO_VALUE_TIMEOUT_SECS,
     moves_value: false,
+    needs: &[Need::RelayFaults],
 }
 crate::register_scenario! {
     name: "duplicate_events_at_taken",
@@ -115,6 +119,7 @@ crate::register_scenario! {
     requires: flow::TAKE_REQUIRES,
     timeout_secs: NO_VALUE_TIMEOUT_SECS,
     moves_value: false,
+    needs: &[Need::RelayFaults],
 }
 crate::register_scenario! {
     name: "stale_event_at_taken",
@@ -123,6 +128,7 @@ crate::register_scenario! {
     requires: flow::TAKE_REQUIRES,
     timeout_secs: NO_VALUE_TIMEOUT_SECS,
     moves_value: false,
+    needs: &[Need::RelayFaults],
 }
 crate::register_scenario! {
     name: "rotation_at_taken",
@@ -131,6 +137,7 @@ crate::register_scenario! {
     requires: flow::TAKE_REQUIRES,
     timeout_secs: NO_VALUE_TIMEOUT_SECS,
     moves_value: false,
+    needs: &[Need::Rotation],
 }
 
 /// Keeps registrations linked.
