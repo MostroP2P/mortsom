@@ -346,8 +346,8 @@ reason, never failed. The solver's public key is scoped into the relay observer,
 run evidence like the actors'.
 
 The daemon publishes a dispute as its own replaceable event (kind 38386). It names the dispute id, the
-dispute status (`initiated`, `in-progress`, `seller-refunded`, `settled`) and who opened it, and never the
-order, so the proof of each step is that event published after a baseline taken before the step, and the
+dispute status (`initiated`, `in-progress`, `seller-refunded`, `settled`, and `released` when the seller
+releases while it is open) and who opened it, and never the order, so the proof of each step is that event published after a baseline taken before the step, and the
 order the dispute is about is what the daemon reports when the solver takes it. A disputed order stays
 `in-progress` on the book until it closes: the book carries `success` or `canceled` at the end, and never
 `dispute`.
