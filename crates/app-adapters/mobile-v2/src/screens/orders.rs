@@ -506,6 +506,13 @@ pub async fn cancel_if_open(
         return Ok(CancelOutcome::AlreadyClosed);
     }
     if !present(device, Ids::TRADE_CANCEL).await? {
+        // This side already asked for a cooperative cancel: the request
+        // stands and only the counterpart's answer ends the trade, so the
+        // detail offers no cancel of its own. (A request from the
+        // counterpart leaves `trade.cancel` here, as its acceptance.)
+        if present(device, Ids::TRADE_CANCEL_REQUEST).await? {
+            return Ok(CancelOutcome::Cancelled);
+        }
         return Err(AdapterError::contract(
             "cancel control is absent without a confirmed terminal order state",
         ));

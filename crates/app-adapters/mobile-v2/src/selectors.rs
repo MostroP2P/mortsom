@@ -98,6 +98,7 @@ impl Ids {
     pub const TRADE_RELEASE: &'static str = "trade.release";
     pub const TRADE_RELEASE_CONFIRM: &'static str = "trade.release.confirm";
     pub const TRADE_CANCEL: &'static str = "trade.cancel";
+    pub const TRADE_CANCEL_REQUEST: &'static str = "trade.cancelRequest";
     pub const TRADE_CANCEL_CONFIRM: &'static str = "trade.cancel.confirm";
     pub const TRADE_DISPUTE: &'static str = "trade.dispute";
     pub const TRADE_DISPUTE_CONFIRM: &'static str = "trade.dispute.confirm";
@@ -201,6 +202,7 @@ impl Ids {
         Self::TRADE_RELEASE,
         Self::TRADE_RELEASE_CONFIRM,
         Self::TRADE_CANCEL,
+        Self::TRADE_CANCEL_REQUEST,
         Self::TRADE_CANCEL_CONFIRM,
         Self::TRADE_DISPUTE,
         Self::TRADE_DISPUTE_CONFIRM,
