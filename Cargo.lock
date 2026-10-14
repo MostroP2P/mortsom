@@ -2015,6 +2015,7 @@ dependencies = [
  "mortsom-common",
  "mortsom-observers",
  "mortsom-ui-driver",
+ "mostro-core",
  "nostr-sdk",
  "serde",
  "serde_json",

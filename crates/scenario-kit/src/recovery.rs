@@ -52,9 +52,13 @@ pub fn message_baseline(ctx: &Context) -> MessageBaseline {
     MessageBaseline(ctx.relay.last_seq())
 }
 
-/// Negative observation (spec §8): no actor sent a protocol message to the
-/// daemon since `baseline` for the whole `window`. Fails as a product bug
-/// when one appears, because an interruption must not repeat an action.
+/// Negative observation (spec §8): no actor sent the daemon a message that
+/// acts on a trade since `baseline`, for the whole `window`. Fails as a
+/// product bug when one appears, because an interruption must not repeat an
+/// action. The read-only queries an app makes on any launch (its own
+/// reputation, a session restore, its orders) are not actions; they are told
+/// apart where the run can open the actors' messages (a Mortsom-owned
+/// stack), and elsewhere every message counts.
 pub async fn expect_no_actor_message(
     ctx: &Context,
     baseline: MessageBaseline,
@@ -62,10 +66,7 @@ pub async fn expect_no_actor_message(
     what: &str,
 ) -> Result<(), ScenarioError> {
     let offending = stays_absent(window, NEGATIVE_POLL, || async {
-        ctx.relay
-            .actor_messages_since(baseline.0)
-            .into_iter()
-            .next()
+        ctx.relay.actor_actions_since(baseline.0).into_iter().next()
     })
     .await;
     match offending {
@@ -525,6 +526,64 @@ mod tests {
         injector.await.unwrap();
         assert_eq!(err.category, FailureCategory::Product);
         assert!(err.message.contains("unexpected protocol message"));
+    }
+
+    /// App v2 asks for its own reputation on every launch. Opened with the
+    /// daemon's key that query is no repeated action, and the restart holds.
+    #[tokio::test]
+    async fn restart_app_lets_the_launch_query_its_reputation() {
+        use mostro_core::prelude::{
+            Action, Message, MessageKind, Transport, WrapOptions, wrap_message_with,
+        };
+        let daemon = Keys::generate();
+        let relay = mortsom_observers::relay::RelayObserver::detached(ObserverScope::daemon_only(
+            daemon.public_key(),
+        ));
+        relay.open_actor_messages_with(daemon.clone());
+        let ctx = Context {
+            journal: Arc::new(crate::journal::NoJournal),
+            relay: Arc::new(relay),
+            ..context(adapter(OrderState::Active))
+        };
+        let trade = Keys::generate();
+        let query = Message::Restore(MessageKind::new(
+            None,
+            Some(9),
+            None,
+            Action::UserInfo,
+            None,
+        ));
+        let options = WrapOptions {
+            pow: 0,
+            expiration: None,
+            signed: true,
+        };
+        let launch_query = wrap_message_with(
+            Transport::Nip44Direct,
+            &query,
+            &trade,
+            &trade,
+            daemon.public_key(),
+            options,
+        )
+        .await
+        .unwrap();
+        let relay = Arc::clone(&ctx.relay);
+        let injector = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            relay.ingest("r", &launch_query);
+        });
+
+        restart_app(
+            &ctx,
+            Actor::Alice,
+            &OrderReference::new("o1"),
+            OrderState::Active,
+            Duration::from_millis(200),
+        )
+        .await
+        .unwrap();
+        injector.await.unwrap();
     }
 
     #[tokio::test]

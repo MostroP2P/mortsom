@@ -26,6 +26,7 @@ fn observer(scope: ObserverScope) -> RelayObserver {
             seen: Mutex::new(HashSet::new()),
             subscriptions: Mutex::new(Vec::new()),
             refresh: tokio::sync::Mutex::new(()),
+            reader: Mutex::new(None),
             tx,
         }),
         task: Arc::new(Mutex::new(None)),
@@ -314,4 +315,67 @@ async fn detached_observer_scopes_orders_without_a_relay() {
     assert!(observer.ingest("ws://r", &order).is_some());
     assert!(observer.subscription_ids().is_empty());
     observer.stop().await;
+}
+
+/// An app sends read-only queries (its own reputation, its orders) on any
+/// launch. Opened with the daemon's key they are told apart from a trade
+/// action; unopened, every message counts as one.
+#[tokio::test]
+async fn read_only_queries_are_not_actor_actions_once_messages_can_be_opened() {
+    use mostro_core::prelude::{
+        Action, Message, MessageKind, Transport, WrapOptions, wrap_message_with,
+    };
+    let daemon = Keys::generate();
+    let trade = Keys::generate();
+    let to_daemon = |message: Message| {
+        let (daemon, trade) = (daemon.clone(), trade.clone());
+        async move {
+            let options = WrapOptions {
+                pow: 0,
+                expiration: None,
+                signed: true,
+            };
+            wrap_message_with(
+                Transport::Nip44Direct,
+                &message,
+                &trade,
+                &trade,
+                daemon.public_key(),
+                options,
+            )
+            .await
+            .unwrap()
+        }
+    };
+    let user_info = to_daemon(Message::Restore(MessageKind::new(
+        None,
+        Some(1),
+        None,
+        Action::UserInfo,
+        None,
+    )))
+    .await;
+    let fiat_sent = to_daemon(Message::new_order(
+        None,
+        Some(2),
+        Some(1),
+        Action::FiatSent,
+        None,
+    ))
+    .await;
+
+    let blind = observer(ObserverScope::daemon_only(daemon.public_key()));
+    blind.ingest("r", &user_info);
+    assert_eq!(blind.actor_actions_since(0).len(), 1);
+
+    let reader = observer(ObserverScope::daemon_only(daemon.public_key()));
+    reader.open_actor_messages_with(daemon.clone());
+    reader.ingest("r", &user_info);
+    assert!(reader.actor_actions_since(0).is_empty());
+    reader.ingest("r", &fiat_sent);
+    let actions = reader.actor_actions_since(0);
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].action.as_deref(), Some("fiat-sent"));
+    assert!(actions[0].content.is_none() && actions[0].raw.is_none());
+    assert_eq!(reader.actor_messages_since(0).len(), 2);
 }
