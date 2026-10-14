@@ -81,7 +81,9 @@ impl DaemonImage {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum DaemonProvenance {
-    /// Mortsom's pinned release, pulled by tag and pinned by digest.
+    /// The pinned release `stack up` pulled by default before it built
+    /// Mostro's `main`; read from older records, never assigned to a new
+    /// stack descriptor.
     PinnedImage,
     /// A published image the operator named with `--mostro-image`.
     Image {

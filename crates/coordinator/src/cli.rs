@@ -195,21 +195,22 @@ pub enum RecoveryAction {
 /// Persistent stack lifecycle actions.
 #[derive(Debug, Subcommand)]
 pub enum StackAction {
-    /// Prepare the regtest environment with the pinned mostrod release,
-    /// a published image, or a Mostro branch or pull request built here.
+    /// Prepare the regtest environment with mostrod built from Mostro's
+    /// `main`, from another branch or pull request, or from a published
+    /// image.
     ///
-    /// Review app changes against the pinned release (no option). Use
-    /// `--mostro-image` for a daemon image built or published elsewhere, and
-    /// `--mostro-ref` only for protocol changes, coordinated app/daemon pull
-    /// requests and explicit compatibility testing.
+    /// With no option the daemon is Mostro's `main` at its current head,
+    /// built here. `--mostro-ref` builds a branch or pull request instead,
+    /// and `--mostro-image` runs a daemon image published elsewhere.
     Up {
-        /// Published daemon image to pull instead of the pinned release.
-        /// Recorded in the stack fingerprint.
+        /// Published daemon image to pull instead of building Mostro's
+        /// `main`. Recorded in the stack fingerprint.
         #[arg(long, value_name = "IMAGE", conflicts_with = "mostro_ref")]
         mostro_image: Option<String>,
         /// Mostro branch or https://github.com/MostroP2P/mostro/pull/123 to
-        /// fetch and build at its exact head commit. Fetched on every run;
-        /// a failed fetch or build never falls back to an older image.
+        /// build instead of `main`, at its exact head commit. Fetched on
+        /// every run; a failed fetch or build never falls back to an older
+        /// image.
         #[arg(long, value_name = "BRANCH_OR_PR_URL")]
         mostro_ref: Option<crate::mostro_source::Selector>,
         /// Remove a `mortsom-regtest` stack this directory does not own --
@@ -285,11 +286,7 @@ async fn stack_cli(stack_dir: &std::path::Path, action: StackAction) -> ExitCode
             mostro_ref,
             replace,
         } => {
-            let daemon = match (mostro_image, mostro_ref) {
-                (_, Some(selector)) => stack::DaemonSource::Ref(selector),
-                (Some(image), None) => stack::DaemonSource::Image(image),
-                (None, None) => stack::DaemonSource::PinnedImage,
-            };
+            let daemon = stack::DaemonSource::from_options(mostro_image, mostro_ref);
             let options = stack::UpOptions {
                 daemon,
                 source_cache: crate::mostro_source::WORK_DIR.into(),
@@ -753,6 +750,29 @@ mod tests {
                 action: super::StackAction::Up { mostro_ref: Some(ref selector), mostro_image: None, .. }
             } if selector.git_ref() == "refs/pull/963/head"
         ));
+    }
+
+    #[test]
+    fn a_bare_stack_up_builds_mostro_main() {
+        use clap::Parser;
+
+        let cli = super::Cli::try_parse_from(["mortsom", "stack", "up"]).unwrap();
+
+        let super::Command::Stack {
+            action:
+                super::StackAction::Up {
+                    mostro_image,
+                    mostro_ref,
+                    ..
+                },
+        } = cli.command
+        else {
+            panic!("not `stack up`");
+        };
+        assert_eq!(
+            crate::stack::DaemonSource::from_options(mostro_image, mostro_ref),
+            crate::stack::DaemonSource::Ref(crate::mostro_source::Selector::main())
+        );
     }
 
     #[test]

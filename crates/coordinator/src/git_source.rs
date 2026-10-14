@@ -113,6 +113,15 @@ impl<U: Upstream> Selector<U> {
 }
 
 impl<U> Selector<U> {
+    /// The upstream's `main` branch: what is built when nothing is named.
+    pub fn main() -> Self {
+        Self {
+            requested: "main".to_owned(),
+            git_ref: "refs/heads/main".to_owned(),
+            upstream: PhantomData,
+        }
+    }
+
     /// Exact remote ref to fetch.
     pub fn git_ref(&self) -> &str {
         &self.git_ref

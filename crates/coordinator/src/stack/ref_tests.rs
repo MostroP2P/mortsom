@@ -437,18 +437,40 @@ async fn a_selected_image_is_still_pulled_and_recorded_as_requested() {
 }
 
 #[tokio::test]
-async fn no_selection_pulls_the_pinned_release() {
+async fn no_selection_builds_and_runs_the_head_of_mostro_main() {
     // Arrange
+    let (_remote_dir, remote, main) = remote().await;
     let (_dir, layout) = scratch();
-    let docker = ScriptedStack::fresh(&layout);
+    let cache = layout.root().join("source-cache");
+    let docker = RefStack::new(&layout, &remote);
+    let options = UpOptions {
+        daemon: DaemonSource::from_options(None, None),
+        source_cache: cache.clone(),
+        ..quick()
+    };
 
     // Act
-    let descriptor = up(&docker, &Publishes(true), &layout, &quick())
+    let descriptor = up(&docker, &Publishes(true), &layout, &options)
         .await
         .unwrap();
 
     // Assert
-    let pulls = docker.matching(&format!("docker pull {DEFAULT_MOSTRO_IMAGE}"));
-    assert_eq!(pulls.len(), 1);
-    assert_eq!(descriptor.daemon_source, DaemonProvenance::PinnedImage);
+    let DaemonProvenance::GitRef(selection) = &descriptor.daemon_source else {
+        panic!("{:?}", descriptor.daemon_source);
+    };
+    assert_eq!(selection.requested, "main");
+    assert_eq!(selection.git_ref, "refs/heads/main");
+    assert_eq!(selection.revision, main);
+    assert_eq!(descriptor.daemon_image.reference, commit_tag(&main));
+    assert_eq!(
+        docker.started.lock().unwrap().as_deref(),
+        Some(commit_tag(&main).as_str())
+    );
+    assert!(
+        docker
+            .calls()
+            .iter()
+            .all(|call| !call.contains("docker pull"))
+    );
+    assert!(leftover_checkouts(&cache).is_empty());
 }

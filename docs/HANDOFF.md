@@ -98,10 +98,13 @@ ls $HOME/.local/state/mortsom/recovery/            # a journal not closed blocks
 ./target/debug/mortsom run --tag smoke --app-ref https://github.com/MostroP2P/app/pull/<n>
 ```
 
-Without `--app-source` or `--app-artifact`, `run` fetches the app's `main` (or `--app-ref`), builds it for
-the stack's daemon identity and captures the bundle; no prebuilt client is needed. Use `stack status`, not
-`stack up`: every `stack up` mints a new daemon identity. `doctor` checks the host's build prerequisites,
-including `lld`, `protoc` 3.15 or later and the C toolchain beside `clang++` (README, *Requirements*).
+Without `--app-source` or `--app-artifact`, `run` fetches the app's `main` (or `--app-ref`), builds it for the
+stack's daemon identity and captures the bundle; no prebuilt client is needed. Use `stack status`, not `stack
+up`: every `stack up` mints a new daemon identity. With no option `stack up` builds Mostro's `main` at its
+current head (several minutes the first time); `--mostro-ref <branch-or-pr-url>` builds another head, and
+`--mostro-image mostrop2p/mostro:v0.19.3` runs the release the 2026-10-14 cells ran against. `doctor` checks
+the host's build prerequisites, including `lld`, `protoc` 3.15 or later and the C toolchain beside `clang++`
+(README, *Requirements*).
 
 Check the exit status, `summary.json` and `cleanup.json` before the next run. On failure, fix the observed
 cause, `cleanup <run-id>`, record it in the ledger, and retry with fresh actors. `cleanup` resolves a journal
