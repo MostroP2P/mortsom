@@ -15,6 +15,7 @@ fn listing() -> Listing {
                 moves_value: true,
                 needs_solver: false,
                 needs_app_wallet: false,
+                needs: Vec::new(),
             },
             Row {
                 name: "dispute_settled_by_solver".to_owned(),
@@ -25,6 +26,7 @@ fn listing() -> Listing {
                 moves_value: true,
                 needs_solver: true,
                 needs_app_wallet: false,
+                needs: Vec::new(),
             },
             Row {
                 name: "restart_at_pending".to_owned(),
@@ -35,6 +37,7 @@ fn listing() -> Listing {
                 moves_value: false,
                 needs_solver: false,
                 needs_app_wallet: true,
+                needs: vec!["background".to_owned()],
             },
         ],
     }
@@ -224,4 +227,19 @@ fn strip_ansi(text: &str) -> String {
         }
     }
     out
+}
+
+/// A scenario that needs an interruption says so in every listing: on Linux
+/// and Web the run skips it, and the reader should know before asking.
+#[test]
+fn a_scenario_needing_an_interruption_shows_it() {
+    for detail in [Detail::Summary, Detail::Full] {
+        let text = listing().render(false, detail);
+        let line = text
+            .lines()
+            .find(|l| l.contains("restart_at_pending"))
+            .unwrap();
+        assert!(line.contains("interrupts:background"), "{line}");
+        assert!(text.contains("interrupts = "), "{text}");
+    }
 }
