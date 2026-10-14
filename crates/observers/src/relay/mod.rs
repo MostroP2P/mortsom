@@ -272,12 +272,14 @@ impl RelayObserver {
             debug!(id = %event.id, kind = %event.kind, "event outside observer scope");
             return None;
         }
-        let opened = self.open(event);
-        let mut log = lock(&self.inner.log);
         let id = event.id.to_hex();
+        // A duplicate delivery is dropped before it is opened: opening costs
+        // a signature check and a decryption.
         if !lock(&self.inner.seen).insert(id.clone()) {
             return None;
         }
+        let opened = self.open(event);
+        let mut log = lock(&self.inner.log);
         let observed = ObservedEvent {
             seq: log.len() as u64 + 1,
             received_at_ms: now_ms(),

@@ -3,7 +3,7 @@
 //! kept -- never the content -- to tell a read-only query an app makes on
 //! any launch from a trade action an interruption must not repeat.
 
-use mostro_core::prelude::{Action, Message, unwrap_message_nip44};
+use mostro_core::prelude::{Action, unwrap_message_nip44};
 use nostr_sdk::prelude::{Event, Keys};
 
 /// What an opened actor message asked of the daemon.
@@ -22,7 +22,7 @@ pub fn open(event: &Event, daemon: &Keys) -> Option<Opened> {
     let kind = unwrapped.message.get_inner_message_kind();
     Some(Opened {
         action: wire_name(&kind.action),
-        query: is_query(&unwrapped.message, &kind.action),
+        query: is_query(&kind.action),
     })
 }
 
@@ -35,22 +35,23 @@ fn wire_name(action: &Action) -> String {
         .unwrap_or_else(|| action.to_string())
 }
 
-/// Requests that read the daemon's record and change nothing: the restore
-/// channel (a session restore, the user's own reputation) and the lookups
-/// an app makes to rebuild what it shows.
-fn is_query(message: &Message, action: &Action) -> bool {
-    matches!(message, Message::Restore(_))
-        || matches!(
-            action,
-            Action::Orders | Action::LastTradeIndex | Action::RestoreSession | Action::UserInfo
-        )
+/// Requests that read the daemon's record and change nothing: a session
+/// restore, the user's own reputation, and the lookups an app makes to
+/// rebuild what it shows. Judged by the action alone, whatever wrapper
+/// carries it: anything else is an action, so a check built on this fails
+/// closed.
+fn is_query(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Orders | Action::LastTradeIndex | Action::RestoreSession | Action::UserInfo
+    )
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use mostro_core::prelude::{MessageKind, Transport, WrapOptions, wrap_message_with};
+    use mostro_core::prelude::{Message, MessageKind, Transport, WrapOptions, wrap_message_with};
 
     async fn sent(message: &Message, daemon: &Keys) -> Event {
         let trade = Keys::generate();
@@ -106,6 +107,24 @@ mod tests {
         let lookup = Message::new_order(None, Some(7), None, Action::Orders, None);
 
         assert!(open(&sent(&lookup, &daemon).await, &daemon).unwrap().query);
+    }
+
+    #[tokio::test]
+    async fn a_trade_step_in_the_restore_wrapper_is_still_an_action() {
+        let daemon = Keys::generate();
+        let disguised = Message::Restore(MessageKind::new(
+            None,
+            Some(7),
+            Some(1),
+            Action::FiatSent,
+            None,
+        ));
+
+        assert!(
+            !open(&sent(&disguised, &daemon).await, &daemon)
+                .unwrap()
+                .query
+        );
     }
 
     #[tokio::test]
