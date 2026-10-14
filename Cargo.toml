@@ -39,7 +39,7 @@ mortsom-adapter-mobile-v2 = { path = "crates/app-adapters/mobile-v2" }
 mortsom-scenarios = { path = "scenarios" }
 
 # Protocol types — pinned exactly; fixes the nostr line at 0.45.
-mostro-core = "=0.17.0"
+mostro-core = "=0.17.3"
 nostr-sdk = "0.45.1"
 nostr = { version = "0.45.1", default-features = false, features = ["std", "nip06", "nip44", "nip59"] }
 nwc = "0.45.0"
