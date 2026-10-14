@@ -523,11 +523,47 @@ pub async fn cancel_if_open(
 }
 
 /// Normalized names of the trade actions currently visible.
+///
+/// A trade that waits on this user's invoice or payment opens on that form,
+/// not on the detail: the form is the action it asks for, and its own
+/// cancel is the way out. Any other trade opens on the detail.
 pub async fn visible_actions(
     device: &DeviceContext<'_>,
     order: &OrderReference,
 ) -> Result<Vec<String>, AdapterError> {
-    open_trade(device, order).await?;
+    go_home(device).await?;
+    tap(device, Ids::NAV_TRADES).await?;
+    tap(device, &Ids::trades_item(&order.id)).await?;
+    let landed = super::first_present(
+        device,
+        &[Ids::ORDER_STATUS, Ids::INVOICE_TEXT, Ids::PAY_INVOICE_TEXT],
+    )
+    .await?;
+    let form = match landed {
+        Some(id) if id == Ids::INVOICE_TEXT => {
+            Some((Ids::INVOICE_ORDER_ID, "add-invoice", Ids::INVOICE_CANCEL))
+        }
+        Some(id) if id == Ids::PAY_INVOICE_TEXT => {
+            Some((Ids::PAY_ORDER_ID, "pay-invoice", Ids::PAY_CANCEL))
+        }
+        Some(_) => None,
+        None => return Err(AdapterError::contract("`order.status` did not appear")),
+    };
+    if let Some((order_id, action, cancel)) = form {
+        verify_order_id(device, order_id, order).await?;
+        let mut actions = vec![action.to_owned()];
+        // The form can draw its marker a frame before its cancel: one look
+        // would report a way out the form does offer as missing.
+        if super::appears_within(device, cancel, ID_SETTLE).await? {
+            actions.push("cancel".to_owned());
+        }
+        return Ok(actions);
+    }
+    detail_actions(device).await
+}
+
+/// The actions the trade detail on screen offers.
+async fn detail_actions(device: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
     let mut actions = Vec::new();
     for (id, name) in [
         (Ids::TRADE_PAY_INVOICE, "pay-invoice"),
