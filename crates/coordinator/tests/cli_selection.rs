@@ -58,9 +58,9 @@ fn a_desktop_family_is_a_sequence_of_single_runs_that_stops_at_a_refusal() {
                 !output.contains("desktop runs require exactly one scenario"),
                 "{output}"
             );
-            assert!(output.contains("family run"), "{output}");
-            assert!(output.contains("not started (see above)"), "{output}");
-            assert!(output.contains("not run"), "{output}");
+            assert!(output.contains("[STOP]"), "{output}");
+            assert!(output.contains("scenarios not run"), "{output}");
+            assert!(!output.contains("artifacts "), "{output}");
             assert!(!artifacts);
         }
     }

@@ -40,9 +40,32 @@ removes its clients. `--tag` runs a whole family the same way: one run per scena
 report at the end. `run` with neither a scenario name nor `--tag` runs every scenario `list` shows, in
 alphabetical order, the same way; a scenario the platform cannot drive is skipped with its reason, never
 failed. If a run is refused before it starts (no stack, a pending recovery journal), the refusal holds for the
-rest of the batch, which is reported as not run. Every reported scenario carries the wall-clock it took, so a
-slow cell is visible without opening an artifact. Results land in `artifacts/<run-id>/`. The exit status is
+rest of the batch, which is reported as not run. Results land in `artifacts/<run-id>/`. The exit status is
 non-zero when a run fails.
+
+The console report is a table and a verdict, nothing more:
+
+```text
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  [PASS]  cancel_before_taken                                                             1m 32s
+  [FAIL]  happy_sell                                                                      4m 12s
+          automation-contract: `order.status` did not appear: element `order.status` not found
+          within 30s
+          run 20261014T193526Z-e7111efd3bc9
+  [SKIP]  background_at_taken                                                                  -
+          background_at_taken needs background, which Linux and Web clients and the stack's
+          relay cannot cause
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  1 passed  1 failed  1 skipped  |  9m 05s
+  artifacts artifacts
+  ✗ 1 scenario failed
+  failed: happy_sell
+```
+
+`FLAKY` marks a pass that needed a retry, and `STOP` a scenario a refused run kept from starting. While it
+runs, the terminal shows one line per scenario started, slow steps such as client builds, and warnings; the
+step-by-step narrative goes to each run's `run.log` and `timeline.md` (`RUST_LOG=mortsom=info` puts it back
+on the terminal).
 
 ## Requirements
 
@@ -368,7 +391,7 @@ export MORTSOM_WEBDRIVER_VERBOSE=1   # keep ChromeDriver's full log (DevTools ev
 | `environment.json` | Stack and client identity |
 | `run.log` | Redacted runtime diagnostics; `tail -f` it during a run |
 
-A healthy checks table above a failed scenario is still a failed run.
+A failed check fails its run even when the scenario passed; the report names the check under the scenario.
 
 ## Recovering a failed run
 

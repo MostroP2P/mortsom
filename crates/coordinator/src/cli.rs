@@ -7,6 +7,7 @@ mod prepared;
 mod recover;
 pub(crate) mod recover_audit;
 mod run;
+mod run_report;
 mod source;
 use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};
 use run::run_command;
