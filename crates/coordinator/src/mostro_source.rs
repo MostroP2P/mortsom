@@ -55,6 +55,17 @@ mod tests {
     }
 
     #[test]
+    fn main_selects_the_head_of_the_main_branch_as_parsing_it_would() {
+        // Act
+        let main = Selector::main();
+
+        // Assert
+        assert_eq!(main, Selector::parse("main").unwrap());
+        assert_eq!(main.git_ref(), "refs/heads/main");
+        assert_eq!(main.requested(), "main");
+    }
+
+    #[test]
     fn other_repositories_file_views_queries_and_fragments_are_refused() {
         for invalid in [
             "",

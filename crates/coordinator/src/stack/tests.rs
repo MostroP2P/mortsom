@@ -9,6 +9,8 @@ use std::sync::Mutex;
 
 const IMAGE_ID: &str = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const DIGEST: &str = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+/// A published release: these tests exercise the stack, not a source build.
+const RELEASE: &str = "mostrop2p/mostro:v0.19.3";
 
 /// A Docker that behaves like a regtest stack being built: nodes gain a
 /// balance once funded and a channel once one is opened.
@@ -207,7 +209,7 @@ fn scratch() -> (tempfile::TempDir, Layout) {
 
 fn quick() -> UpOptions {
     UpOptions {
-        daemon: DaemonSource::PinnedImage,
+        daemon: DaemonSource::Image(RELEASE.into()),
         source_cache: PathBuf::from("unused-without-a-ref"),
         timing: Timing {
             wait: Duration::ZERO,
@@ -785,7 +787,10 @@ fn the_compose_file_publishes_exactly_the_ports_the_spec_fixes() {
         4,
         "bitcoind and mostro publish nothing"
     );
-    assert!(compose.contains(&format!("MORTSOM_MOSTRO_IMAGE:-{DEFAULT_MOSTRO_IMAGE}")));
+    assert!(
+        compose.contains("image: ${MORTSOM_MOSTRO_IMAGE:-mortsom.invalid/"),
+        "the daemon runs the image `stack up` names, and the fallback cannot be pulled"
+    );
     assert!(compose.contains(&format!("name: {PROJECT}")));
 }
 

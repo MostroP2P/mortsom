@@ -13,8 +13,8 @@ Accepted live cells: **Linux 2/2, Web 2/2**. Web required app v2 changes (Indexe
 upstream as MostroP2P/app#408; build the clients from the app's `main`. See [docs/acceptance-ledger.md](docs/acceptance-ledger.md) for every attempt and
 [docs/HANDOFF.md](docs/HANDOFF.md) for the current plan.
 
-The regtest stack is Mortsom's own: `mortsom stack up` builds it from nothing with Docker alone, and both
-Linux cells were re-run against it on 2026-09-09.
+The regtest stack is Mortsom's own: `mortsom stack up` builds it from nothing with Docker and Git (it fetches
+and builds Mostro's `main`), and both Linux cells were re-run against it on 2026-09-09.
 
 ## Quick start
 
@@ -23,7 +23,7 @@ git clone https://github.com/MostroP2P/mortsom.git
 cd mortsom
 cargo build -p mortsom-coordinator --bin mortsom
 
-./target/debug/mortsom stack up          # regtest chain, LND alice/bob/carol, relay, mostrod
+./target/debug/mortsom stack up          # regtest chain, LND alice/bob/carol, relay, mostrod built from main
 ./target/debug/mortsom stack status      # exits non-zero until usable
 
 ./target/debug/mortsom doctor --platform linux   # prerequisites only; no order, no payment
@@ -149,30 +149,39 @@ The stack is the Compose project in [stack/](stack/): a regtest `bitcoind`, LND 
 Carol (the daemon's escrow node), an ephemeral Nostr relay on `127.0.0.1:7000` and `mostrod`. Nothing else is
 needed: the chain mines its own coins.
 
-`stack up` pulls the pinned daemon release (`mostrop2p/mostro:v0.19.3`; the cells in the acceptance ledger
-ran against v0.18.7), starts the chain, nodes and relay, funds the nodes, opens one balanced channel from each actor to
-Carol, mints a daemon identity for this stack, starts the daemon as your user and waits for its info event on
-the relay. It is re-runnable: funded wallets and open channels are left alone. Every `up` mints a new daemon
-identity, after which both clients must be rebuilt, so do not run it before every scenario.
+`stack up` builds `mostrod` from the current `main` of [MostroP2P/mostro](https://github.com/MostroP2P/mostro),
+starts the chain, nodes and relay, funds the nodes, opens one balanced channel from each actor to Carol, mints a
+daemon identity for this stack, starts the daemon as your user and waits for its info event on the relay. It
+is re-runnable: funded wallets and open channels are left alone. Every `up` mints a new daemon identity, after
+which both clients must be rebuilt, so do not run it before every scenario.
 
 The daemon comes from exactly one of three sources, all recorded in `public.json`, the stack fingerprint,
 `stack status` and run artifacts:
 
 ```sh
-./target/debug/mortsom stack up                                   # pinned release: normal app review
-./target/debug/mortsom stack up --mostro-image <reference>        # a daemon image published elsewhere
-./target/debug/mortsom stack up --mostro-ref main                 # a Mostro branch...
+./target/debug/mortsom stack up                                   # Mostro's main, built here (default)
+./target/debug/mortsom stack up --mostro-ref new-feature          # another Mostro branch...
 ./target/debug/mortsom stack up \
-  --mostro-ref https://github.com/MostroP2P/mostro/pull/963       # ...or pull request, built here
+  --mostro-ref https://github.com/MostroP2P/mostro/pull/963       # ...or a pull request, built here
+./target/debug/mortsom stack up --mostro-image mostrop2p/mostro:v0.19.3   # a published image, pulled as is
 ```
 
-Review app pull requests against the pinned daemon. `--mostro-ref` is for protocol changes, coordinated
-app/daemon pull requests and explicit compatibility testing: it fetches the branch or the pull request's head
-(fork contributions included) on every run into `.mortsom/mostro`, builds that exact commit with Mostro's
-`docker/Dockerfile` as `mortsom/mostro:git-<commit>` and starts the daemon from it. The first build of a
-commit compiles `mostrod` and takes several minutes; the layer cache makes a repeated commit quick. A failed
-fetch or build stops `stack up`; it never falls back to an older image. The two options are mutually
-exclusive.
+With no option the stack tests the daemon as it is about to ship, so app pull requests are reviewed against
+Mostro's `main`. `--mostro-ref` names a branch or pull request instead: protocol changes, coordinated
+app/daemon pull requests and compatibility testing. Either way `stack up` fetches the branch or the pull
+request's head (fork contributions included) on every run into `.mortsom/mostro`, builds that exact commit
+with Mostro's `docker/Dockerfile` as `mortsom/mostro:git-<commit>` and starts the daemon from it, so `main`
+is rebuilt whenever it has moved. The first build compiles `mostrod` and takes several minutes; the layer
+cache makes a repeated commit quick. A failed fetch or build stops `stack up`; it never falls back to an
+older image. `--mostro-image` skips the build and pulls a published image, such as a release, pinned by its
+registry digest. The two options are mutually exclusive.
+
+`stack up` therefore needs Git and network access to GitHub as well as Docker; the daemon is fetched and
+built before any service starts, so a failure there leaves the stack as it was. `main` moves: when it no
+longer builds, or speaks a protocol newer than Mortsom's pinned `mostro-core`, `stack up` fails or the
+scenarios do, and `--mostro-image mostrop2p/mostro:v0.19.3` brings back the release the acceptance ledger's
+latest cells ran against. `stack status` shows the source in effect -- for a build, its branch or pull
+request and commit -- for as long as the stack is up.
 
 Generated state lives in the gitignored `stack/local/`: the actors' node credentials, the daemon's settings
 (which hold its key, owner-only) and database, and `public.json`, the descriptor every command reads to
@@ -405,7 +414,7 @@ no old evidence or protected storage is changed. A new unresolved run blocks the
 
 | Command | Purpose |
 |---|---|
-| `stack up [--mostro-image <ref> \| --mostro-ref <branch-or-pr-url>]`, `stack status`, `stack logs [service]`, `stack down` | Regtest environment lifecycle, daemon selection and service logs |
+| `stack up [--mostro-ref <branch-or-pr-url> \| --mostro-image <ref>]`, `stack status`, `stack logs [service]`, `stack down` | Regtest environment lifecycle (mostrod from Mostro's `main` by default), daemon selection and service logs |
 | `doctor --platform linux\|web` | Read-only prerequisite and readiness checks |
 | `run [<scenario>...] [--tag <family>] [--platform linux\|web]` | Scenarios with isolated clients, caps and cleanup; one run per scenario; every scenario when none is named |
 | `cleanup <run-id>` | Recover a run's identities and orders |

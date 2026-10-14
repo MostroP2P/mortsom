@@ -113,10 +113,13 @@ services:
       - "127.0.0.1:7000:7000"
 
   mostro:
-    # The pinned release is the default; `stack up --mostro-image` or
-    # `--mostro-ref` puts another build under the same harness and records
-    # it in the fingerprint.
-    image: ${MORTSOM_MOSTRO_IMAGE:-mostrop2p/mostro:v0.19.3}
+    # `stack up` always names the image: Mostro's `main` built here by
+    # default, or what `--mostro-ref` or `--mostro-image` selects, recorded
+    # in the fingerprint. The fallback only keeps the commands that never
+    # start the daemon (status, logs, down) able to read this file; its
+    # reserved `.invalid` registry can never be pulled, so nothing can start
+    # an image `stack up` did not prepare.
+    image: ${MORTSOM_MOSTRO_IMAGE:-mortsom.invalid/mostro:unselected}
     profiles: ["daemon"]
     # /config is a bind mount owned by the invoking user, and settings.toml
     # is mode 600 because it carries the daemon's key. The image's own user

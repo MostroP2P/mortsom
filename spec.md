@@ -116,9 +116,10 @@ included, fail before anything is built or launched.
 
 ## 5. Stack
 
-Mortsom owns its regtest environment and needs no other tool to create it. `mortsom stack up` builds the
-whole world from nothing on a machine with Docker: a regtest chain, three Lightning nodes with balanced
-channels, a Nostr relay and a `mostrod` with an identity minted for this stack. `stack status` reports it and
+Mortsom owns its regtest environment and needs no other harness to create it. `mortsom stack up` builds the
+whole world from nothing on a machine with Docker, and Git with access to GitHub to fetch the daemon's source
+(Docker alone with `--mostro-image`): a regtest chain, three Lightning nodes with balanced channels, a Nostr
+relay and a `mostrod` with an identity minted for this stack. `stack status` reports it and
 `stack down` removes it, volumes included.
 
 | Service | Role | Host port |
@@ -138,11 +139,14 @@ only let a payment succeed by accident. Carol exists so the daemon never escrows
 `stack up` must:
 
 1. Resolve the daemon image from exactly one source:
-   - no option: the pinned release recorded in configuration, for ordinary app review;
-   - `--mostro-image <reference>`: a published image built elsewhere;
-   - `--mostro-ref <branch-or-pr-url>`: a branch of `MostroP2P/mostro` or a canonical
+   - no option: the `main` branch of `MostroP2P/mostro`, built as a ref (below), so ordinary app review runs
+     against the daemon as it is about to ship;
+   - `--mostro-ref <branch-or-pr-url>`: another branch of `MostroP2P/mostro` or a canonical
      `https://github.com/MostroP2P/mostro/pull/<number>` URL, for protocol changes, coordinated app/daemon
-     pull requests and explicit compatibility testing. The two options are mutually exclusive.
+     pull requests and explicit compatibility testing;
+   - `--mostro-image <reference>`: a published image built elsewhere, such as a release.
+
+   The two options are mutually exclusive.
 
    A pulled image must carry exactly one official repository digest; a failed pull is an error, never
    permission to use a stale cached image. A ref is fetched on every invocation into an owned bare cache
@@ -160,12 +164,12 @@ only let a payment succeed by accident. Carol exists so the daemon never escrows
 4. Wait until the daemon publishes its info event on the relay, then validate regtest networks, advertised
    relay endpoints, channel liquidity and declared limits.
 5. Write the public connection references, daemon public identity, image identity (image ID, container
-   creation reference and repository digest when one exists), daemon source provenance (kind
-   `pinned-image`, `image` or `git-ref`; the requested selector; for a ref, the repository, fetched ref and
-   full commit) and stack fingerprint to Mortsom's ignored local overlay (descriptor schema 2). Run
-   artifacts carry the same provenance, so a report names the exact app and daemon commits tested
-   together. Node credentials and the daemon's private key stay in owner-only files
-   that are never echoed, logged or copied into artifacts.
+   creation reference and repository digest when one exists), daemon source provenance (kind `image` or
+   `git-ref`; the requested selector; for a ref, the repository, fetched ref and full commit; `pinned-image`
+   is read from records written while a pinned release was the default, and never written) and stack
+   fingerprint to Mortsom's ignored local overlay (descriptor schema 2). Run artifacts carry the same
+   provenance, so a report names the exact app and daemon commits tested together. Node credentials and the
+   daemon's private key stay in owner-only files that are never echoed, logged or copied into artifacts.
 
 `stack status` exits non-zero until the stack is usable, so it can be waited on. It reports each service,
 each node's active channels, the daemon identity, image and source in effect, and flags a running daemon
