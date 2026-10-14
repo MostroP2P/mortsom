@@ -2,7 +2,7 @@
 //! that can be attached once the run directory exists.
 
 use std::fs::{File, OpenOptions};
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -181,8 +181,9 @@ pub fn init_logging() -> RunLogSink {
     let filter = |default: &str| {
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default))
     };
-    // Escape sequences only for a terminal: `run 2>run.err` stays plain text.
-    let stderr_ansi = io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    // Escape sequences only where colour is welcome: `run 2>run.err` stays
+    // plain text unless the operator forces colour.
+    let stderr_ansi = crate::terminal::color_on(crate::terminal::Stream::Stderr);
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(io::stderr)
         .with_ansi(stderr_ansi)

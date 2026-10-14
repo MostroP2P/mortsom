@@ -3,7 +3,7 @@
 use super::*;
 use mortsom_common::FailureCategory;
 
-const PLAIN: Style = Style::new(false);
+const PLAIN: Style = Style::plain();
 
 fn run(outcome: Option<Outcome>, secs: u64) -> RunView {
     RunView {
@@ -352,7 +352,7 @@ fn plain_output_carries_no_escape_sequences_and_colour_does() {
 
     // Act
     let plain = report.render(&footer(), PLAIN);
-    let coloured = report.render(&footer(), Style::new(true));
+    let coloured = report.render(&footer(), Style::new(true, true));
 
     // Assert
     assert!(!plain.contains('\u{1b}'), "{plain}");

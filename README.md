@@ -67,6 +67,10 @@ runs, the terminal shows one line per scenario started, slow steps such as clien
 step-by-step narrative goes to each run's `run.log` and `timeline.md` (`RUST_LOG=mortsom=info` puts it back
 on the terminal).
 
+Colour follows each stream: a terminal gets it, a pipe or file does not. `NO_COLOR` turns it off everywhere,
+`CLICOLOR_FORCE=1` or `FORCE_COLOR=1` keeps it on a pipe, and a terminal that does not advertise
+`COLORTERM=truecolor` gets the nearest 256-colour shade.
+
 ## Requirements
 
 A fresh installation needs only this repository. App source is fetched automatically into the ignored

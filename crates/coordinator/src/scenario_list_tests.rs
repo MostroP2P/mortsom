@@ -46,7 +46,7 @@ fn listing() -> Listing {
 /// The counts an operator wants before reading a single name.
 #[test]
 fn the_header_counts_the_scenarios_that_cost_sats_and_need_a_solver() {
-    let text = listing().render(false, Detail::Summary);
+    let text = listing().render(Style::plain(), Detail::Summary);
 
     assert!(text.starts_with("3 scenarios"), "{text}");
     assert!(
@@ -59,7 +59,7 @@ fn the_header_counts_the_scenarios_that_cost_sats_and_need_a_solver() {
 /// for "the dispute ones", not for a name they do not know yet.
 #[test]
 fn scenarios_are_grouped_under_their_family_with_a_count() {
-    let text = listing().render(false, Detail::Summary);
+    let text = listing().render(Style::plain(), Detail::Summary);
 
     assert!(text.contains("dispute (1)"), "{text}");
     assert!(text.contains("happy-path (1)"), "{text}");
@@ -74,11 +74,11 @@ fn scenarios_are_grouped_under_their_family_with_a_count() {
 /// summary leaves it out; `--details` says the word "deadline" with it.
 #[test]
 fn deadlines_are_absent_from_the_summary_and_named_in_full_detail() {
-    let summary = listing().render(false, Detail::Summary);
+    let summary = listing().render(Style::plain(), Detail::Summary);
     assert!(!summary.contains("30m"), "{summary}");
     assert!(!summary.contains("1800"), "{summary}");
 
-    let full = listing().render(false, Detail::Full);
+    let full = listing().render(Style::plain(), Detail::Full);
     assert!(full.contains("deadline 30m"), "{full}");
     assert!(
         full.contains("not how long the scenario takes"),
@@ -90,7 +90,7 @@ fn deadlines_are_absent_from_the_summary_and_named_in_full_detail() {
 /// whether it may be run against mainnet.
 #[test]
 fn each_scenario_carries_its_badges() {
-    let text = listing().render(false, Detail::Summary);
+    let text = listing().render(Style::plain(), Detail::Summary);
 
     let happy = line_with(&text, "happy_sell");
     assert!(happy.contains("sats"), "{happy}");
@@ -110,12 +110,12 @@ fn each_scenario_carries_its_badges() {
 /// what to run. They belong behind `--details`.
 #[test]
 fn capabilities_are_only_shown_in_full_detail() {
-    let summary = listing().render(false, Detail::Summary);
+    let summary = listing().render(Style::plain(), Detail::Summary);
     assert!(!summary.contains("onboarding"), "{summary}");
     assert!(!summary.contains("release"), "{summary}");
     assert!(!summary.contains('+'), "{summary}");
 
-    let full = listing().render(false, Detail::Full);
+    let full = listing().render(Style::plain(), Detail::Full);
     assert_eq!(
         full.matches("onboarding").count(),
         1,
@@ -133,7 +133,7 @@ fn capabilities_are_only_shown_in_full_detail() {
 /// who does not know that reads them as noise.
 #[test]
 fn the_footer_says_the_badges_and_how_to_select_what_was_read() {
-    let text = listing().render(false, Detail::Summary);
+    let text = listing().render(Style::plain(), Detail::Summary);
 
     assert!(text.contains("sats = moves real value"), "{text}");
     assert!(text.contains("free = no sats move"), "{text}");
@@ -149,7 +149,7 @@ fn the_footer_says_the_badges_and_how_to_select_what_was_read() {
 /// A redirected `mortsom list` feeds pipes and logs; it stays plain.
 #[test]
 fn the_plain_rendering_has_no_escape_sequences() {
-    let text = listing().render(false, Detail::Summary);
+    let text = listing().render(Style::plain(), Detail::Summary);
 
     assert!(!text.contains('\u{1b}'), "{text:?}");
 }
@@ -158,7 +158,7 @@ fn the_plain_rendering_has_no_escape_sequences() {
 /// `grep` against a terminal or a pipe finds the same thing.
 #[test]
 fn colour_changes_only_the_styling() {
-    let coloured = listing().render(true, Detail::Summary);
+    let coloured = listing().render(Style::new(true, true), Detail::Summary);
 
     assert!(coloured.contains('\u{1b}'));
     assert!(
@@ -167,8 +167,25 @@ fn colour_changes_only_the_styling() {
     );
     assert_eq!(
         strip_ansi(&coloured),
-        listing().render(false, Detail::Summary)
+        listing().render(Style::plain(), Detail::Summary)
     );
+}
+
+/// The family heading keeps its brand green on a terminal without 24-bit
+/// colour, as the nearest 256-colour entry rather than an unread sequence.
+#[test]
+fn the_brand_green_follows_the_terminal_depth() {
+    // Arrange / Act
+    let truecolor = listing().render(Style::new(true, true), Detail::Summary);
+    let cube = listing().render(Style::new(true, false), Detail::Summary);
+
+    // Assert
+    assert!(
+        truecolor.contains("\u{1b}[38;2;155;206;75mhappy-path"),
+        "{truecolor:?}"
+    );
+    assert!(cube.contains("\u{1b}[38;5;149mhappy-path"), "{cube:?}");
+    assert!(!cube.contains("38;2;"), "{cube:?}");
 }
 
 /// Building from the registry is what the command actually does; the
@@ -239,7 +256,7 @@ fn strip_ansi(text: &str) -> String {
 #[test]
 fn a_scenario_needing_an_interruption_shows_it() {
     for detail in [Detail::Summary, Detail::Full] {
-        let text = listing().render(false, detail);
+        let text = listing().render(Style::plain(), detail);
         let line = text
             .lines()
             .find(|l| l.contains("restart_at_pending"))

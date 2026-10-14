@@ -3,6 +3,7 @@ use super::run_report::{self, Footer, Report, RunView};
 use super::*;
 use crate::style::Style;
 use mortsom_common::check::CheckStatus;
+use mortsom_common::terminal::Stream;
 
 pub(super) async fn run_command(
     config_path: &std::path::Path,
@@ -20,7 +21,7 @@ pub(super) async fn run_command(
             return ExitCode::from(2);
         }
     };
-    let progress = Style::new(use_color_on_stderr());
+    let progress = Style::detect(Stream::Stderr);
     let moving = selected.iter().filter(|def| def.moves_value).count();
     eprintln!("{}", run_report::header(selected.len(), moving, progress));
     // A run starts fresh actors and resolves everything it created before
@@ -53,7 +54,10 @@ pub(super) async fn run_command(
         elapsed: started.elapsed(),
         artifacts_dir: artifacts_dir.as_deref(),
     };
-    print!("\n{}", report.render(&footer, Style::new(use_color())));
+    print!(
+        "\n{}",
+        report.render(&footer, Style::detect(Stream::Stdout))
+    );
     report.code()
 }
 

@@ -14,6 +14,7 @@ pub mod logging;
 pub mod redact;
 pub mod run_id;
 pub mod secret;
+pub mod terminal;
 pub mod tls;
 
 pub use actor::Actor;

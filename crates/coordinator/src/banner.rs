@@ -17,39 +17,27 @@
 use std::path::Path;
 
 use crate::cli::{Command, StackAction};
-
-/// Mostro green, the same hue the sibling harness brands with.
-const BRAND: &str = "\u{1b}[38;2;155;206;75m";
-const DIM: &str = "\u{1b}[2m";
-const RESET: &str = "\u{1b}[0m";
-const INDENT: &str = "  ";
+use crate::style::{self, INDENT, Style};
 
 /// Three lines of block art, the tagline, and what this invocation is.
 ///
 /// Blank lines above and below keep it from sitting flush against the
 /// shell prompt that invoked it.
-pub fn render(detail: &str, color: bool) -> String {
+pub fn render(detail: &str, style: Style) -> String {
     const ART: [&str; 3] = [
         "▄▄ ▄▄ ▄▀▀▀▄ ▄▀▀▄ ▀▀█▀▀ ▄▀▀▀ ▄▀▀▀▄ ▄▄ ▄▄",
         "█ ▀ █ █   █ █▀▀▄   █    ▀▀▄ █   █ █ ▀ █",
         "▀   ▀ ▀▄▄▄▀ ▀  ▀   ▀   ▀▄▄▀ ▀▄▄▄▀ ▀   ▀",
     ];
     let captions = ["", "black-box e2e for Mostro client", detail];
-    let paint = |code: &str, text: &str| {
-        if color {
-            format!("{code}{text}{RESET}")
-        } else {
-            text.to_owned()
-        }
-    };
 
     let mut out = String::from("\n\n");
     for (art, caption) in ART.iter().zip(captions) {
-        let line = format!("{INDENT}{}", paint(BRAND, art));
+        let line = format!("{INDENT}{}", style.rgb(style::BRAND, art));
         if caption.is_empty() {
             out.push_str(&format!("{line}\n"));
         } else {
-            out.push_str(&format!("{line}   {}\n", paint(DIM, caption)));
+            out.push_str(&format!("{line}   {}\n", style.dim(caption)));
         }
     }
     out.push('\n');
@@ -140,7 +128,7 @@ mod tests {
         // Arrange / Act
         let out = render(
             "run · happy_sell · linux · config/desktop.example.toml",
-            false,
+            Style::plain(),
         );
 
         // Assert
@@ -157,7 +145,7 @@ mod tests {
     #[test]
     fn the_three_rows_of_art_are_one_rectangle() {
         // Arrange / Act
-        let banner = render("list", false);
+        let banner = render("list", Style::plain());
         let art: Vec<&str> = banner
             .lines()
             .filter(|line| line.contains('▀') || line.contains('▄'))
@@ -187,7 +175,7 @@ mod tests {
     #[test]
     fn the_banner_is_padded_away_from_the_shell_prompt() {
         // Arrange / Act
-        let out = render("list", false);
+        let out = render("list", Style::plain());
 
         // Assert
         assert!(out.starts_with("\n\n"), "{out:?}");
@@ -198,13 +186,13 @@ mod tests {
     #[test]
     fn colour_is_emitted_only_when_asked_for() {
         // Arrange / Act
-        let plain = render("list", false);
-        let painted = render("list", true);
+        let plain = render("list", Style::plain());
+        let painted = render("list", Style::new(true, true));
 
         // Assert
         assert!(!plain.contains('\u{1b}'), "{plain:?}");
         assert!(
-            painted.contains(BRAND) && painted.contains(DIM),
+            painted.contains("\u{1b}[38;2;155;206;75m") && painted.contains("\u{1b}[2m"),
             "{painted:?}"
         );
         assert!(painted.ends_with("\n\n"), "{painted:?}");
