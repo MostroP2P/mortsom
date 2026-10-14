@@ -128,3 +128,26 @@ async fn a_screen_with_no_way_back_is_reported_after_one_wait() {
         error.message
     );
 }
+
+/// A form may draw its marker before its cancel; the cancel a moment later
+/// is still on offer.
+#[tokio::test]
+async fn a_form_cancel_drawn_after_the_form_is_still_offered() {
+    let ui = FakeUi::default();
+    let order = OrderReference::with_kind("o1", OrderKind::Sell);
+    ui.present(&[Ids::ORDER_ADD_FAB, Ids::NAV_TRADES]);
+    ui.on_tap(Ids::NAV_TRADES, &["trades.item.o1"]);
+    ui.on_tap(
+        "trades.item.o1",
+        &[Ids::PAY_INVOICE_TEXT, Ids::PAY_ORDER_ID, Ids::PAY_CANCEL],
+    );
+    ui.label(Ids::PAY_ORDER_ID, "o1");
+    ui.appears_after(Ids::PAY_CANCEL, 2);
+
+    let actions = adapter()
+        .visible_actions(&device(&ui), &order)
+        .await
+        .unwrap();
+
+    assert_eq!(actions, ["pay-invoice", "cancel"]);
+}
