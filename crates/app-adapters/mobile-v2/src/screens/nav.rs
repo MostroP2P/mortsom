@@ -2,7 +2,7 @@
 
 use mortsom_app_contract::{AdapterError, DeviceContext};
 
-use super::{expect, present, tap, tap_until};
+use super::{expect, first_present, present, tap, tap_until};
 use crate::selectors::Ids;
 
 /// Deepest stack `go_home` unwinds (dialog over detail over list over book).
@@ -29,17 +29,33 @@ pub async fn go_to_settings(device: &DeviceContext<'_>) -> Result<(), AdapterErr
 }
 
 /// Returns to the order book from anywhere reachable.
+///
+/// A screen still drawing -- a route mid-transition, as after a look cut off
+/// halfway through a navigation -- shows none of the controls this goes by
+/// for a moment, so it waits for one to arrive instead of giving up on the
+/// first look. And a control seen a moment ago may leave with its screen
+/// before the press lands, so a press that finds it gone looks again.
 pub async fn go_home(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
     for _ in 0..MAX_BACK_STEPS {
-        if present(device, Ids::ORDER_ADD_FAB).await? {
-            return Ok(());
-        }
-        if present(device, Ids::NAV_ORDER_BOOK).await? {
-            tap(device, Ids::NAV_ORDER_BOOK).await?;
-        } else if present(device, Ids::APPBAR_BACK).await? {
-            tap(device, Ids::APPBAR_BACK).await?;
-        } else {
-            break;
+        let way = first_present(
+            device,
+            &[Ids::ORDER_ADD_FAB, Ids::NAV_ORDER_BOOK, Ids::APPBAR_BACK],
+        )
+        .await?;
+        match way {
+            Some(id) if id == Ids::ORDER_ADD_FAB => return Ok(()),
+            Some(id) => press_seen(device, id).await?,
+            // That wait already spent the UI timeout: waiting for the book
+            // again would only double how long a stuck screen takes to say so.
+            None => {
+                return Err(AdapterError::contract(format!(
+                    "none of `{}`, `{}` or `{}` appeared within {:?}",
+                    Ids::ORDER_ADD_FAB,
+                    Ids::NAV_ORDER_BOOK,
+                    Ids::APPBAR_BACK,
+                    device.ui_timeout
+                )));
+            }
         }
         if super::appears_within(
             device,
@@ -56,4 +72,14 @@ pub async fn go_home(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
             "could not return to the order book within {MAX_BACK_STEPS} back steps: {e}"
         ))
     })
+}
+
+/// Presses `id`, just seen, without waiting for it again: a control that
+/// left with its screen in between was not missed, the app moved on.
+async fn press_seen(device: &DeviceContext<'_>, id: &str) -> Result<(), AdapterError> {
+    match device.ui.tap(id).await {
+        Ok(()) => Ok(()),
+        Err(_) if !present(device, id).await? => Ok(()),
+        Err(e) => Err(AdapterError::infrastructure(format!("tap `{id}`: {e}"))),
+    }
 }
