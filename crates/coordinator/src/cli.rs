@@ -122,7 +122,8 @@ pub enum Command {
         #[arg(long)]
         lane: Option<String>,
     },
-    /// Run scenarios end to end (stack relay, clients, observers, cleanup).
+    /// Run scenarios end to end (stack relay, clients, observers, cleanup):
+    /// every registered scenario unless names or `--tag` narrow it.
     Run {
         /// Keep this exact legacy journal pending while using a different,
         /// verified Mortsom regtest stack. Repeat for every pending legacy run.
@@ -140,7 +141,8 @@ pub enum Command {
         /// Xvfb executable for isolated Linux desktops.
         #[arg(long, default_value = "Xvfb")]
         xvfb: PathBuf,
-        /// Scenario names.
+        /// Scenario names. With neither names nor `--tag`, every scenario
+        /// runs, each as its own run with fresh actors.
         scenarios: Vec<String>,
         /// Run every scenario carrying this tag (a family, or `smoke`). Each
         /// scenario is its own run with fresh actors.
@@ -695,6 +697,18 @@ mod tests {
         assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "android"]).is_err());
         assert!(super::Cli::try_parse_from(["mortsom", "device", "smoke"]).is_err());
         assert!(super::Cli::try_parse_from(["mortsom", "app", "setup"]).is_err());
+    }
+
+    #[test]
+    fn run_without_names_or_a_tag_parses_with_no_selection() {
+        use clap::Parser;
+
+        let cli = super::Cli::try_parse_from(["mortsom", "run"]).unwrap();
+
+        assert!(matches!(
+            cli.command,
+            super::Command::Run { ref scenarios, tag: None, .. } if scenarios.is_empty()
+        ));
     }
 
     #[test]

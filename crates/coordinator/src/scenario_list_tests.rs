@@ -139,6 +139,11 @@ fn the_footer_says_the_badges_and_how_to_select_what_was_read() {
     assert!(text.contains("free = no sats move"), "{text}");
     assert!(text.contains("mortsom run <scenario>"), "{text}");
     assert!(text.contains("mortsom run --tag smoke"), "{text}");
+    assert!(
+        text.lines()
+            .any(|line| line.trim_end().ends_with("every scenario: mortsom run")),
+        "{text}"
+    );
 }
 
 /// A redirected `mortsom list` feeds pipes and logs; it stays plain.
