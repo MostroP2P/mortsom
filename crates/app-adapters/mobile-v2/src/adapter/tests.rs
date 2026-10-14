@@ -836,6 +836,8 @@ async fn recovery_refuses_an_empty_identity_without_generating_a_replacement() {
 mod create;
 #[path = "tests_invoice.rs"]
 mod invoice;
+#[path = "tests_nav.rs"]
+mod nav_tests;
 #[path = "tests_onboarding.rs"]
 mod onboarding;
 #[path = "tests_pricing.rs"]
