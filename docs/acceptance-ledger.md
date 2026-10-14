@@ -5,7 +5,8 @@ proves the assertions in [spec.md](../spec.md) section 2 and finishes verified c
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
 **Re-verified 2026-10-14 on Linux against app `main` at `ae3fe214` and mostrod v0.19.3** (stack daemon
-`6f11dd42…`), with the clients built from managed `main` and Mortsom carrying #67 to #76: **26 passed, 0
+`6f11dd42…`), with the clients built from managed `main` and Mortsom carrying #67 to #76 (this record assumes they are merged: in particular spec 8.5's `released` comes
+with #71): **26 passed, 0
 failed, 8 skipped**, every cleanup clean. Keeping up with the app took the first-run node choice (#68), the
 book a new order's close returns to (#69), `go_home` on a screen still drawing and a cleanup whose maker
 already asked to cancel (#70), the trade actions read on the form a trade opens on (#72), the dispute a seller
@@ -29,7 +30,7 @@ repeated action with mostrod v0.19.3 answering it (#74, #75). The seven interrup
 | `unilateral_cancel_rejected` | `20261014T052813Z-831faa0a012c` |
 | `dispute_settled_by_solver` | `20261014T053039Z-dde615b9fd87` |
 | `dispute_canceled_by_solver` | `20261014T053405Z-14c5103aca59` |
-| `dispute_released_by_seller` | `20261014T053622Z-1f556738cc9c` (dispute `initiated` → `released`) |
+| `dispute_released_by_seller` | `20261014T053622Z-1f556738cc9c` (dispute `initiated` → `released`, the evidence spec 8.5 requires once #71 is merged; before it the spec still says `settled`) |
 | `payout_fails_then_replaced` | `20261014T053925Z-a0108ca8ea03` |
 | `payout_invoice_below_expiry_floor` | `20261014T054321Z-98b7c68dc368` |
 | `payout_slots_capped_per_destination` | `20261014T054835Z-cb63eb7b7e05` |
