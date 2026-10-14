@@ -22,6 +22,8 @@ use std::collections::BTreeMap;
 
 use mortsom_scenario_kit::registry::ScenarioDef;
 
+use crate::style::{self, Style};
+
 /// Tags that label a scenario without naming its family; a scenario is
 /// grouped by the first tag that is not one of these.
 const CROSS_CUTTING: [&str; 2] = ["smoke", "parity"];
@@ -35,8 +37,6 @@ const SECS_PER_MINUTE: u64 = 60;
 
 const BOLD: &str = "1";
 const DIM: &str = "2";
-/// Mostro green, the hue the banner brands with.
-const BRAND: &str = "38;2;155;206;75";
 const YELLOW: &str = "33";
 const CYAN: &str = "36";
 const MAGENTA: &str = "35";
@@ -125,20 +125,17 @@ impl Listing {
     /// The listing as an operator reads it, optionally styled for a
     /// terminal. Colour only ever wraps text that is already there, so a
     /// piped `mortsom list` and a terminal one say the same words.
-    pub fn render(&self, color: bool, detail: Detail) -> String {
-        let paint = |code: &str, text: &str| {
-            if color {
-                format!("\u{1b}[{code}m{text}\u{1b}[0m")
-            } else {
-                text.to_owned()
-            }
-        };
+    pub fn render(&self, style: Style, detail: Detail) -> String {
+        let paint = |code: &str, text: &str| style.paint(code, text);
+        // Mostro green, the hue the banner brands with, at the depth the
+        // terminal can show.
+        let brand = style.rgb_code(style::BRAND);
         let mut out = String::new();
         out.push_str(&self.header(&paint));
         for (family, rows) in self.by_family() {
             out.push_str(&format!(
                 "\n{} {}\n",
-                paint(BRAND, &family),
+                paint(&brand, &family),
                 paint(DIM, &format!("({})", rows.len()))
             ));
             for row in rows {

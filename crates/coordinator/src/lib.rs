@@ -21,6 +21,7 @@ pub mod report;
 pub mod run;
 pub mod safety;
 pub mod scenario_list;
+pub mod style;
 pub mod web_tools;
 
 pub use config::{Config, ConfigError, RunConfig};

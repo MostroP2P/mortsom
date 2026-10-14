@@ -7,6 +7,7 @@ mod prepared;
 mod recover;
 pub(crate) mod recover_audit;
 mod run;
+mod run_report;
 mod source;
 use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};
 use run::run_command;
@@ -374,23 +375,15 @@ pub enum RelayCommand {
     },
 }
 
-/// Whether terminal styling is welcome: a real terminal, no `NO_COLOR`, no
-/// dumb terminal. Redirected output stays plain so logs, pipes and CI
-/// artifacts read exactly as they always did.
+/// Whether stdout welcomes colour (see [`mortsom_common::terminal`]):
+/// redirected output stays plain unless the operator forces it.
 fn use_color() -> bool {
-    use std::io::IsTerminal;
-    std::io::stdout().is_terminal() && color_welcome()
+    mortsom_common::terminal::color_on(mortsom_common::terminal::Stream::Stdout)
 }
 
 /// The same question for the stream the banner and the logs go to.
 fn use_color_on_stderr() -> bool {
-    use std::io::IsTerminal;
-    std::io::stderr().is_terminal() && color_welcome()
-}
-
-/// Terminal styling is welcome unless the environment says otherwise.
-fn color_welcome() -> bool {
-    std::env::var_os("NO_COLOR").is_none() && std::env::var("TERM").is_ok_and(|t| t != "dumb")
+    mortsom_common::terminal::color_on(mortsom_common::terminal::Stream::Stderr)
 }
 
 fn lock_mutation(
@@ -426,7 +419,7 @@ pub async fn run(cli: Cli) -> ExitCode {
         "{}",
         crate::banner::render(
             &crate::banner::caption(&cli.command, &cli.config, &cli.stack_dir),
-            use_color_on_stderr()
+            crate::style::Style::detect(mortsom_common::terminal::Stream::Stderr)
         )
     );
     // Stderr immediately; commands that own a run directory attach the
@@ -649,7 +642,13 @@ fn list_scenarios(details: bool) -> ExitCode {
     } else {
         crate::scenario_list::Detail::Summary
     };
-    print!("{}", listing.render(use_color(), detail));
+    print!(
+        "{}",
+        listing.render(
+            crate::style::Style::detect(mortsom_common::terminal::Stream::Stdout),
+            detail
+        )
+    );
     ExitCode::SUCCESS
 }
 

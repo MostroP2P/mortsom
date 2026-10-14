@@ -14,9 +14,6 @@ use mortsom_scenario_kit::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Seconds in a minute, for reading an elapsed wall-clock aloud.
-const SECS_PER_MINUTE: u64 = 60;
-
 /// Machine-readable outcome, written to `summary.json`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunSummary {
@@ -83,49 +80,6 @@ pub struct RecoveryStatus {
     /// absent in historical reports.
     #[serde(default)]
     pub outcome: Option<String>,
-}
-
-/// The per-scenario lines of the final report: what ran, how it ended, how
-/// many attempts it took and how long it took.
-///
-/// A retried scenario's duration is the last attempt's alone, so the line
-/// says so rather than letting an operator read it as the whole wait.
-pub fn render_results(results: &[ScenarioResult]) -> String {
-    let mut out = String::new();
-    for result in results {
-        let elapsed = human_elapsed(result.duration);
-        let timed = if result.attempts > 1 {
-            format!("last attempt {elapsed}")
-        } else {
-            elapsed
-        };
-        out.push_str(&format!(
-            "{:<28} {:?} (attempts {}, {timed})\n",
-            result.name, result.outcome, result.attempts
-        ));
-    }
-    out
-}
-
-/// Elapsed wall-clock as an operator reads it: milliseconds under a second,
-/// tenths of a second under a minute, whole minutes and seconds above it.
-/// A scenario that never ran has no duration to report, not a zero one.
-pub fn human_elapsed(duration: std::time::Duration) -> String {
-    if duration.is_zero() {
-        return "-".to_owned();
-    }
-    let secs = duration.as_secs_f64();
-    if secs < 1.0 {
-        return format!("{}ms", duration.as_millis());
-    }
-    if duration.as_secs() < SECS_PER_MINUTE {
-        return format!("{secs:.1}s");
-    }
-    format!(
-        "{}m {:02}s",
-        duration.as_secs() / SECS_PER_MINUTE,
-        duration.as_secs() % SECS_PER_MINUTE
-    )
 }
 
 /// Persists public build/stack facts and cleanup routing before clients can start.
@@ -237,83 +191,4 @@ fn environment(summary: &RunSummary, status: &str) -> serde_json::Value {
         "app_build": summary.app_build,
         "mainnet_cleared": summary.mainnet_cleared,
     })
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-    use mortsom_common::FailureCategory;
-    use std::time::Duration;
-
-    fn result(name: &str, outcome: Outcome, attempts: u32, duration: Duration) -> ScenarioResult {
-        ScenarioResult {
-            name: name.into(),
-            app_profile: "profile-a".into(),
-            app_version: None,
-            outcome,
-            attempts,
-            duration,
-        }
-    }
-
-    #[test]
-    fn reports_how_long_each_scenario_took() {
-        let results = [
-            result("happy_sell", Outcome::Passed, 1, Duration::from_secs(252)),
-            result(
-                "dispute_accepted",
-                Outcome::Failed {
-                    category: FailureCategory::Product,
-                    message: "wrong state".into(),
-                },
-                1,
-                Duration::from_millis(41_500),
-            ),
-        ];
-
-        let rendered = render_results(&results);
-
-        assert!(rendered.contains("4m 12s"), "{rendered}");
-        assert!(rendered.contains("41.5s"), "{rendered}");
-    }
-
-    #[test]
-    fn names_the_timed_attempt_when_a_scenario_was_retried() {
-        let retried = [result(
-            "happy_buy",
-            Outcome::Passed,
-            2,
-            Duration::from_secs(90),
-        )];
-
-        let rendered = render_results(&retried);
-
-        assert!(
-            rendered.contains("attempts 2, last attempt 1m 30s"),
-            "{rendered}"
-        );
-    }
-
-    #[test]
-    fn shows_no_duration_for_a_scenario_that_never_ran() {
-        let skipped = [result(
-            "app_wallet_sell",
-            Outcome::Skipped {
-                reason: "profile lacks app-wallet".into(),
-            },
-            0,
-            Duration::ZERO,
-        )];
-
-        let rendered = render_results(&skipped);
-
-        assert!(rendered.contains("attempts 0, -"), "{rendered}");
-        assert!(!rendered.contains("0s"), "{rendered}");
-    }
-
-    #[test]
-    fn renders_sub_second_runs_in_milliseconds() {
-        assert_eq!(human_elapsed(Duration::from_millis(420)), "420ms");
-    }
 }

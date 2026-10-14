@@ -8,14 +8,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::Layer;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use crate::redact::Redactor;
 
-/// Default filter when `RUST_LOG` is unset.
+/// Default filter for `run.log` when `RUST_LOG` is unset.
 pub const DEFAULT_FILTER: &str = "mortsom=info";
+/// Default filter for the terminal when `RUST_LOG` is unset. The scenario
+/// narrative (every timeline step, payment settlement and solver message, and
+/// the run's own bookkeeping) goes to `run.log` and `timeline.md` only: the
+/// operator reads the run's report, not its trace. The terminal keeps the
+/// progress of long operations (client builds, `stack up`) and every warning.
+pub const DEFAULT_TERMINAL_FILTER: &str = "mortsom=info,mortsom_scenario_kit=warn,\
+    mortsom_environment::lnd=warn,mortsom_solver=warn,\
+    mortsom_coordinator::run=warn,mortsom_coordinator::report=warn";
 /// File name of the per-run log inside the artifact directory.
 pub const RUN_LOG_FILE: &str = "run.log";
 
@@ -168,17 +177,24 @@ static SINK: OnceLock<RunLogSink> = OnceLock::new();
 /// once a run directory exists.
 pub fn init_logging() -> RunLogSink {
     let sink = SINK.get_or_init(RunLogSink::default).clone();
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));
+    // `RUST_LOG` sets both; without it, each layer has its own default.
+    let filter = |default: &str| {
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default))
+    };
+    // Escape sequences only where colour is welcome: `run 2>run.err` stays
+    // plain text unless the operator forces colour.
+    let stderr_ansi = crate::terminal::color_on(crate::terminal::Stream::Stderr);
     let stderr_layer = tracing_subscriber::fmt::layer()
         .with_writer(io::stderr)
-        .with_target(false);
+        .with_ansi(stderr_ansi)
+        .with_target(false)
+        .with_filter(filter(DEFAULT_TERMINAL_FILTER));
     let file_layer = tracing_subscriber::fmt::layer()
         .with_ansi(false)
-        .with_writer(sink.clone());
+        .with_writer(sink.clone())
+        .with_filter(filter(DEFAULT_FILTER));
     // Only the first call installs; the sink is shared regardless.
     let _ = tracing_subscriber::registry()
-        .with(filter)
         .with(stderr_layer)
         .with(file_layer)
         .try_init();
@@ -283,5 +299,60 @@ mod tests {
         let log = std::fs::read_to_string(dir.path().join(RUN_LOG_FILE)).unwrap();
         assert!(log.contains("<redacted>"), "{log}");
         assert!(!log.contains("s3cr3t"));
+    }
+
+    fn emit_scenario_and_progress_events(filter: &str) -> String {
+        let sink = Sink::default();
+        let writer = sink.clone();
+        let layer = tracing_subscriber::fmt::layer()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .with_filter(EnvFilter::new(filter));
+        tracing::subscriber::with_default(tracing_subscriber::registry().with(layer), || {
+            tracing::info!(target: "mortsom_scenario_kit::timeline", "order shows pending");
+            tracing::info!(target: "mortsom_scenario_kit::actions", "order created");
+            tracing::info!(target: "mortsom_environment::lnd", "payment settled");
+            tracing::info!(target: "mortsom_solver", "solver registration sent");
+            tracing::info!(target: "mortsom_coordinator::run::execute", "scenario finished");
+            tracing::info!(target: "mortsom_coordinator::report", "finished");
+            tracing::warn!(target: "mortsom_scenario_kit::timeline", "relay quiet for 10s");
+            tracing::info!(target: "mortsom_coordinator::desktop", "building v2 clients");
+            tracing::info!(target: "mortsom_coordinator::stack::up", "starting mostrod");
+        });
+        String::from_utf8(sink.0.lock().unwrap().clone()).unwrap()
+    }
+
+    /// The terminal shows long operations and warnings; the scenario's own
+    /// narrative is for `run.log` and `timeline.md`.
+    #[test]
+    fn the_terminal_default_keeps_progress_and_warnings_but_not_the_narrative() {
+        // Arrange / Act
+        let terminal = emit_scenario_and_progress_events(DEFAULT_TERMINAL_FILTER);
+
+        // Assert
+        for quiet in [
+            "order shows pending",
+            "order created",
+            "payment settled",
+            "solver registration sent",
+            "scenario finished",
+            " finished",
+        ] {
+            assert!(!terminal.contains(quiet), "{quiet:?} reached:\n{terminal}");
+        }
+        assert!(terminal.contains("relay quiet for 10s"), "{terminal}");
+        assert!(terminal.contains("building v2 clients"), "{terminal}");
+        assert!(terminal.contains("starting mostrod"), "{terminal}");
+    }
+
+    #[test]
+    fn the_run_log_default_keeps_the_whole_narrative() {
+        // Arrange / Act
+        let log = emit_scenario_and_progress_events(DEFAULT_FILTER);
+
+        // Assert
+        assert!(log.contains("order shows pending"), "{log}");
+        assert!(log.contains("scenario finished"), "{log}");
+        assert!(log.contains("building v2 clients"), "{log}");
     }
 }

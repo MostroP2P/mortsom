@@ -101,6 +101,33 @@ async fn value_moving_scenario_is_refused_without_mainnet_clearance() {
     assert!(err.contains(MAINNET_CONFIRM_ENV), "{err}");
 }
 
+/// A run refused before its id exists (an unknown scenario, a mainnet
+/// spend nobody confirmed) did not start: there is no run to read or
+/// recover, so it is never reported as one.
+#[tokio::test]
+async fn a_refusal_before_the_run_exists_has_not_started() {
+    mortsom_scenarios::link();
+    for (world, names, confirm, says) in [
+        (world(true), ["nope"], true, "unknown scenario"),
+        (world(true), ["happy_sell"], false, MAINNET_CONFIRM_ENV),
+    ] {
+        let error = run_on_nodes(
+            &world,
+            Arc::new(FakeAdapter::full()),
+            opts_in(&world, &names),
+            confirm,
+            &FakeObserver::default(),
+            "regtest",
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(&error, RunError::NotStarted(reason) if reason.contains(says)),
+            "{error:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn unknown_scenario_and_missing_capability_are_explicit() {
     mortsom_scenarios::link();
