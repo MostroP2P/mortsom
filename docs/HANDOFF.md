@@ -3,7 +3,34 @@
 Read [spec.md](../spec.md) first; it is normative. This file says where the work is and what comes next.
 Repository content is English; the operator conversation is Spanish.
 
-## Where things stand (2026-09-25)
+## Where things stand (2026-10-14)
+
+**Linux is re-verified against app `main` (`ae3fe214`) and mostrod v0.19.3: 26 passed, 0 failed, 8 skipped.**
+That covers the twenty cells of the five specified families, plus, for the first time live,
+`unauthorized_actions_at_taken` and the five `restart_*` relaunches. The seven interruption scenarios and
+`nwc_cancel_payment` are skipped with their reason. **Web was not re-run**: this host has no Chromium (see
+*What is left*). Run ids are in [the acceptance ledger](acceptance-ledger.md).
+
+Keeping up with the app took ten open PRs. Merge them **in this order**; the stacked ones retarget to `main`
+as their base merges:
+
+| PR | Base | What |
+|---|---|---|
+| #67 | `main` | Identifier contract test reads `MORTSOM_APP_CHECKOUT`; CI checks out app `main` |
+| #68 | `main` | Pick the stack's daemon on the app's first-run node choice (and read a merged Linux node by its own line) |
+| #69 | #68 | Wait for the book a new order's close returns to |
+| #70 | #69 | `go_home` on a screen still drawing; cleanup moves on when the maker already asked to cancel |
+| #72 | #70 | Read a trade's actions on the form it opens on |
+| #73 | #72 | Skip a scenario needing an interruption the run cannot cause (`Need`) |
+| #71 | `main` | A dispute the seller released under closes as `released` (mostro-core 0.17) |
+| #74 | `main` | mostrod v0.19.3 and `mostro-core =0.17.3` (`user-info`, which app `main` sends on every launch) |
+| #75 | #74 | Tell the launch's read-only queries from a repeated trade action (daemon key, owned stack only) |
+| #76 | `main` | The Web doctor starts the browser, not only finds it |
+
+The stack on this host was rebuilt on v0.19.3 on 2026-10-14 (daemon `6f11dd42…`); no recovery journal is
+pending.
+
+## Where things stood (2026-09-25)
 
 **Every implemented family is accepted live on both platforms: Linux 20/20, Web 20/20.** Happy path,
 cancellations, expirations, disputes and payment failures; the three payment-failure scenarios are accepted
@@ -39,10 +66,10 @@ resolve (see the caveats below). It is up, and no recovery journal is pending on
    invoice completes the order. Cleanup never hands one in, and `stack down` refuses while that journal's
    stack exists. Decide between documenting the manual path (below) in the runbook and letting cleanup
    complete the order in regtest, which changes spec section 11.
-2. **The identifier contract test never runs.** `selectors_match_the_v2_app_contract` reads the app from a
-   fixed sibling `../mobilev2` and passes, skipped, when it is absent: always in CI, which checks out Mortsom
-   alone, and on any host whose checkout has another name. Make the path configurable, fail when a
-   requested check cannot run, and give CI a checkout of the app.
+2. **Web is not re-verified against app `main`.** This host's `chromium-browser` is Ubuntu's wrapper for
+   the Chromium snap, which is not installed, and there is no `chromedriver`. Install the snap (`sudo snap
+   install chromium`; Mortsom uses the unconfined binaries inside it) or point `MORTSOM_BROWSER` and
+   `MORTSOM_CHROMEDRIVER` at a matching pair, then run the catalogue on Web against the merged PRs above.
 3. **A batch's report is only printed.** A multi-scenario `run` prints its family report to the console;
    each run keeps its own artifacts, but nothing records the batch (what was asked, what never ran, the
    totals). Write it under `artifacts/` and name its path.
@@ -110,6 +137,12 @@ identities, exact bundle and stack; missing or tampered storage refuses. SIGKILL
 completed task after fmt, strict clippy and meaningful tests.
 
 ## Last verification
+
+On 2026-10-14, on the local integration of #67 to #76 (Rust 1.99.0): formatting and strict workspace
+clippy clean, 864 workspace tests passed (each PR branch also passes on its own). Live: the Linux catalogue above, `20261014T045514Z-5722ecfe2ca9`
+to `20261014T062553Z-fb7e82c618c5`. GitHub Actions has not run on these PRs.
+
+### Before (2026-09-25)
 
 On `main` at `3f3a96b` (#64), with the Rust toolchain CI uses (1.98.1): formatting and strict
 workspace clippy clean, 839 workspace tests passed, 84.96% line coverage under `cargo llvm-cov`
