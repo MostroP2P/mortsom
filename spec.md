@@ -541,7 +541,7 @@ cargo test --workspace
 
 Line coverage stays at or above 80% measured with `cargo llvm-cov` over the workspace; scenario narratives
 count as tests. App contract changes run the app's Flutter tests and analysis and its documented Rust checks.
-`mostro-core` stays pinned at `=0.17.0` with its Nostr dependency line until a separate reviewed commit
+`mostro-core` stays pinned at `=0.17.3` with its Nostr dependency line until a separate reviewed commit
 changes it.
 
 Each completed change is reviewed independently before commit and the resulting commit is reviewed for

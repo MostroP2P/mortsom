@@ -75,7 +75,7 @@ pub enum StackError {
 /// another (spec section 5). A fixed tag keeps accepted runs reproducible:
 /// a floating `latest` would swap the daemon under the harness whenever
 /// upstream publishes, and with it the protocol behaviour being tested.
-pub const DEFAULT_MOSTRO_IMAGE: &str = "mostrop2p/mostro:v0.19.2";
+pub const DEFAULT_MOSTRO_IMAGE: &str = "mostrop2p/mostro:v0.19.3";
 
 /// How `up` learns that the daemon is alive on the relay.
 #[async_trait]

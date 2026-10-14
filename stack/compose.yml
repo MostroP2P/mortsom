@@ -116,7 +116,7 @@ services:
     # The pinned release is the default; `stack up --mostro-image` or
     # `--mostro-ref` puts another build under the same harness and records
     # it in the fingerprint.
-    image: ${MORTSOM_MOSTRO_IMAGE:-mostrop2p/mostro:v0.19.2}
+    image: ${MORTSOM_MOSTRO_IMAGE:-mostrop2p/mostro:v0.19.3}
     profiles: ["daemon"]
     # /config is a bind mount owned by the invoking user, and settings.toml
     # is mode 600 because it carries the daemon's key. The image's own user
