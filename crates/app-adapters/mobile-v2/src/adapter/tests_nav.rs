@@ -56,3 +56,28 @@ async fn this_sides_standing_cancel_request_is_a_cancel_already_made() {
     assert_eq!(outcome, CancelOutcome::Cancelled);
     assert!(!ui.calls().iter().any(|c| c.starts_with("tap trade.cancel")));
 }
+
+/// A screen that never draws any way back has already spent the UI timeout
+/// in that wait; it is reported then, naming what was looked for, instead
+/// of waiting for the book once more.
+#[tokio::test]
+async fn a_screen_with_no_way_back_is_reported_after_one_wait() {
+    let ui = FakeUi::default();
+
+    let error = nav::go_home(&device(&ui)).await.unwrap_err();
+
+    assert_eq!(
+        error.category,
+        mortsom_common::FailureCategory::AutomationContract
+    );
+    assert!(
+        error.message.contains(Ids::NAV_ORDER_BOOK),
+        "{}",
+        error.message
+    );
+    assert!(
+        error.message.contains(Ids::APPBAR_BACK),
+        "{}",
+        error.message
+    );
+}

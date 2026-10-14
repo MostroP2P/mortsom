@@ -45,7 +45,17 @@ pub async fn go_home(device: &DeviceContext<'_>) -> Result<(), AdapterError> {
         match way {
             Some(id) if id == Ids::ORDER_ADD_FAB => return Ok(()),
             Some(id) => press_seen(device, id).await?,
-            None => break,
+            // That wait already spent the UI timeout: waiting for the book
+            // again would only double how long a stuck screen takes to say so.
+            None => {
+                return Err(AdapterError::contract(format!(
+                    "none of `{}`, `{}` or `{}` appeared within {:?}",
+                    Ids::ORDER_ADD_FAB,
+                    Ids::NAV_ORDER_BOOK,
+                    Ids::APPBAR_BACK,
+                    device.ui_timeout
+                )));
+            }
         }
         if super::appears_within(
             device,
