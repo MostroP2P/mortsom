@@ -613,3 +613,70 @@ async fn desktop_offline_doctor_checks_only_its_platform_and_never_calls_stack()
 
 #[path = "desktop_preflight_tests.rs"]
 mod desktop_preflight_tests;
+
+/// Web doctor of a host whose `chromium-browser` answers `--version` with
+/// `output`.
+async fn web_doctor_with_browser(output: CommandOutput) -> DoctorReport {
+    use mortsom_ui_driver::process::tests_support::FakeRunner;
+    let dir = example_config();
+    let mut host = FakeHost::full();
+    for (tool, path) in [
+        ("chromium-browser", "/usr/bin/chromium-browser"),
+        ("chromedriver", "/usr/bin/chromedriver"),
+    ] {
+        host.tools.insert(tool.into(), PathBuf::from(path));
+    }
+    host.outputs
+        .insert("chromium-browser --version".into(), output);
+    run_desktop_doctor(
+        &dir.path().join("mortsom.toml"),
+        Path::new("/nonexistent/stack"),
+        &DesktopDoctorOptions {
+            platform: mortsom_desktop_driver::Platform::Web,
+            artifact: Some(PathBuf::from("/prebuilt/web")),
+            source: Default::default(),
+            no_network: true,
+        },
+        &host,
+        &FakeNet::healthy(),
+        &FakeRunner::default(),
+    )
+    .await
+}
+
+/// Ubuntu's `chromium-browser` package is a script that hands over to the
+/// Chromium snap, and refuses to start when the snap is gone. Found on
+/// `PATH` it looks like a browser; only running it tells.
+#[tokio::test]
+async fn a_browser_that_does_not_start_fails_the_web_doctor() {
+    let refused = CommandOutput {
+        success: false,
+        stdout: String::new(),
+        stderr:
+            "\nCommand '/usr/bin/chromium-browser' requires the chromium snap to be installed.\n"
+                .into(),
+    };
+
+    let report = web_doctor_with_browser(refused).await;
+
+    let chromium = status_of(&report, "chromium");
+    assert_eq!(chromium.status, CheckStatus::Fail);
+    assert!(
+        chromium.detail.contains("requires the chromium snap"),
+        "{}",
+        chromium.detail
+    );
+}
+
+#[tokio::test]
+async fn a_browser_that_answers_its_version_passes_the_web_doctor() {
+    let report = web_doctor_with_browser(ok("Chromium 141.0.7390.54\n")).await;
+
+    let chromium = status_of(&report, "chromium");
+    assert_eq!(chromium.status, CheckStatus::Pass);
+    assert!(
+        chromium.detail.contains("Chromium 141"),
+        "{}",
+        chromium.detail
+    );
+}

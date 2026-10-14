@@ -35,7 +35,8 @@ pub async fn run_desktop_doctor(
         Path::new("Xvfb"),
         host,
         &mut report,
-    );
+    )
+    .await;
     let stack = if options.no_network {
         None
     } else {
@@ -111,7 +112,7 @@ pub async fn run_desktop_doctor(
     report
 }
 
-fn check_tools(
+async fn check_tools(
     platform: Platform,
     needs_build: bool,
     xvfb: &Path,
@@ -141,18 +142,39 @@ fn check_tools(
     }
     if platform == Platform::Web {
         let tools = crate::web_tools::resolve(host);
-        for (name, tool) in [
-            ("chromedriver", &tools.chromedriver),
-            ("chromium", &tools.browser),
-        ] {
-            let status = if tool.is_usable() {
-                CheckStatus::Pass
-            } else {
-                CheckStatus::Fail
-            };
-            report.push(name, status, tool.describe());
-        }
+        let status = if tools.chromedriver.is_usable() {
+            CheckStatus::Pass
+        } else {
+            CheckStatus::Fail
+        };
+        report.push("chromedriver", status, tools.chromedriver.describe());
+        check_browser(&tools.browser, host, report).await;
     }
+}
+
+/// The browser must start, not only be found: Ubuntu's `chromium-browser`
+/// package is a script that hands over to the Chromium snap and refuses to
+/// run when the snap is gone. Asking its version proves it starts.
+async fn check_browser(
+    browser: &crate::web_tools::WebTool,
+    host: &dyn HostProbe,
+    report: &mut DoctorReport,
+) {
+    if !browser.is_usable() {
+        report.push("chromium", CheckStatus::Fail, browser.describe());
+        return;
+    }
+    let (status, answer) = match host.run(&browser.path, &["--version"]).await {
+        Ok(output) if output.success => (CheckStatus::Pass, output.combined()),
+        Ok(output) => (CheckStatus::Fail, output.combined()),
+        Err(error) => (CheckStatus::Fail, error),
+    };
+    let answer = answer.trim();
+    report.push(
+        "chromium",
+        status,
+        format!("{}: {answer}", browser.describe()),
+    );
 }
 
 fn check_tool(tool: &str, variable: Option<&str>, host: &dyn HostProbe, report: &mut DoctorReport) {
@@ -334,7 +356,7 @@ pub(crate) async fn require_build_prerequisites(
     host: &dyn HostProbe,
 ) -> Result<(), String> {
     let mut report = DoctorReport::default();
-    check_tools(platform, true, xvfb, host, &mut report);
+    check_tools(platform, true, xvfb, host, &mut report).await;
     check_app(config, platform, None, host, &mut report);
     super::desktop_build::check(
         Some(Path::new(&config.mobile.source_dir)),
@@ -354,13 +376,13 @@ pub(crate) async fn require_build_prerequisites(
 }
 
 /// Checks installed tools before fetching remote source.
-pub(crate) fn require_tools(
+pub(crate) async fn require_tools(
     platform: Platform,
     xvfb: &Path,
     host: &dyn HostProbe,
 ) -> Result<(), String> {
     let mut report = DoctorReport::default();
-    check_tools(platform, true, xvfb, host, &mut report);
+    check_tools(platform, true, xvfb, host, &mut report).await;
     if report.is_healthy() {
         Ok(())
     } else {

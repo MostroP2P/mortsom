@@ -159,3 +159,39 @@ fn nothing_found_keeps_the_bare_names_so_errors_stay_readable() {
             .contains("MORTSOM_CHROMEDRIVER")
     );
 }
+
+/// Ubuntu's `chromium-browser` package is a script that hands over to the
+/// confined snap. With the snap installed, its unconfined pair is what can
+/// write a profile, and is used instead.
+#[test]
+fn ubuntus_chromium_browser_script_is_replaced_by_the_snaps_unconfined_pair() {
+    let host = Host {
+        on_path: [("chromium-browser", "/usr/bin/chromium-browser")].into(),
+        executables: [SNAP_CHROME, SNAP_DRIVER].into(),
+        ..Host::default()
+    };
+
+    let tools = resolve(&host);
+
+    assert_eq!(tools.browser.path, PathBuf::from(SNAP_CHROME));
+    assert_eq!(tools.browser.origin, Origin::SnapUnconfined);
+    assert_eq!(tools.chromedriver.path, PathBuf::from(SNAP_DRIVER));
+}
+
+/// Without the snap a `chromium-browser` on `PATH` may be a real browser
+/// (Fedora ships one): it is kept, and the doctor's version check decides.
+#[test]
+fn a_chromium_browser_without_the_snap_is_kept_as_found() {
+    let host = Host {
+        on_path: [("chromium-browser", "/usr/bin/chromium-browser")].into(),
+        ..Host::default()
+    };
+
+    let tools = resolve(&host);
+
+    assert_eq!(
+        tools.browser.path,
+        PathBuf::from("/usr/bin/chromium-browser")
+    );
+    assert_eq!(tools.browser.origin, Origin::OnPath);
+}

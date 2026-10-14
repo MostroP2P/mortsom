@@ -21,6 +21,9 @@ pub const CHROMEDRIVER_VARIABLE: &str = "MORTSOM_CHROMEDRIVER";
 pub const SNAP_CHROMIUM_LIB: &str = "/snap/chromium/current/usr/lib/chromium-browser";
 /// Snap command wrappers live here and run confined.
 const SNAP_BIN: &str = "/snap/bin";
+/// Ubuntu's transitional package installs this name as a script that runs
+/// the Chromium snap.
+const UBUNTU_WRAPPER: &str = "chromium-browser";
 /// Browser names tried on `PATH`, in order.
 const BROWSER_NAMES: [&str; 4] = [
     "chromium",
@@ -155,6 +158,19 @@ fn from_path(
     variable: &'static str,
 ) -> WebTool {
     if !found.starts_with(SNAP_BIN) {
+        // Ubuntu's `chromium-browser` package is a script that hands over to
+        // the confined snap; with the snap installed, its unconfined binary
+        // is the one that works. Without it the hit may be a real browser
+        // (Fedora ships one) and is kept for the doctor's version check.
+        if found.file_name().is_some_and(|name| name == UBUNTU_WRAPPER)
+            && let Some(path) = snap_binary(host, snap_name)
+        {
+            return WebTool {
+                path,
+                origin: Origin::SnapUnconfined,
+                variable,
+            };
+        }
         return WebTool {
             path: found,
             origin: Origin::OnPath,
