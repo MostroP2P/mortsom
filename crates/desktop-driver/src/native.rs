@@ -39,16 +39,26 @@ pub fn error(cause: impl std::fmt::Display) -> UiError {
     ))
 }
 
-/// Extracts a unique contract line, allowing Flutter's merged tab-position label.
+/// Extracts the node's contract line, allowing Flutter's merged tab-position label.
+///
+/// Flutter writes a merged node's own label before the labels it absorbs, so
+/// a name that starts with a contract line is that line's node even when a
+/// child's line follows (a node card merged into the first run's node
+/// choice); its value stops where the child's line starts, and the child's
+/// identifier, absorbed into it, is not a node of its own to find. A
+/// contract line anywhere else must be the only one, or the name is
+/// ambiguous.
 pub fn label(name: &str) -> Option<(&str, &str)> {
     let mut markers = name
         .match_indices("[mortsom:")
         .filter(|(index, _)| *index == 0 || name.as_bytes()[index - 1] == b'\n');
     let (index, _) = markers.next()?;
-    if markers.next().is_some() {
+    let next = markers.next().map(|(next, _)| next);
+    if index != 0 && next.is_some() {
         return None;
     }
-    let (id, value) = name[index..].strip_prefix("[mortsom:")?.split_once(']')?;
+    let own = &name[index..next.map_or(name.len(), |next| next - 1)];
+    let (id, value) = own.strip_prefix("[mortsom:")?.split_once(']')?;
     if id.is_empty() || id.contains(['\n', '\r']) {
         return None;
     }
@@ -396,8 +406,23 @@ mod tests {
             Some(("order.book.tab.sell", "\nSell BTC"))
         );
         assert_eq!(label("copy [mortsom:order.book.tab.sell]"), None);
-        assert_eq!(label("[mortsom:first]\n[mortsom:second]"), None);
+        assert_eq!(label("Tab 2 of 2\n[mortsom:first]\n[mortsom:second]"), None);
         assert_eq!(label("[mortsom:]"), None);
+    }
+
+    /// The first run's node choice wraps each node card (`node.item.<pk>`)
+    /// in its own merged `onboarding.community.card.<pk>`: the merged node
+    /// carries its own line first and its child's after it.
+    #[test]
+    fn a_merged_node_is_the_identifier_its_name_starts_with() {
+        assert_eq!(
+            label("[mortsom:onboarding.community.card.ab]\n[mortsom:node.item.ab]\nMostro"),
+            Some(("onboarding.community.card.ab", ""))
+        );
+        assert_eq!(
+            label("[mortsom:first]value\n[mortsom:second]"),
+            Some(("first", "value"))
+        );
     }
     #[test]
     fn preserves_url_characters_in_dynamic_relay_identifiers() {

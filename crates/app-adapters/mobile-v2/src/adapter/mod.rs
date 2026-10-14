@@ -59,13 +59,14 @@ impl AppAdapter for MobileV2Adapter {
         ])
     }
 
-    /// Walkthrough, then the identity the app generated on first launch.
+    /// Walkthrough and node choice, then the identity the app generated on
+    /// first launch.
     async fn onboard(
         &self,
         device: &DeviceContext<'_>,
-        _env: &TestEnvironment,
+        env: &TestEnvironment,
     ) -> Result<Identity, AdapterError> {
-        onboarding::complete(device).await?;
+        onboarding::complete(device, env).await?;
         let identity = self.displayed_identity(device).await?;
         nav::go_home(device).await?;
         Ok(identity)

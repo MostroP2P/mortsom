@@ -110,6 +110,8 @@ pub mod tests_support {
         /// Controls that grey out once tapped, the way a submit does while
         /// the app is still working on the request.
         disabled_after_tap: Mutex<Vec<String>>,
+        /// Controls a tap makes pressable: a confirm that waits for a pick.
+        on_tap_enable: Mutex<BTreeMap<String, Vec<String>>>,
         /// Elements that leave the screen after answering this many more
         /// probes; reading one that has left fails.
         vanishing: Mutex<BTreeMap<String, u32>>,
@@ -247,6 +249,14 @@ pub mod tests_support {
             self.disabled_after_tap.lock().unwrap().push(id.to_owned());
         }
 
+        /// Tapping `id` makes `enable` pressable again.
+        pub fn on_tap_enable(&self, id: &str, enable: &[&str]) {
+            self.on_tap_enable
+                .lock()
+                .unwrap()
+                .insert(id.into(), enable.iter().map(|s| (*s).to_owned()).collect());
+        }
+
         /// Greys `ids` out: on screen, but not accepting a press.
         ///
         /// A form that has been submitted and is waiting on the network
@@ -361,6 +371,12 @@ pub mod tests_support {
                 .any(|d| d == id)
             {
                 self.disabled.lock().unwrap().push(id.to_owned());
+            }
+            if let Some(enable) = self.on_tap_enable.lock().unwrap().get(id).cloned() {
+                self.disabled
+                    .lock()
+                    .unwrap()
+                    .retain(|d| !enable.contains(d));
             }
             if let Some(appear) = self.on_tap.lock().unwrap().get(id).cloned() {
                 self.present.lock().unwrap().extend(appear);

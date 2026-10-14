@@ -23,10 +23,11 @@ impl Ids {
     pub const DRAWER_ACCOUNT: &'static str = "drawer.account";
     pub const DRAWER_SETTINGS: &'static str = "drawer.settings";
     pub const DRAWER_ABOUT: &'static str = "drawer.about";
-    // v2 walkthrough has three slides and no community step.
+    // v2 walkthrough has three slides; the first run then asks for a node.
     pub const WALKTHROUGH_SKIP: &'static str = "onboarding.walkthrough.skip";
     pub const WALKTHROUGH_NEXT: &'static str = "onboarding.walkthrough.next";
     pub const WALKTHROUGH_DONE: &'static str = "onboarding.walkthrough.done";
+    pub const COMMUNITY_DONE: &'static str = "onboarding.community.done";
     // Key management (account screen).
     pub const KEYS_GENERATE: &'static str = "keys.generate";
     pub const KEYS_GENERATE_CONFIRM: &'static str = "keys.generate.confirm";
@@ -144,6 +145,7 @@ impl Ids {
         Self::WALKTHROUGH_SKIP,
         Self::WALKTHROUGH_NEXT,
         Self::WALKTHROUGH_DONE,
+        Self::COMMUNITY_DONE,
         Self::KEYS_GENERATE,
         Self::KEYS_GENERATE_CONFIRM,
         Self::KEYS_IMPORT,
@@ -219,6 +221,11 @@ impl Ids {
         Self::PAY_CANCEL,
     ];
 
+    /// Card of the node `pubkey` (hex) on the first run's node choice.
+    pub fn community_card(pubkey: &str) -> String {
+        format!("onboarding.community.card.{pubkey}")
+    }
+
     /// Row of `order_id` in the order book.
     pub fn order_book_item(order_id: &str) -> String {
         format!("order.book.item.{order_id}")
@@ -293,12 +300,13 @@ mod tests {
     const APP_CHECKOUT_ENV: &str = "MORTSOM_APP_CHECKOUT";
 
     /// Prefixes of the keyed identifiers the adapter builds at run time.
-    const DYNAMIC_PREFIXES: [&str; 5] = [
+    const DYNAMIC_PREFIXES: [&str; 6] = [
         "settings.relays.item.$",
         "order.book.item.$",
         "trades.item.$",
         "order.create.currency.$",
         "trade.rate.star.$",
+        "onboarding.community.card.$",
     ];
 
     /// Every identifier and dynamic prefix the adapter uses that the
@@ -401,6 +409,7 @@ mod tests {
         assert_eq!(Ids::trades_item("o1"), "trades.item.o1");
         assert_eq!(Ids::currency_option("USD"), "order.create.currency.USD");
         assert_eq!(Ids::rate_star(5), "trade.rate.star.5");
+        assert_eq!(Ids::community_card("ab"), "onboarding.community.card.ab");
         assert_eq!(
             Ids::relay_item("ws://127.0.0.1:7000"),
             "settings.relays.item.ws://127.0.0.1:7000"
