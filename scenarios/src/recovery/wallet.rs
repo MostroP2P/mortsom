@@ -9,6 +9,7 @@ use mortsom_common::Actor;
 use mortsom_scenario_kit::cancel::cancel_payment;
 use mortsom_scenario_kit::context::{Context, ScenarioError};
 use mortsom_scenario_kit::recovery::payment_fails_while_offline;
+use mortsom_scenario_kit::registry::Need;
 
 use super::{NO_VALUE_TIMEOUT_SECS, TRADE_TIMEOUT_SECS};
 use crate::flow;
@@ -66,6 +67,7 @@ crate::register_scenario! {
     requires: flow::TRADE_REQUIRES,
     timeout_secs: TRADE_TIMEOUT_SECS,
     moves_value: true,
+    needs: &[Need::Connectivity],
 }
 
 /// Keeps registrations linked.

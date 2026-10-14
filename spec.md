@@ -278,6 +278,9 @@ tags are reserved, and no scenario carries them yet.
 
 A scenario whose profile lacks a required capability is **skipped with a reason, never failed**, and a
 skipped scenario is never counted as accepted.
+The same holds for a scenario that needs an interruption the run cannot cause: sending the app to the
+background, cutting its network, rotating the device, or restarting or replaying into the run relay. Linux
+and Web clients cause none of them, and a run's relay is the stack's.
 
 ### 8.2 Happy path
 

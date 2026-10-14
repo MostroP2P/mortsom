@@ -422,6 +422,7 @@ inventory::submit! {
         moves_value: false,
         needs_app_wallet: false,
         needs_solver: false,
+        needs: &[],
         run: flaky_infra,
     }
 }
@@ -453,6 +454,7 @@ inventory::submit! {
         moves_value: false,
         needs_app_wallet: false,
         needs_solver: false,
+        needs: &[],
         run: noop,
     }
 }
@@ -484,4 +486,33 @@ fn walk_text(dir: &Path) -> String {
         }
     }
     out
+}
+
+/// A value-moving scenario the run's clients cannot interrupt never reaches
+/// a payment, so it is skipped with its need before spending is cleared,
+/// not refused for want of mainnet authorization.
+#[tokio::test]
+async fn an_interruption_the_clients_cannot_cause_is_skipped_before_clearance() {
+    mortsom_scenarios::link();
+    let opted_in = world(true);
+    let adapter = FakeAdapter::full();
+    adapter
+        .flags
+        .uninterruptible
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+
+    let summary = run(
+        &opted_in,
+        Arc::new(adapter),
+        opts_in(&opted_in, &["wallet_unavailable_then_pay"]),
+        false,
+    )
+    .await
+    .unwrap();
+
+    match &summary.results[0].outcome {
+        Outcome::Skipped { reason } => assert!(reason.contains("connectivity"), "{reason}"),
+        other => panic!("expected a skip, got {other:?}"),
+    }
+    assert!(!summary.mainnet_cleared);
 }
