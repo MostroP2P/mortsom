@@ -105,7 +105,7 @@ async fn a_seller_releasing_under_dispute_completes_the_trade_and_closes_the_dis
             "release:alice"
         ]
     );
-    assert_eq!(fixture.dispute_states(DISPUTE), ["initiated", "settled"]);
+    assert_eq!(fixture.dispute_states(DISPUTE), ["initiated", "released"]);
     assert_eq!(
         fixture.relay_states(ORDER),
         ["pending", "in-progress", "success"]

@@ -197,3 +197,24 @@ pub async fn solver_cancels(ctx: &Context, order: &OrderReference) -> Result<(),
     );
     Ok(())
 }
+
+#[cfg(test)]
+mod status_tests {
+    use super::dispute_status;
+    use mostro_core::dispute::Status;
+
+    /// The statuses are matched as wire strings; each must be the one
+    /// mostro-core writes, or a renamed status goes unseen until a live run.
+    #[test]
+    fn dispute_statuses_are_mostro_cores() {
+        for (ours, core) in [
+            (dispute_status::INITIATED, Status::Initiated),
+            (dispute_status::IN_PROGRESS, Status::InProgress),
+            (dispute_status::SELLER_REFUNDED, Status::SellerRefunded),
+            (dispute_status::SETTLED, Status::Settled),
+            (dispute_status::RELEASED, Status::Released),
+        ] {
+            assert_eq!(ours, core.to_string());
+        }
+    }
+}

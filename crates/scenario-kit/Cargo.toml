@@ -22,6 +22,7 @@ mortsom-ui-driver = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+mostro-core = { workspace = true }
 nostr-sdk = { workspace = true }
 
 [lints]
