@@ -96,6 +96,7 @@ async fn prepare(
         platform,
         Some(artifact),
         "Xvfb".into(),
+        mortsom_coordinator::build_cache::Policy::Reuse,
         &TokioRunner,
         &RealHost,
     )

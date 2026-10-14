@@ -116,6 +116,7 @@ mod tests {
             preserve_legacy_recovery: Vec::new(),
             platform: mortsom_desktop_driver::Platform::Linux,
             app_artifact: None,
+            rebuild: false,
             source: Default::default(),
             xvfb: PathBuf::from("Xvfb"),
             scenarios: scenarios.iter().map(|s| (*s).to_owned()).collect(),

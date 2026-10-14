@@ -41,6 +41,7 @@ async fn incomplete_or_wrong_platform_artifacts_are_rejected_before_launch() {
                 platform,
                 Some(artifact),
                 "Xvfb".into(),
+                crate::build_cache::Policy::Reuse,
                 &runner,
                 &crate::doctor::RealHost
             )
@@ -79,6 +80,7 @@ async fn existing_artifact_does_not_require_source_or_invoke_a_build() {
         Platform::Linux,
         Some(artifact.clone()),
         "Xvfb".into(),
+        crate::build_cache::Policy::Reuse,
         &runner,
         &crate::doctor::RealHost,
     )
@@ -129,6 +131,7 @@ async fn binding_failure_stops_the_build_and_redacts_child_output() {
         Platform::Web,
         None,
         "Xvfb".into(),
+        crate::build_cache::Policy::Reuse,
         &runner,
         &BuildHost { missing: None },
     )
@@ -152,6 +155,7 @@ async fn successful_build_command_without_outputs_is_rejected() {
                 platform,
                 None,
                 "Xvfb".into(),
+                crate::build_cache::Policy::Reuse,
                 &runner,
                 &BuildHost { missing: None }
             )
@@ -184,9 +188,17 @@ async fn missing_build_tool_stops_before_codegen_or_flutter_runs() {
         let host = BuildHost {
             missing: Some(missing),
         };
-        let error = prepare(&config, platform, None, "Xvfb".into(), &runner, &host)
-            .await
-            .unwrap_err();
+        let error = prepare(
+            &config,
+            platform,
+            None,
+            "Xvfb".into(),
+            crate::build_cache::Policy::Reuse,
+            &runner,
+            &host,
+        )
+        .await
+        .unwrap_err();
         assert!(
             runner.calls().is_empty(),
             "missing {missing} must prevent all builds"
@@ -210,6 +222,7 @@ async fn a_custom_xvfb_path_satisfies_runtime_checks_before_the_build() {
             Platform::Linux,
             None,
             executable.into(),
+            crate::build_cache::Policy::Reuse,
             &runner,
             &host,
         )
@@ -293,4 +306,126 @@ impl crate::doctor::HostProbe for BuildHost {
             stderr: String::new(),
         })
     }
+}
+
+fn kept_bundle() -> crate::fingerprint::CapturedBundle {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let executable = root.path().join("mostro");
+    std::fs::write(&executable, b"kept build").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    crate::fingerprint::CapturedBundle::capture(root.path()).unwrap()
+}
+
+fn managed(root: &Path) -> (Config, crate::build_cache::BuildCache) {
+    let mut config = config(root);
+    config.mobile.source_dir = root.display().to_string();
+    let cache = crate::build_cache::BuildCache::open(&root.join("bundles")).unwrap();
+    (config, cache)
+}
+
+async fn obtain(
+    config: &Config,
+    cache: Option<&crate::build_cache::BuildCache>,
+    policy: crate::build_cache::Policy,
+    runner: &FakeRunner,
+) -> Obtained {
+    obtain_build(
+        config,
+        Platform::Linux,
+        cache,
+        policy,
+        runner,
+        &BuildHost { missing: None },
+    )
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_kept_build_with_the_same_key_skips_every_build_command() {
+    use crate::build_cache::Policy;
+    let root = tempfile::tempdir().unwrap();
+    let (config, cache) = managed(root.path());
+    let runner = FakeRunner::default();
+    let built = obtain(&config, Some(&cache), Policy::Reuse, &runner).await;
+    assert_eq!(runner.calls().len(), 3);
+    let key = built.keep_as.unwrap();
+    let bundle = kept_bundle();
+    cache
+        .store(
+            &key,
+            &bundle,
+            &built.provenance,
+            std::time::SystemTime::now(),
+        )
+        .unwrap();
+    let runner = FakeRunner::default();
+    let reused = obtain(&config, Some(&cache), Policy::Reuse, &runner).await;
+    assert!(runner.calls().is_empty(), "{:?}", runner.calls());
+    assert_eq!(
+        reused.provenance.origin,
+        crate::provenance::ArtifactOrigin::Cached
+    );
+    assert_eq!(reused.provenance.commands, built.provenance.commands);
+    assert_eq!(std::fs::read(&reused.artifact).unwrap(), b"kept build");
+    assert_eq!(reused.expected.as_ref(), Some(bundle.fingerprint()));
+    assert!(reused.keep_as.is_none());
+}
+
+#[tokio::test]
+async fn rebuild_builds_and_keeps_again_even_when_a_build_is_kept() {
+    use crate::build_cache::Policy;
+    let root = tempfile::tempdir().unwrap();
+    let (config, cache) = managed(root.path());
+    let built = obtain(&config, Some(&cache), Policy::Reuse, &FakeRunner::default()).await;
+    let key = built.keep_as.unwrap();
+    cache
+        .store(
+            &key,
+            &kept_bundle(),
+            &built.provenance,
+            std::time::SystemTime::now(),
+        )
+        .unwrap();
+    let runner = FakeRunner::default();
+    let rebuilt = obtain(&config, Some(&cache), Policy::Rebuild, &runner).await;
+    assert_eq!(runner.calls().len(), 3);
+    assert_eq!(rebuilt.keep_as, Some(key));
+    assert_eq!(
+        rebuilt.provenance.origin,
+        crate::provenance::ArtifactOrigin::Source
+    );
+}
+
+#[tokio::test]
+async fn a_new_stack_identity_misses_the_kept_build() {
+    use crate::build_cache::Policy;
+    let root = tempfile::tempdir().unwrap();
+    let (mut config, cache) = managed(root.path());
+    let built = obtain(&config, Some(&cache), Policy::Reuse, &FakeRunner::default()).await;
+    cache
+        .store(
+            &built.keep_as.unwrap(),
+            &kept_bundle(),
+            &built.provenance,
+            std::time::SystemTime::now(),
+        )
+        .unwrap();
+    config.relay.host_port += 1;
+    let runner = FakeRunner::default();
+    let rebuilt = obtain(&config, Some(&cache), Policy::Reuse, &runner).await;
+    assert_eq!(runner.calls().len(), 3);
+    assert!(rebuilt.keep_as.is_some());
+}
+
+#[tokio::test]
+async fn a_local_checkout_is_built_and_never_kept() {
+    use crate::build_cache::Policy;
+    let root = tempfile::tempdir().unwrap();
+    let (config, _) = managed(root.path());
+    let runner = FakeRunner::default();
+    let built = obtain(&config, None, Policy::Reuse, &runner).await;
+    assert_eq!(runner.calls().len(), 3);
+    assert!(built.keep_as.is_none() && built.expected.is_none());
 }

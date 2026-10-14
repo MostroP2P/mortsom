@@ -1,4 +1,5 @@
 //! Preparation of v2 clients attached to the regtest stack.
+use crate::build_cache::{BuildCache, Policy};
 use crate::{Config, run::DesktopOptions, stack::StackContext};
 use mortsom_desktop_driver::Platform;
 use mortsom_ui_driver::process::{Command, CommandRunner, run_ok};
@@ -44,39 +45,168 @@ pub async fn load_with_source(
     Ok((config, stack.snapshot()))
 }
 
-/// Resolves or builds the actual app artifact with the stack identity.
+/// Where a Linux source build leaves its bundle, relative to the checkout.
+const LINUX_BUNDLE: &str = "build/linux/x64/release/bundle";
+/// The Linux bundle's executable.
+const LINUX_EXECUTABLE: &str = "mostro";
+/// Where a Web source build leaves its bundle, relative to the checkout.
+const WEB_BUNDLE: &str = "build/web";
+
+/// Resolves, reuses or builds the actual app artifact with the stack identity.
 pub async fn prepare(
     config: &Config,
     platform: Platform,
     artifact: Option<PathBuf>,
     xvfb: PathBuf,
+    policy: Policy,
     runner: &dyn CommandRunner,
     host: &dyn crate::doctor::HostProbe,
 ) -> Result<DesktopOptions, String> {
     let (config, managed) =
         resolve_source(config, platform, artifact.is_none(), &xvfb, runner, host).await?;
-    let (artifact, mut provenance) = match artifact {
-        Some(path) => (
-            path.canonicalize().map_err(|e| e.to_string())?,
-            crate::provenance::BuildProvenance::prebuilt(),
-        ),
+    let cache = managed
+        .as_ref()
+        .and_then(|_| open_cache(Path::new(crate::build_cache::DIR)));
+    let Obtained {
+        artifact,
+        mut provenance,
+        expected,
+        keep_as,
+    } = match artifact {
+        Some(path) => Obtained {
+            artifact: path.canonicalize().map_err(|e| e.to_string())?,
+            provenance: crate::provenance::BuildProvenance::prebuilt(),
+            expected: None,
+            keep_as: None,
+        },
         None => {
             crate::doctor::require_build_prerequisites(&config, platform, &xvfb, host).await?;
-            build_artifact(&config, platform, runner, host).await?
+            obtain_build(&config, platform, cache.as_ref(), policy, runner, host).await?
         }
     };
-    if let Some(source) = &managed {
-        if provenance
-            .source_before
-            .as_ref()
-            .is_none_or(|identity| identity.revision != source.selection.revision || identity.dirty)
-        {
-            return Err("managed app source changed before the build".into());
-        }
-        provenance.remote_selection = Some(source.selection.clone());
-    }
+    record_selection(managed.as_ref(), &mut provenance)?;
     validate_artifact(platform, &artifact, host)?;
-    capture_options(platform, artifact, provenance, xvfb, host).await
+    let options = capture_options(platform, artifact, provenance, xvfb, host).await?;
+    if expected.is_some_and(|kept| &kept != options.bundle.fingerprint()) {
+        return Err("kept app bundle changed before it was captured".into());
+    }
+    if let (Some(cache), Some(key)) = (&cache, keep_as) {
+        keep(cache, &key, &options);
+    }
+    Ok(options)
+}
+
+/// Refuses a build whose checkout was not the fetched clean head, then
+/// records the selection that resolved it.
+fn record_selection(
+    managed: Option<&crate::app_source::PreparedSource>,
+    provenance: &mut crate::provenance::BuildProvenance,
+) -> Result<(), String> {
+    let Some(source) = managed else {
+        return Ok(());
+    };
+    if provenance
+        .source_before
+        .as_ref()
+        .is_none_or(|identity| identity.revision != source.selection.revision || identity.dirty)
+    {
+        return Err("managed app source changed before the build".into());
+    }
+    provenance.remote_selection = Some(source.selection.clone());
+    Ok(())
+}
+
+/// A built or kept artifact, with what to check or keep once captured.
+struct Obtained {
+    artifact: PathBuf,
+    provenance: crate::provenance::BuildProvenance,
+    /// The kept bundle's recorded identity, which the capture must match.
+    expected: Option<crate::fingerprint::BundleFingerprint>,
+    /// The key a fresh managed build is kept under once captured.
+    keep_as: Option<String>,
+}
+
+/// Reuses the kept bundle of an identical managed build, or builds the source.
+async fn obtain_build(
+    config: &Config,
+    platform: Platform,
+    cache: Option<&BuildCache>,
+    policy: Policy,
+    runner: &dyn CommandRunner,
+    host: &dyn crate::doctor::HostProbe,
+) -> Result<Obtained, String> {
+    let source = Path::new(&config.mobile.source_dir)
+        .canonicalize()
+        .map_err(|e| e.to_string())?;
+    let provenance = crate::provenance::BuildProvenance::begin(&source, platform, host).await?;
+    let plan = build_plan(
+        &source,
+        platform,
+        &config.mobile.mostro_pubkey,
+        config.relay.host_port,
+        config.mobile.order_expiry_secs,
+    );
+    let commands: Vec<Vec<String>> = plan
+        .iter()
+        .map(|(command, _)| recorded(command, &source))
+        .collect();
+    let key = cache.and(crate::build_cache::key(platform, &provenance, &commands));
+    if let (Some(cache), Some(key), Policy::Reuse) = (cache, key.as_deref(), policy)
+        && let Some(kept) = lookup(cache, key)
+    {
+        tracing::info!(%platform, "reusing the kept app build");
+        return Ok(Obtained {
+            artifact: artifact_in(&kept.root, platform),
+            provenance: kept.provenance,
+            expected: Some(kept.fingerprint),
+            keep_as: None,
+        });
+    }
+    let (artifact, provenance) =
+        build_artifact(&source, platform, provenance, plan, commands, runner, host).await?;
+    Ok(Obtained {
+        artifact,
+        provenance,
+        expected: None,
+        keep_as: key,
+    })
+}
+
+/// The kept bundles, or none when the directory cannot be used.
+fn open_cache(root: &Path) -> Option<BuildCache> {
+    BuildCache::open(root)
+        .inspect_err(|error| tracing::warn!(%error, "kept app builds are unavailable"))
+        .ok()
+}
+
+fn lookup(cache: &BuildCache, key: &str) -> Option<crate::build_cache::KeptBuild> {
+    cache
+        .lookup(key, std::time::SystemTime::now())
+        .inspect_err(|error| tracing::warn!(%error, "cannot read the kept app build"))
+        .ok()
+        .flatten()
+}
+
+/// Keeps a fresh managed build for a later identical invocation; the run
+/// goes on with its own capture when the copy cannot be kept.
+fn keep(cache: &BuildCache, key: &str, options: &DesktopOptions) {
+    match cache.store(
+        key,
+        &options.bundle,
+        &options.provenance,
+        std::time::SystemTime::now(),
+    ) {
+        Ok(()) => tracing::info!("kept the app build for reuse"),
+        Err(error) => tracing::warn!(%error, "cannot keep the app build for reuse"),
+    }
+}
+
+/// The artifact a client launches from a bundle directory.
+fn artifact_in(bundle: &Path, platform: Platform) -> PathBuf {
+    match platform {
+        Platform::Linux => bundle.join(LINUX_EXECUTABLE),
+        Platform::Web => bundle.to_path_buf(),
+    }
 }
 
 async fn resolve_source(
@@ -151,44 +281,41 @@ async fn capture_options(
 }
 
 async fn build_artifact(
-    config: &Config,
+    source: &Path,
     platform: Platform,
+    mut provenance: crate::provenance::BuildProvenance,
+    plan: Vec<(Command, Duration)>,
+    commands: Vec<Vec<String>>,
     runner: &dyn CommandRunner,
     host: &dyn crate::doctor::HostProbe,
 ) -> Result<(PathBuf, crate::provenance::BuildProvenance), String> {
-    let source = Path::new(&config.mobile.source_dir)
-        .canonicalize()
-        .map_err(|e| e.to_string())?;
-    let mut provenance = crate::provenance::BuildProvenance::begin(&source, platform, host).await?;
     tracing::info!(%platform, "building v2 clients");
-    for (command, timeout) in build_plan(
-        &source,
-        platform,
-        &config.mobile.mostro_pubkey,
-        config.relay.host_port,
-        config.mobile.order_expiry_secs,
-    ) {
+    for (command, timeout) in plan {
         run_ok(runner, &command, timeout)
             .await
             .map_err(build_error)?;
-        provenance.commands.push(
-            std::iter::once(command.program.display().to_string())
-                .chain(command.args.into_iter().map(|arg| {
-                    if arg == format!("--chdir={}", source.display()) {
-                        "--chdir=<source>".into()
-                    } else {
-                        arg
-                    }
-                }))
-                .collect(),
-        );
     }
-    provenance.finish(&source, host).await?;
-    let artifact = source.join(match platform {
-        Platform::Linux => "build/linux/x64/release/bundle/mostro",
-        Platform::Web => "build/web",
+    provenance.commands = commands;
+    provenance.finish(source, host).await?;
+    let bundle = source.join(match platform {
+        Platform::Linux => LINUX_BUNDLE,
+        Platform::Web => WEB_BUNDLE,
     });
-    Ok((artifact, provenance))
+    Ok((artifact_in(&bundle, platform), provenance))
+}
+
+/// A build command as provenance records it, with the checkout as `<source>`.
+fn recorded(command: &Command, source: &Path) -> Vec<String> {
+    let checkout = format!("--chdir={}", source.display());
+    std::iter::once(command.program.display().to_string())
+        .chain(command.args.iter().map(|arg| {
+            if *arg == checkout {
+                "--chdir=<source>".into()
+            } else {
+                arg.clone()
+            }
+        }))
+        .collect()
 }
 
 fn build_plan(

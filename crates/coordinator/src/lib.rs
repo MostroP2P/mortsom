@@ -34,6 +34,9 @@ pub mod fingerprint;
 /// Source and build provenance for captured desktop artifacts.
 pub mod provenance;
 
+/// Managed-source app bundles kept and reused across invocations.
+pub mod build_cache;
+
 /// Protected desktop identity and action recovery.
 pub mod recovery_store;
 

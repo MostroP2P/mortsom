@@ -32,6 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         platform,
         None,
         "Xvfb".into(),
+        mortsom_coordinator::build_cache::Policy::Reuse,
         &TokioRunner,
         &RealHost,
     )
