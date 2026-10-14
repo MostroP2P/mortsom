@@ -120,14 +120,14 @@ pub async fn dispute_canceled_by_solver(ctx: &Context) -> Result<(), ScenarioErr
 
 /// The parties sort it out themselves: Bob disputes at fiat-sent, then
 /// Alice releases anyway. The trade completes as any other and the daemon
-/// closes the dispute as settled without a solver ever taking it.
+/// closes the dispute as released without a solver ever taking it.
 pub async fn dispute_released_by_seller(ctx: &Context) -> Result<(), ScenarioError> {
     let taken = flow::create_take_and_fund(ctx).await?;
     flow::fiat_sent(ctx, &taken.order).await?;
     let dispute = open_and_confirm(ctx, Actor::Bob, &taken.order).await?;
     let since = actions::relay_cursor(ctx);
     flow::release_and_settle(ctx, &taken).await?;
-    actions::wait_dispute_status(ctx, &dispute.id, dispute_status::SETTLED, since).await?;
+    actions::wait_dispute_status(ctx, &dispute.id, dispute_status::RELEASED, since).await?;
     Ok(())
 }
 
