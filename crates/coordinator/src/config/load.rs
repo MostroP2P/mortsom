@@ -356,7 +356,7 @@ avd_image = \"x\"
 
         assert_eq!(config.run.lane, Lane::Ci);
         assert_eq!(
-            config.relay.host_port, 7000,
+            config.relay.host_port, 7500,
             "baseline values survive the overlay"
         );
     }

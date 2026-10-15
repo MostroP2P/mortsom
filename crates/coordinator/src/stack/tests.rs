@@ -468,15 +468,15 @@ async fn resolve_reads_only_public_facts_from_the_stack_it_owns() {
     );
     assert_eq!(
         context.lookup("MORTSOM_ALICE_LND_HOST").unwrap(),
-        "https://127.0.0.1:10001"
+        "https://127.0.0.1:10501"
     );
     assert_eq!(
         context.lookup("MORTSOM_MOSTRO_SETTINGS_FILE").unwrap(),
         layout.settings_file().display().to_string()
     );
     let snapshot = context.snapshot();
-    assert_eq!(snapshot.relay_url, "ws://127.0.0.1:7000");
-    assert_eq!(snapshot.wallet_endpoints["bob"], "https://127.0.0.1:10002");
+    assert_eq!(snapshot.relay_url, "ws://127.0.0.1:7500");
+    assert_eq!(snapshot.wallet_endpoints["bob"], "https://127.0.0.1:10502");
     assert!(context.lookup("MORTSOM_MOSTRO_NSEC").is_none());
 }
 
@@ -805,10 +805,10 @@ fn the_compose_file_publishes_exactly_the_ports_the_spec_fixes() {
 
     // Assert
     for published in [
-        "\"10001:10009\"",
-        "\"10002:10009\"",
-        "\"10003:10009\"",
-        "\"127.0.0.1:7000:7000\"",
+        "\"10501:10009\"",
+        "\"10502:10009\"",
+        "\"10503:10009\"",
+        "\"127.0.0.1:7500:7500\"",
     ] {
         assert!(compose.contains(published), "{published}");
     }

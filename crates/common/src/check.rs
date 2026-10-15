@@ -274,7 +274,7 @@ mod layout_tests {
         let mut report = DoctorReport::default();
         report.push("docker", CheckStatus::Pass, "29.7");
         report.push(
-            "relay ws://host.docker.internal:7000",
+            "relay ws://host.docker.internal:7500",
             CheckStatus::Skip,
             "idle",
         );

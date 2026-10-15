@@ -256,8 +256,8 @@ mod tests {
         // Mortsom, which never recorded how its daemon was selected.
         let legacy = serde_json::json!({
             "daemon_pubkey": "f17567fc60819e74b8536649ea9a5782ec63133c32ec9101402c8b72f66a90c5",
-            "relay_url": "ws://127.0.0.1:7000",
-            "wallet_endpoints": {"alice": "https://127.0.0.1:10001"},
+            "relay_url": "ws://127.0.0.1:7500",
+            "wallet_endpoints": {"alice": "https://127.0.0.1:10501"},
             "daemon_image": {
                 "image_id": format!("sha256:{}", "a".repeat(64)),
                 "reference": format!("mostrop2p/mostro@sha256:{}", "b".repeat(64)),

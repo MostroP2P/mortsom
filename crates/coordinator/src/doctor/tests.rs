@@ -124,8 +124,8 @@ impl FakeNet {
             port: PortState::Free,
             daemon: DaemonProbe {
                 relays: vec![RelayProbe {
-                    configured: "ws://host.docker.internal:7000".into(),
-                    dialled: "ws://127.0.0.1:7000".into(),
+                    configured: "ws://host.docker.internal:7500".into(),
+                    dialled: "ws://127.0.0.1:7500".into(),
                     error: None,
                 }],
                 info: Some(DaemonInfo {
@@ -147,7 +147,7 @@ impl FakeNet {
                 }),
                 relay_list: Some(RelayList {
                     created_at: 1,
-                    relays: vec!["ws://host.docker.internal:7000".into()],
+                    relays: vec!["ws://host.docker.internal:7500".into()],
                 }),
             },
             wallets_ok: true,
@@ -346,7 +346,7 @@ async fn daemon_and_wallet_failures_are_explicit() {
 
     assert_eq!(status_of(&report, "relay-port").status, CheckStatus::Pass);
     assert_eq!(
-        status_of(&report, "relay ws://host.docker.internal:7000").status,
+        status_of(&report, "relay ws://host.docker.internal:7500").status,
         CheckStatus::Fail
     );
     assert_eq!(
@@ -471,7 +471,7 @@ async fn wallet_inbound_liquidity_below_the_run_cap_fails_the_preflight() {
 #[test]
 fn a_missing_info_event_warns_while_the_daemon_is_demonstrably_alive() {
     let mut probe = FakeNet::healthy().daemon;
-    let expected = vec!["ws://host.docker.internal:7000".to_owned()];
+    let expected = vec!["ws://host.docker.internal:7500".to_owned()];
     probe.info = None;
 
     let mut report = DoctorReport::default();
@@ -513,14 +513,14 @@ fn the_run_relay_is_not_a_failure_while_no_run_is_live() {
     let mut probe = FakeNet::healthy().daemon;
     probe.relays[0].error = Some("connection refused".into());
     let run_relay = net::RunRelay {
-        url: "ws://127.0.0.1:7000".to_owned(),
+        url: "ws://127.0.0.1:7500".to_owned(),
         port_in_use: false,
     };
 
     let mut report = DoctorReport::default();
     net::evaluate_daemon_with_run_relay(&probe, &[], Some(&run_relay), now(), &mut report);
     assert_eq!(
-        status_of(&report, "relay ws://host.docker.internal:7000").status,
+        status_of(&report, "relay ws://host.docker.internal:7500").status,
         CheckStatus::Skip,
         "the run relay is Mortsom's own and only lives during a run"
     );
@@ -533,7 +533,7 @@ fn the_run_relay_is_not_a_failure_while_no_run_is_live() {
     let mut report = DoctorReport::default();
     net::evaluate_daemon_with_run_relay(&probe, &[], Some(&busy), now(), &mut report);
     assert_eq!(
-        status_of(&report, "relay ws://host.docker.internal:7000").status,
+        status_of(&report, "relay ws://host.docker.internal:7500").status,
         CheckStatus::Fail
     );
 

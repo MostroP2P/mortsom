@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 use super::StackError;
 
 /// Host port the relay publishes.
-pub const RELAY_PORT: u16 = 7000;
+pub const RELAY_PORT: u16 = 7500;
 /// Actor wallets and the host port each one's gRPC answers on.
-pub const ACTOR_PORTS: [(&str, u16); 2] = [("alice", 10001), ("bob", 10002)];
+pub const ACTOR_PORTS: [(&str, u16); 2] = [("alice", 10501), ("bob", 10502)];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Connections {

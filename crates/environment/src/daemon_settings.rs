@@ -286,13 +286,13 @@ mod tests {
         DaemonSettings::from_toml_str(&format!(
             r#"
             [lightning]
-            lnd_grpc_host = 'https://127.0.0.1:10001'
+            lnd_grpc_host = 'https://127.0.0.1:10501'
             invoice_expiration_window = 3600
             hold_invoice_expiration_window = 300
             unknown_future_field = 1
             [nostr]
             nsec_privkey = '{NSEC}'
-            relays = ['ws://localhost:7000', 'wss://relay.example']
+            relays = ['ws://localhost:7500', 'wss://relay.example']
             [mostro]
             expiration_hours = 24
             expiration_seconds = 900
@@ -346,9 +346,9 @@ mod tests {
     #[test]
     fn relay_membership_is_url_normalized_across_host_aliases() {
         let s = settings();
-        assert!(s.advertises_any_relay(&["ws://localhost:7000/".into()]));
-        assert!(s.advertises_any_relay(&["ws://host.docker.internal:7000".into()]));
-        assert!(s.advertises_any_relay(&["ws://127.0.0.1:7000".into()]));
+        assert!(s.advertises_any_relay(&["ws://localhost:7500/".into()]));
+        assert!(s.advertises_any_relay(&["ws://host.docker.internal:7500".into()]));
+        assert!(s.advertises_any_relay(&["ws://127.0.0.1:7500".into()]));
         assert!(!s.advertises_any_relay(&["ws://localhost:7001".into()]));
         assert!(!s.advertises_any_relay(&["not a url".into()]));
     }
@@ -360,7 +360,7 @@ mod tests {
         evaluate_settings(
             &settings(),
             expected(),
-            &["ws://localhost:7000".into()],
+            &["ws://localhost:7500".into()],
             TimeoutLimits::default(),
             |_| None,
             &mut report,
@@ -398,7 +398,7 @@ mod tests {
         evaluate_settings(
             &s,
             expected(),
-            &["ws://localhost:7000".into()],
+            &["ws://localhost:7500".into()],
             TimeoutLimits::default(),
             |_| None,
             &mut report,

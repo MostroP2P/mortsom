@@ -128,10 +128,10 @@ relay and a `mostrod` with an identity minted for this stack. `stack status` rep
 | Service | Role | Host port |
 |---|---|---|
 | `bitcoind` | Regtest chain; mines its own coins, so nothing needs external funding | none |
-| `lnd-alice` | Alice's wallet | 10001 |
-| `lnd-bob` | Bob's wallet | 10002 |
-| `lnd-carol` | The daemon's escrow node | 10003 |
-| `relay` | Nostr relay reachable only from this host; its SQLite database is an unmounted file in the container, so it lives and dies with the stack | 7000 |
+| `lnd-alice` | Alice's wallet | 10501 |
+| `lnd-bob` | Bob's wallet | 10502 |
+| `lnd-carol` | The daemon's escrow node | 10503 |
+| `relay` | Nostr relay reachable only from this host; its SQLite database is an unmounted file in the container, so it lives and dies with the stack | 7500 |
 | `mostro` | The daemon under test | none |
 
 Topology: Alice and Bob each open one channel to Carol, funded at 1,000,000 sats with 500,000 pushed across,
@@ -189,7 +189,9 @@ published ports allow one stack per host, so checkouts share it by selecting the
 
 `run` never creates, updates or destroys the stack. Scenario teardown never removes containers or volumes. A
 stack reset is an explicit operator action; it is not evidence that an order was cancelled or a payment
-refunded. The published ports collide with a local Polar network or relay; those must be stopped first.
+refunded. The published ports (7500, 10501–10503) are chosen not to collide with a local Polar network
+(10001–10003), a relay on 7000, or Ortsom's regtest stack (7000, 10001–10004), so Mortsom runs beside any of
+them on one host without configuration.
 
 ## 6. Platforms
 

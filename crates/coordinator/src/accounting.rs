@@ -262,8 +262,8 @@ mod tests {
         let id = "20260815T100000Z-aaaaaa";
         let legacy_stack = r#""stack": {
             "daemon_pubkey": "f17567fc60819e74b8536649ea9a5782ec63133c32ec9101402c8b72f66a90c5",
-            "relay_url": "ws://127.0.0.1:7000",
-            "wallet_endpoints": {"alice": "https://127.0.0.1:10001", "bob": "https://127.0.0.1:10002"},
+            "relay_url": "ws://127.0.0.1:7500",
+            "wallet_endpoints": {"alice": "https://127.0.0.1:10501", "bob": "https://127.0.0.1:10502"},
             "daemon_image": {
                 "image_id": "sha256:277bce332c70a76bfc7ef04598bb6fbdfad6939a805031518efe9686129d3e36",
                 "reference": "mostrop2p/mostro@sha256:bff406d11fc90436c9f7da5186f5976a63ae7ee1d711a6636d36205421cbda31",

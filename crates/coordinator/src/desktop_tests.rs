@@ -10,8 +10,8 @@ fn config(root: &Path) -> Config {
                 "MORTSOM_MOSTRO_PUBKEY" => {
                     "8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51".into()
                 }
-                "MORTSOM_ALICE_LND_HOST" => "https://127.0.0.1:10001".into(),
-                "MORTSOM_BOB_LND_HOST" => "https://127.0.0.1:10002".into(),
+                "MORTSOM_ALICE_LND_HOST" => "https://127.0.0.1:10501".into(),
+                "MORTSOM_BOB_LND_HOST" => "https://127.0.0.1:10502".into(),
                 _ => {
                     let path = root.join(name);
                     std::fs::write(&path, b"fixture").unwrap();
