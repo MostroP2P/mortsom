@@ -11,11 +11,11 @@ mostro_pubkey = "env:MORTSOM_MOSTRO_PUBKEY"
 timeout_secs = 30
 
 [relay]
-host_port = 7000
+host_port = 7500
 
 [mostro]
 settings_file = "env:MORTSOM_MOSTRO_SETTINGS_FILE"
-relays = ["ws://127.0.0.1:7000"]
+relays = ["ws://127.0.0.1:7500"]
 
 [wallets.alice]
 kind = "lnd"

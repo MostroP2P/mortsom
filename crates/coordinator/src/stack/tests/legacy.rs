@@ -60,7 +60,7 @@ async fn descriptor_reads_refuse_tampering_unknown_versions_and_missing_modern_p
 #[test]
 fn v1_fingerprint_matches_the_original_serialization_and_unknown_algorithms_refuse() {
     // Frozen v1 encoding: source provenance did not exist in this schema.
-    let json = r#"{"daemon_pubkey":"public","relay_url":"ws://127.0.0.1:7000","wallet_endpoints":{},"daemon_image":{"image_id":"sha256:abc","reference":"image","repository_digest":null},"declared_limits":{"order_expiration_secs":300,"hold_invoice_expiry_secs":120,"buyer_invoice_deadline_secs":120,"fiat_window_secs":null,"payout_invoice_min_expiry_secs":300,"max_inflight_payouts_per_destination":null,"payout_dispatch_permits":null}}"#;
+    let json = r#"{"daemon_pubkey":"public","relay_url":"ws://127.0.0.1:7500","wallet_endpoints":{},"daemon_image":{"image_id":"sha256:abc","reference":"image","repository_digest":null},"declared_limits":{"order_expiration_secs":300,"hold_invoice_expiry_secs":120,"buyer_invoice_deadline_secs":120,"fiat_window_secs":null,"payout_invoice_min_expiry_secs":300,"max_inflight_payouts_per_destination":null,"payout_dispatch_permits":null}}"#;
     let snapshot: StackSnapshot = serde_json::from_str(json).unwrap();
     use sha2::{Digest, Sha256};
     let mut hash = Sha256::new();

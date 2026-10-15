@@ -99,8 +99,8 @@ mod tests {
     #[test]
     fn endpoint_map_order_is_irrelevant_but_changed_limits_or_identity_change_the_digest() {
         let mut snapshot: StackSnapshot = serde_json::from_value(serde_json::json!({
-            "daemon_pubkey":"public", "relay_url":"ws://127.0.0.1:7000",
-            "wallet_endpoints":{"bob":"https://127.0.0.1:10002","alice":"https://127.0.0.1:10001"},
+            "daemon_pubkey":"public", "relay_url":"ws://127.0.0.1:7500",
+            "wallet_endpoints":{"bob":"https://127.0.0.1:10502","alice":"https://127.0.0.1:10501"},
             "daemon_image":{"image_id":"sha256:abc","reference":"image","repository_digest":null},
             "daemon_source":{"kind":"git-ref","repository":"https://github.com/MostroP2P/mostro.git",
                 "requested":"main","git_ref":"refs/heads/main","revision":"1111111111111111111111111111111111111111"},
@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn a_different_daemon_commit_changes_the_digest() {
         let snapshot: StackSnapshot = serde_json::from_value(serde_json::json!({
-            "daemon_pubkey":"public", "relay_url":"ws://127.0.0.1:7000", "wallet_endpoints":{},
+            "daemon_pubkey":"public", "relay_url":"ws://127.0.0.1:7500", "wallet_endpoints":{},
             "daemon_image":{"image_id":"sha256:abc","reference":"image","repository_digest":null},
             "daemon_source":{"kind":"git-ref","repository":"https://github.com/MostroP2P/mostro.git",
                 "requested":"main","git_ref":"refs/heads/main","revision":"1111111111111111111111111111111111111111"},

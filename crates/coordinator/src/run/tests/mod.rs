@@ -30,9 +30,9 @@ const HEX: &str = "8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47c
 const NSEC: &str = "nsec13as48eum93hkg7plv526r9gjpa0uc52zysqm93pmnkca9e69x6tsdjmdxd";
 /// BOLT 11 reference invoice (payment hash 0001..0102).
 const INVOICE: &str = "lnbc2500u1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpu9qrsgquk0rl77nj30yxdy8j9vdx85fkpmdla2087ne0xh8nhedh8w27kyke0lp53ut353s06fv3qfegext0eh0ymjpf39tuven09sam30g4vgpfna3rh";
-const RELAY_URL: &str = "ws://127.0.0.1:7000";
-const ALICE_LND: &str = "127.0.0.1:10001";
-const BOB_LND: &str = "127.0.0.1:10002";
+const RELAY_URL: &str = "ws://127.0.0.1:7500";
+const ALICE_LND: &str = "127.0.0.1:10501";
+const BOB_LND: &str = "127.0.0.1:10502";
 
 struct World {
     dir: tempfile::TempDir,

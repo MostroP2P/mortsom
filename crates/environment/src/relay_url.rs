@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn different_ports_hosts_or_schemes_differ() {
-        assert!(!same_relay("ws://localhost:7000", "ws://localhost:7001"));
+        assert!(!same_relay("ws://localhost:7000", "ws://localhost:7501"));
         assert!(!same_relay("ws://localhost:7000", "wss://localhost:7000"));
         assert!(!same_relay("wss://relay.a", "wss://relay.b"));
         assert!(!same_relay("not a url", "ws://localhost:7000"));

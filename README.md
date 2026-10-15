@@ -174,8 +174,10 @@ merges its optional `<name>.local.toml` overlay.
 ```
 
 The stack is the Compose project in [stack/](stack/): a regtest `bitcoind`, LND nodes for Alice, Bob and
-Carol (the daemon's escrow node), an ephemeral Nostr relay on `127.0.0.1:7000` and `mostrod`. Nothing else is
-needed: the chain mines its own coins.
+Carol (the daemon's escrow node), an ephemeral Nostr relay on `127.0.0.1:7500` and `mostrod`. Nothing else is
+needed: the chain mines its own coins. The nodes publish 10501–10503, which, like the relay's 7500, stays
+clear of a Polar network (10001–10003, relay 7000) and of Ortsom's regtest stack (7000, 10001–10004): both
+harnesses can run on one machine at the same time with their default ports.
 
 `stack up` builds `mostrod` from the current `main` of [MostroP2P/mostro](https://github.com/MostroP2P/mostro),
 starts the chain, nodes and relay, funds the nodes, opens one balanced channel from each actor to Carol, mints a

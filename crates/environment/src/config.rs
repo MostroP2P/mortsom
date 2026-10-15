@@ -33,7 +33,7 @@ fn default_container_prefix() -> String {
     "mortsom-relay".to_owned()
 }
 fn default_host_port() -> u16 {
-    7000
+    7500
 }
 fn default_container_port() -> u16 {
     8080
@@ -104,7 +104,7 @@ pub struct MostroConfig {
     #[serde(default = "default_health_timeout")]
     pub health_timeout_secs: u64,
     /// Relay URLs the daemon is configured with, in the daemon's own view
-    /// (e.g. `ws://host.docker.internal:7000` for a containerized daemon).
+    /// (e.g. `ws://host.docker.internal:7500` for a containerized daemon).
     /// Mortsom translates host aliases when it dials or compares them.
     pub relays: Vec<String>,
 }
@@ -338,7 +338,7 @@ mod tests {
         let config: RelayConfig = toml::from_str("").unwrap();
 
         assert_eq!(config, RelayConfig::default());
-        assert_eq!(config.host_port, 7000);
+        assert_eq!(config.host_port, 7500);
         assert_eq!(config.container_port, 8080);
         assert!(collect(|e| config.validate(e)).is_empty());
     }

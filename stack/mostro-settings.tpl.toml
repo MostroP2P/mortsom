@@ -21,7 +21,7 @@ max_inflight_payouts_per_destination = 2
 nsec_privkey = '__NSEC__'
 # The relay as seen from the daemon's network namespace, which is the
 # relay container's own; the same URL is valid on the host.
-relays = ['ws://127.0.0.1:7000']
+relays = ['ws://127.0.0.1:7500']
 
 [mostro]
 name = "Mostro regtest"

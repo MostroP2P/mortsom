@@ -18,7 +18,7 @@ timeout_secs = 30                 # bounded wait for one UI interaction
 [relay]
 docker_image = "scsibug/nostr-rs-relay:latest"
 container_name_prefix = "mortsom-relay"
-host_port = 7000                  # the stack relay; `relay smoke` allocates a free one from here
+host_port = 7500                  # the stack relay; `relay smoke` allocates a free one from here
 container_port = 8080
 
 [mostro]
@@ -30,7 +30,7 @@ settings_file = "env:MORTSOM_MOSTRO_SETTINGS_FILE"
 # a moment ago. A window the same size as that interval is a coin toss, and it
 # lands as `daemon-uses-run-relay` FAIL on a daemon that is behaving.
 health_timeout_secs = 120
-relays = ["ws://host.docker.internal:7000"]
+relays = ["ws://host.docker.internal:7500"]
 
 [wallets]
 # Each actor names its own backend. `nwc` is the app's own wallet, configured

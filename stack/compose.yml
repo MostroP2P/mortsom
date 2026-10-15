@@ -66,7 +66,7 @@ services:
       --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
       --maxpendingchannels=10 --accept-keysend --trickledelay=50
     ports:
-      - "10001:10009"
+      - "10501:10009"
 
   lnd-bob:
     <<: *lnd
@@ -82,7 +82,7 @@ services:
       --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
       --maxpendingchannels=10 --accept-keysend --trickledelay=50
     ports:
-      - "10002:10009"
+      - "10502:10009"
 
   lnd-carol:
     <<: *lnd
@@ -98,19 +98,23 @@ services:
       --bitcoind.zmqpubrawtx=tcp://bitcoind:28335
       --maxpendingchannels=10 --accept-keysend --trickledelay=50
     ports:
-      - "10003:10009"
+      - "10503:10009"
 
-  # The relay listens on 7000 inside its container and is published on the
+  # The relay listens on 7500 inside its container and is published on the
   # host's loopback at the same port. The daemon shares this container's
-  # network namespace (below), so `ws://127.0.0.1:7000` is the relay from
+  # network namespace (below), so `ws://127.0.0.1:7500` is the relay from
   # the daemon's side and from the host's side alike: the URL the daemon
   # advertises in its relay list is one a client on this host can dial.
+  #
+  # 7500 and 10501-10503 are deliberately not what a Polar network
+  # (10001-10003) or Ortsom's regtest stack (7000 and 10001-10004) publish,
+  # so this stack runs beside either of them on one host.
   relay:
     image: scsibug/nostr-rs-relay:latest
     volumes:
       - ./relay-config.toml:/usr/src/app/config.toml:ro
     ports:
-      - "127.0.0.1:7000:7000"
+      - "127.0.0.1:7500:7500"
 
   mostro:
     # `stack up` always names the image: Mostro's `main` built here by

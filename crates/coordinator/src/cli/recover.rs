@@ -326,7 +326,7 @@ mod tests {
     fn stack_snapshot() -> crate::stack::StackSnapshot {
         serde_json::from_value(serde_json::json!({
             "daemon_pubkey": "8171eb680049f62ce8747d203f57c3f71de6eea308af6f995363896a1e47cc51",
-            "relay_url": "ws://127.0.0.1:7000", "wallet_endpoints": {},
+            "relay_url": "ws://127.0.0.1:7500", "wallet_endpoints": {},
             "daemon_image": {"image_id": format!("sha256:{}", "a".repeat(64)),
                 "reference": format!("mostrop2p/mostro@sha256:{}", "b".repeat(64)),
                 "repository_digest": format!("sha256:{}", "b".repeat(64))},

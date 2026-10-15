@@ -329,7 +329,7 @@ mod tests {
         let keys = Keys::generate();
         let event = EventBuilder::new(Kind::RelayList, "")
             .tags([
-                Tag::parse(["r", "ws://host.docker.internal:7000/"]).unwrap(),
+                Tag::parse(["r", "ws://host.docker.internal:7500/"]).unwrap(),
                 Tag::parse(["r", "wss://relay.example", "read"]).unwrap(),
                 Tag::parse(["x", "ignored"]).unwrap(),
             ])
@@ -340,11 +340,11 @@ mod tests {
 
         assert_eq!(
             list.relays,
-            vec!["ws://host.docker.internal:7000", "wss://relay.example"]
+            vec!["ws://host.docker.internal:7500", "wss://relay.example"]
         );
-        assert!(list.advertises_any(&["ws://host.docker.internal:7000".into()]));
+        assert!(list.advertises_any(&["ws://host.docker.internal:7500".into()]));
         assert!(
-            list.advertises_any(&["ws://127.0.0.1:7000".into()]),
+            list.advertises_any(&["ws://127.0.0.1:7500".into()]),
             "host alias"
         );
         assert!(!list.advertises_any(&["ws://127.0.0.1:7001".into()]));
@@ -365,8 +365,8 @@ mod tests {
     #[test]
     fn host_view_rewrites_docker_alias() {
         assert_eq!(
-            host_view("ws://host.docker.internal:7000"),
-            "ws://127.0.0.1:7000"
+            host_view("ws://host.docker.internal:7500"),
+            "ws://127.0.0.1:7500"
         );
         assert_eq!(host_view("wss://relay.example"), "wss://relay.example");
     }

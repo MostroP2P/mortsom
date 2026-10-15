@@ -18,8 +18,8 @@ const EVERY_30S: Result<Duration, String> = Ok(Duration::from_secs(30));
 fn probe(relay_error: Option<&str>, info_age: Option<u64>) -> DaemonProbe {
     DaemonProbe {
         relays: vec![RelayProbe {
-            configured: "ws://relay:7000".into(),
-            dialled: "ws://127.0.0.1:7000".into(),
+            configured: "ws://relay:7500".into(),
+            dialled: "ws://127.0.0.1:7500".into(),
             error: relay_error.map(str::to_owned),
         }],
         info: info_age.map(|age| DaemonInfo {
@@ -86,7 +86,7 @@ fn failed(category: FailureCategory, message: &str) -> Outcome {
 
 fn healthy() -> DoctorReport {
     let mut report = DoctorReport::default();
-    report.push("relay-port", CheckStatus::Pass, "127.0.0.1:7000 listening");
+    report.push("relay-port", CheckStatus::Pass, "127.0.0.1:7500 listening");
     report.push("mostro-daemon", CheckStatus::Pass, "info event found");
     report
 }
@@ -96,7 +96,7 @@ fn stack_down() -> DoctorReport {
     report.push(
         "relay-port",
         CheckStatus::Fail,
-        "nothing listens on 127.0.0.1:7000",
+        "nothing listens on 127.0.0.1:7500",
     );
     report.push("mostro-daemon", CheckStatus::Fail, "no info event");
     report.push("wallet alice", CheckStatus::Pass, "regtest");
@@ -120,7 +120,7 @@ fn a_failure_while_the_stack_is_down_is_blamed_on_the_infrastructure() {
     };
     assert_eq!(category, FailureCategory::TestInfrastructure);
     assert!(
-        message.contains("relay-port: nothing listens on 127.0.0.1:7000"),
+        message.contains("relay-port: nothing listens on 127.0.0.1:7500"),
         "{message}"
     );
     assert!(
