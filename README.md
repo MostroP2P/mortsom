@@ -484,6 +484,7 @@ MORTSOM_APP_CHECKOUT=../appv2 cargo test -p mortsom-adapter-mobile-v2 selectors_
 Everything in this repository is written in English. Read [AGENTS.md](AGENTS.md) and [spec.md](spec.md)
 before contributing.
 
-Releases are cut with `cargo release` from a `release/vX.Y.Z` branch; the
-changelog, the pull request and the GitHub release follow from it. See
+Releases are cut with `cargo release`, from `main` directly or from a
+`release/vX.Y.Z` branch when the bump should be reviewed first; the changelog,
+the tag and the GitHub release follow from it. See
 [docs/releasing.md](docs/releasing.md).
