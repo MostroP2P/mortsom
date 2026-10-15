@@ -4,6 +4,7 @@
 //! actors through the UI, executes scenarios sequentially with timeouts,
 //! sweeps cleanup, and writes the joined evidence.
 
+mod attribution;
 mod execute;
 mod needs;
 mod observer;
