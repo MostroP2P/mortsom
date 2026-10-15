@@ -201,6 +201,23 @@ fn the_least_recently_used_bundles_beyond_the_limit_are_evicted() {
 }
 
 #[test]
+fn discarding_removes_only_the_named_entry_and_tolerates_a_missing_one() {
+    let root = tempfile::tempdir().unwrap();
+    let cache = BuildCache::open(root.path()).unwrap();
+    let built = bundle(b"app");
+    for seed in [1, 2] {
+        cache
+            .store(&key_for(seed), &built, &provenance(), at(0))
+            .unwrap();
+    }
+    cache.discard(&key_for(1)).unwrap();
+    assert!(cache.lookup(&key_for(1), at(1)).unwrap().is_none());
+    assert!(cache.lookup(&key_for(2), at(1)).unwrap().is_some());
+    cache.discard(&key_for(1)).unwrap();
+    assert!(cache.discard("../escape").is_err());
+}
+
+#[test]
 fn leftovers_of_an_interrupted_store_are_removed_by_the_next_store() {
     let root = tempfile::tempdir().unwrap();
     let cache = BuildCache::open(root.path()).unwrap();

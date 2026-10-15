@@ -274,8 +274,10 @@ impl crate::doctor::HostProbe for BuildHost {
         .any(|suffix| path.ends_with(suffix))
             || path.is_file()
     }
-    fn is_executable(&self, _: &Path) -> bool {
-        true
+    fn is_executable(&self, path: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        // Fake tools are executable; a real file needs an execute bit.
+        std::fs::metadata(path).map_or(true, |metadata| metadata.permissions().mode() & 0o111 != 0)
     }
     async fn run(
         &self,
@@ -311,6 +313,19 @@ impl crate::doctor::HostProbe for BuildHost {
 fn kept_bundle() -> crate::fingerprint::CapturedBundle {
     use std::os::unix::fs::PermissionsExt;
     let root = tempfile::tempdir().unwrap();
+    for required in [
+        "lib/libapp.so",
+        "lib/libflutter_linux_gtk.so",
+        "lib/librust.so",
+        "lib/libflutter_secure_storage_linux_plugin.so",
+        "lib/liburl_launcher_linux_plugin.so",
+        "data/icudtl.dat",
+        "data/flutter_assets/AssetManifest.bin",
+    ] {
+        let path = root.path().join(required);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"kept").unwrap();
+    }
     let executable = root.path().join("mostro");
     std::fs::write(&executable, b"kept build").unwrap();
     std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -371,6 +386,33 @@ async fn a_kept_build_with_the_same_key_skips_every_build_command() {
     assert_eq!(std::fs::read(&reused.artifact).unwrap(), b"kept build");
     assert_eq!(reused.expected.as_ref(), Some(bundle.fingerprint()));
     assert!(reused.keep_as.is_none());
+}
+
+#[tokio::test]
+async fn a_kept_build_that_fails_the_artifact_checks_is_discarded_and_built() {
+    use crate::build_cache::Policy;
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().unwrap();
+    let (config, cache) = managed(root.path());
+    let built = obtain(&config, Some(&cache), Policy::Reuse, &FakeRunner::default()).await;
+    let key = built.keep_as.unwrap();
+    cache
+        .store(
+            &key,
+            &kept_bundle(),
+            &built.provenance,
+            std::time::SystemTime::now(),
+        )
+        .unwrap();
+    let entry = root.path().join("bundles").join(&key);
+    let executable = entry.join("bundle/mostro");
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let runner = FakeRunner::default();
+    let rebuilt = obtain(&config, Some(&cache), Policy::Reuse, &runner).await;
+    assert_eq!(runner.calls().len(), 3);
+    assert_eq!(rebuilt.keep_as, Some(key));
+    assert!(rebuilt.expected.is_none());
+    assert!(!entry.exists(), "the failing kept build is discarded");
 }
 
 #[tokio::test]

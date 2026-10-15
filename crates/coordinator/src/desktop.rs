@@ -152,7 +152,7 @@ async fn obtain_build(
         .collect();
     let key = cache.and(crate::build_cache::key(platform, &provenance, &commands));
     if let (Some(cache), Some(key), Policy::Reuse) = (cache, key.as_deref(), policy)
-        && let Some(kept) = lookup(cache, key)
+        && let Some(kept) = lookup(cache, key, platform, host)
     {
         tracing::info!(%platform, "reusing the kept app build");
         return Ok(Obtained {
@@ -179,12 +179,28 @@ fn open_cache(root: &Path) -> Option<BuildCache> {
         .ok()
 }
 
-fn lookup(cache: &BuildCache, key: &str) -> Option<crate::build_cache::KeptBuild> {
-    cache
+/// The kept build under `key` when it verifies and passes the artifact
+/// checks, which its fingerprint does not cover (a Linux executable's mode).
+/// One that fails them is discarded, so the source is built and kept again.
+fn lookup(
+    cache: &BuildCache,
+    key: &str,
+    platform: Platform,
+    host: &dyn crate::doctor::HostProbe,
+) -> Option<crate::build_cache::KeptBuild> {
+    let kept = cache
         .lookup(key, std::time::SystemTime::now())
         .inspect_err(|error| tracing::warn!(%error, "cannot read the kept app build"))
         .ok()
-        .flatten()
+        .flatten()?;
+    let Err(error) = validate_artifact(platform, &artifact_in(&kept.root, platform), host) else {
+        return Some(kept);
+    };
+    tracing::warn!(%error, "discarding a kept app build that fails the artifact checks");
+    if let Err(error) = cache.discard(key) {
+        tracing::warn!(%error, "cannot discard the kept app build");
+    }
+    None
 }
 
 /// Keeps a fresh managed build for a later identical invocation; the run

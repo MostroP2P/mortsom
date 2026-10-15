@@ -172,6 +172,11 @@ impl BuildCache {
         self.evict(MAX_KEPT)
     }
 
+    /// Removes the bundle kept under `key`, if any.
+    pub fn discard(&self, key: &str) -> io::Result<()> {
+        remove_entry(&self.entry(key)?)
+    }
+
     fn entry(&self, key: &str) -> io::Result<PathBuf> {
         if is_key(key) {
             Ok(self.root.join(key))

@@ -243,7 +243,8 @@ app package version, observed tool versions and the exact build commands, which 
 relay address and order expiry. Every invocation still fetches, checks out the selected head and observes
 the tools. When the key matches a kept bundle whose recorded fingerprint still verifies, that bundle is
 captured instead of building and the build provenance has origin `cached` with the original build's facts. A
-kept bundle that fails verification is discarded and the source is built. The key sees nothing of the host
+kept bundle that fails verification or the artifact checks, which its fingerprint does not cover (such as a
+Linux executable that lost its mode), is discarded and the source is built. The key sees nothing of the host
 beyond those tool versions, such as compiler flags in the environment or upgraded system libraries;
 `run --rebuild` covers such a change, building even on a match and replacing the kept bundle. It conflicts
 with `--app-artifact`. At most four bundles are kept; the least recently used are evicted after a store.
