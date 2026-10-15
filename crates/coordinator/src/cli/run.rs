@@ -80,6 +80,7 @@ pub(super) struct RunSelection {
     pub tag: Option<String>,
     pub platform: mortsom_desktop_driver::Platform,
     pub artifact: Option<PathBuf>,
+    pub policy: crate::build_cache::Policy,
     pub xvfb: PathBuf,
     pub source: SourceOverrides,
 }
@@ -93,6 +94,7 @@ impl RunSelection {
             tag: None,
             platform: self.platform,
             artifact: self.artifact.clone(),
+            policy: self.policy,
             xvfb: self.xvfb.clone(),
             source: self.source.clone(),
         }
@@ -158,6 +160,7 @@ async fn run_once(
         tag,
         platform,
         artifact,
+        policy,
         source,
         xvfb,
     } = selection;
@@ -205,7 +208,15 @@ async fn run_once(
     };
     let desktop = match prepared
         .get_or_prepare(fingerprint, || {
-            crate::desktop::prepare(&config, platform, artifact, xvfb, &TokioRunner, &RealHost)
+            crate::desktop::prepare(
+                &config,
+                platform,
+                artifact,
+                xvfb,
+                policy,
+                &TokioRunner,
+                &RealHost,
+            )
         })
         .await
     {

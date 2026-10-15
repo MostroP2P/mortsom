@@ -12,6 +12,9 @@ pub enum ArtifactOrigin {
     Source,
     /// Supplied by the operator; source/build history is unknown.
     Prebuilt,
+    /// Built by an earlier invocation from the same commit, tools and build
+    /// commands, and reused from the kept bundles.
+    Cached,
 }
 
 /// Public Git identity; raw status paths and source contents are never retained.

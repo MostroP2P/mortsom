@@ -267,6 +267,16 @@ objects to avoid downloading them again, while each build uses a new clean detac
 outputs are removed after bundle capture or failure; a hard-killed process can leave ignored build
 directories. This directory contains no trader recovery profiles and must never be committed.
 
+The captured bundle of a fetched build is kept in `.mortsom/app/bundles/`. The next invocation that
+resolves the same commit, with the same app version, tool versions and build commands (daemon pubkey,
+relay port, order expiry), re-verifies that bundle's fingerprint and uses it instead of building, which
+skips several minutes of compilation. Its report then shows `app_build.origin = "cached"` with the
+original build's facts. Anything that changes a key input (a new commit, a new stack identity, a toolchain
+upgrade) builds again. The key does not see compiler flags set in the environment or upgraded system
+libraries: after such a change, `--rebuild` builds even on a match and replaces the kept bundle. The four most
+recently used bundles are kept. Local checkouts (`--app-source`) and `--app-artifact` are never kept or
+reused.
+
 The entire invocation, including a family selected with `--tag`, builds and captures **one bundle** and
 uses it for every scenario. Reports preserve the requested selector, full ref and exact commit in
 `app_build.remote_selection`, alongside before/after source state, commands, tool versions and bundle

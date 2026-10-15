@@ -136,6 +136,10 @@ pub enum Command {
         /// Prebuilt native executable or Web bundle; otherwise builds the source.
         #[arg(long)]
         app_artifact: Option<PathBuf>,
+        /// Build the fetched app even when an identical kept bundle exists,
+        /// and replace it.
+        #[arg(long, conflicts_with = "app_artifact")]
+        rebuild: bool,
         /// Override configured source selection.
         #[command(flatten)]
         source: SourceOverrides,
@@ -464,6 +468,7 @@ pub async fn run(cli: Cli) -> ExitCode {
             tag,
             platform,
             app_artifact,
+            rebuild,
             source,
             xvfb,
         } => {
@@ -476,6 +481,11 @@ pub async fn run(cli: Cli) -> ExitCode {
                     tag,
                     platform,
                     artifact: app_artifact,
+                    policy: if rebuild {
+                        crate::build_cache::Policy::Rebuild
+                    } else {
+                        crate::build_cache::Policy::Reuse
+                    },
                     source,
                     xvfb,
                 },
@@ -705,6 +715,31 @@ mod tests {
             cli.command,
             super::Command::Run { ref scenarios, tag: None, .. } if scenarios.is_empty()
         ));
+    }
+
+    #[test]
+    fn rebuild_is_off_by_default_and_refused_with_a_prebuilt_artifact() {
+        use clap::Parser;
+        for (args, expected) in [
+            (vec!["mortsom", "run", "happy_sell"], false),
+            (vec!["mortsom", "run", "happy_sell", "--rebuild"], true),
+        ] {
+            let cli = super::Cli::try_parse_from(args).unwrap();
+            assert!(matches!(
+                cli.command,
+                super::Command::Run { rebuild, .. } if rebuild == expected
+            ));
+        }
+        assert!(
+            super::Cli::try_parse_from([
+                "mortsom",
+                "run",
+                "--rebuild",
+                "--app-artifact",
+                "/bundle/mostro"
+            ])
+            .is_err()
+        );
     }
 
     #[test]

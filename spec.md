@@ -102,6 +102,9 @@ mortsom run
 # Explicit developer checkout (including local changes).
 mortsom run happy_sell --app-source ../mobilev2
 
+# Build from source even when an identical kept bundle exists.
+mortsom run happy_sell --rebuild
+
 # Reuse a build instead of compiling from source.
 mortsom run happy_sell --platform linux --app-artifact /path/to/bundle/mostro
 mortsom run happy_sell --platform web   --app-artifact /path/to/build/web
@@ -228,12 +231,25 @@ Without an explicit local source or prebuilt artifact, Mortsom fetches `main` fr
 head, including fork PRs, never the base branch or synthetic merge. Invalid selectors and missing or
 unreachable remote refs fail before building; cached source is never a fallback for a failed fetch.
 
-Reusable Git objects and disposable clean detached build checkouts live under the ignored `.mortsom/app/`
-working directory. The requested selector, repository, full ref and fetched commit ID are recorded in build,
-run and recovery provenance. One invocation resolves, builds and captures its bundle once; every selected
-scenario uses that exact bundle and provenance. A changed stack fingerprint refuses reuse. Linux and Web
-source preparation/builds remain sequential. Normal completion or failure removes the disposable checkout;
-a killed process may leave ignored build files, never trader recovery state, there.
+Reusable Git objects, disposable clean detached build checkouts and kept bundles live under the ignored
+`.mortsom/app/` working directory. The requested selector, repository, full ref and fetched commit ID are
+recorded in build, run and recovery provenance. One invocation resolves, builds and captures its bundle once;
+every selected scenario uses that exact bundle and provenance. A changed stack fingerprint refuses reuse.
+Linux and Web source preparation/builds remain sequential. Normal completion or failure removes the
+disposable checkout; a killed process may leave ignored build files, never trader recovery state, there.
+
+A managed source build keeps its bundle under `.mortsom/app/bundles/`, keyed by platform, fetched commit,
+app package version, observed tool versions and the exact build commands, which carry the daemon identity,
+relay address and order expiry. Every invocation still fetches, checks out the selected head and observes
+the tools. When the key matches a kept bundle whose recorded fingerprint still verifies, that bundle is
+captured instead of building and the build provenance has origin `cached` with the original build's facts. A
+kept bundle that fails verification or the artifact checks, which its fingerprint does not cover (such as a
+Linux executable that lost its mode), is discarded and the source is built. The key sees nothing of the host
+beyond those tool versions, such as compiler flags in the environment or upgraded system libraries;
+`run --rebuild` covers such a change, building even on a match and replacing the kept bundle. It conflicts
+with `--app-artifact`. At most four bundles are kept; the least recently used are evicted after a store.
+Local checkouts and prebuilt artifacts are never kept or reused. Failing to read or keep a bundle is logged
+as a warning and falls back to, or keeps, the fresh build.
 
 `mobile.app_ref` configures the same selector; omitting it selects `main`. `mobile.source_dir` selects an
 explicit developer checkout and conflicts with `mobile.app_ref`. `--app-source` and `--app-ref` override the
@@ -251,8 +267,8 @@ Builds resolve Dart packages with `flutter pub get` and follow the app's support
 builds run sequentially because binding generation writes shared source files.
 
 Mortsom records the source revision, dirty flag, build flags, tool versions and the bundle digest. Both actors
-use the same artifact. A prebuilt artifact must pass the same visible environment and identity checks as a
-fresh build.
+use the same artifact. A prebuilt artifact or kept bundle must pass the same visible environment and identity
+checks as a fresh build.
 
 The app owns the automation contract (`docs/automation-contract.md` in the app repository): stable identifiers
 for onboarding, navigation, settings, form fields, order identity and status, invoices, cancellation, errors,
