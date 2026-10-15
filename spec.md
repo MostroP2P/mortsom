@@ -579,12 +579,15 @@ after its id exists is a failure that names its run, never a refusal.
 
 A scenario sees the stack only through the apps, so a relay or daemon that goes away mid-scenario surfaces as
 whatever the apps did next. Once a scenario has failed, and before cleanup, the run probes, read-only,
-whether the stack still answers: the relay's port, a connection to each relay the daemon uses, and each
-actor's wallet. Only signs of life count; the preflight's liquidity floor and info-event freshness are
-guards for starting, which a healthy stack stops meeting in the ordinary course of a run. If two probes in a
-row find something not answering, the failure is `test-infrastructure`: its message names what did not
-answer and keeps the category and message the scenario reported, and the timeline records the attribution.
-A failure already classified `test-infrastructure` is left as reported. The scenario narrative
+whether the stack still answers: the relay's port, a connection to each relay the daemon uses, the daemon
+itself, and each actor's wallet. A relay keeps serving a dead daemon's last info event, so the daemon counts
+as answering only while that event is no older than two of the publish intervals its own settings declare.
+Only signs of life count; the preflight's liquidity floor and its freshness window for any daemon are guards
+for starting, which a healthy stack stops meeting in the ordinary course of a run. If two probes in a row find
+something not answering, the failure is `test-infrastructure`: its message names what did not answer and
+keeps the category and message the scenario reported, and the timeline and `run.log` record the attribution;
+nothing is recorded when the failure keeps its category. A failure already classified `test-infrastructure`
+is left as reported. The scenario narrative
 (timeline steps, checks, payments) goes to the run's `run.log` and `timeline.md`, not the terminal, unless
 `RUST_LOG` asks for it.
 
