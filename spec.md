@@ -176,7 +176,8 @@ only let a payment succeed by accident. Carol exists so the daemon never escrows
 
 `stack status` exits non-zero until the stack is usable, so it can be waited on. It reports each service,
 each node's active channels, the daemon identity, image and source in effect, and flags a running daemon
-container that is not the recorded image.
+container that is not the recorded image. A stopped container reads as down with its state; only one that
+no longer exists reads as gone.
 
 `stack down` stops the services, removes their volumes and deletes the generated identity and credentials,
 so no public key is left that nothing answers on. Both `up` and `down` refuse to touch containers or volumes
@@ -574,7 +575,19 @@ the actor's virtual display, never the operator's desktop.
 (`PASS`, `FAIL`, `SKIP`, `FLAKY` for a pass that needed a retry, `STOP` for one a refused run kept from
 starting) and the time it took, why under anything that did not pass (and, among several runs, which run
 failed), then the counts, the total time, the lane, the artifacts directory and a verdict. A run that fails
-after its id exists is a failure that names its run, never a refusal. The scenario narrative
+after its id exists is a failure that names its run, never a refusal.
+
+A scenario sees the stack only through the apps, so a relay or daemon that goes away mid-scenario surfaces as
+whatever the apps did next. Once a scenario has failed, and before cleanup, the run probes, read-only,
+whether the stack still answers: the relay's port, a connection to each relay the daemon uses, the daemon
+itself, and each actor's wallet. A relay keeps serving a dead daemon's last info event, so the daemon counts
+as answering only while that event is no older than two of the publish intervals its own settings declare.
+Only signs of life count; the preflight's liquidity floor and its freshness window for any daemon are guards
+for starting, which a healthy stack stops meeting in the ordinary course of a run. If two probes in a row find
+something not answering, the failure is `test-infrastructure`: its message names what did not answer and
+keeps the category and message the scenario reported, and the timeline and `run.log` record the attribution;
+nothing is recorded when the failure keeps its category. A failure already classified `test-infrastructure`
+is left as reported. The scenario narrative
 (timeline steps, checks, payments) goes to the run's `run.log` and `timeline.md`, not the terminal, unless
 `RUST_LOG` asks for it.
 

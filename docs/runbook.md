@@ -11,7 +11,7 @@ the repository root. Nothing here bypasses the value-safety rules in [spec.md](.
 |---|---|---|
 | `product` | The app misbehaved: wrong state, wrong copy, illegal transition | Never retried. File an app issue with the timeline and screenshots |
 | `automation-contract` | A stable identifier or bootstrap hook the app promised is missing | Never retried. Fix the app's `docs/automation-contract.md` branch or the adapter; never loosen the adapter to pass |
-| `test-infrastructure` | Xvfb, D-Bus, Secret Service, ChromeDriver, browser, Docker or host tooling failed | No automatic retry. Fix the host, then `cleanup`, then a fresh run |
+| `test-infrastructure` | Xvfb, D-Bus, Secret Service, ChromeDriver, browser, Docker or host tooling failed, or the stack stopped answering during the scenario (the message names what did not answer and keeps what the scenario reported) | No automatic retry. Fix the host (`stack status`, then `stack up` if the stack is down), then `cleanup`, then a fresh run |
 | `relay` | The relay failed or expected evidence never arrived | No automatic retry. Check `stack status`, `stack logs relay` and `stack logs` (the daemon) |
 | `wallet` | An LND wallet failed, rejected or timed out | Never retried. See section 4 |
 | `environment-misconfiguration` | Configuration, secrets or prerequisites wrong or missing | Fix and rerun `doctor` |

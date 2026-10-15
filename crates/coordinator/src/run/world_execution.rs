@@ -82,6 +82,10 @@ impl World<'_> {
         }
         let result =
             execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()).await;
+        // Before cleanup: the moment of interest is the failure, not after
+        // the sweep has spent its own deadlines on a stack that is gone.
+        let result =
+            attribution::after_failure(config, self.deps.net, &self.timeline, result).await;
         if let Some(journal) = self.desktop.recovery.as_ref() {
             let discovery = recovery::discover(&ctx, journal).await;
             // Audited only after discovery, so an order the app lists wins,

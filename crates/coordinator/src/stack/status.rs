@@ -48,12 +48,15 @@ pub struct Status {
 pub async fn inspect(runner: &dyn CommandRunner, layout: &Layout) -> Result<Status, StackError> {
     let descriptor = Descriptor::read(layout)?;
     let compose = Compose::new(layout, None);
+    // `--all`: without it Compose leaves stopped containers out, and a
+    // stopped service would read as removed.
     let table = attempt(
         runner,
         &compose.command(&[
             "--profile",
             "daemon",
             "ps",
+            "--all",
             "--format",
             "{{.Service}} {{.State}}",
         ]),

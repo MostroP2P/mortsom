@@ -934,13 +934,29 @@ async fn run_on_nodes(
     observer: &dyn ObserverFactory,
     network: &'static str,
 ) -> Result<RunSummary, RunError> {
+    run_on(
+        world, adapter, options, confirm, observer, network, &ReadyNet,
+    )
+    .await
+}
+
+/// [`run_on_nodes`] against a stack that answers the preflight as `net`.
+async fn run_on(
+    world: &World,
+    adapter: Arc<FakeAdapter>,
+    options: RunOptions,
+    confirm: bool,
+    observer: &dyn ObserverFactory,
+    network: &'static str,
+    net: &dyn NetProbes,
+) -> Result<RunSummary, RunError> {
     let clients = FakeClients(adapter.flags.clone());
     let docker = Arc::new(FakeDocker::default());
     let env = env_for(world, confirm);
     let wallets = nodes_on(Arc::clone(&adapter.ledger), network);
     let deps = RunDeps {
         desktop_factory: &clients,
-        net: Some(&ReadyNet),
+        net: Some(net),
         docker: Arc::clone(&docker) as Arc<dyn ContainerRuntime>,
         probe: Arc::new(AlwaysReady),
         adapter: adapter as Arc<dyn AppAdapter>,
@@ -967,6 +983,7 @@ fn opts_in(world: &World, names: &[&str]) -> RunOptions {
     }
 }
 
+mod attribution;
 mod behavior;
 mod desktop;
 mod evidence;
