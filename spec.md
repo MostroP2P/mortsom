@@ -176,7 +176,8 @@ only let a payment succeed by accident. Carol exists so the daemon never escrows
 
 `stack status` exits non-zero until the stack is usable, so it can be waited on. It reports each service,
 each node's active channels, the daemon identity, image and source in effect, and flags a running daemon
-container that is not the recorded image.
+container that is not the recorded image. A stopped container reads as down with its state; only one that
+no longer exists reads as gone.
 
 `stack down` stops the services, removes their volumes and deletes the generated identity and credentials,
 so no public key is left that nothing answers on. Both `up` and `down` refuse to touch containers or volumes

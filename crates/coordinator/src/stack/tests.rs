@@ -147,9 +147,14 @@ impl ScriptedStack {
             return ok("d".repeat(64));
         }
         if has("ps") {
+            // Like Compose: a stopped container is listed only with `--all`.
+            let daemon = if has("--all") || self.daemon_state == "running" {
+                format!("mostro {}\n", self.daemon_state)
+            } else {
+                String::new()
+            };
             return ok(format!(
-                "bitcoind running\nlnd-alice running\nlnd-bob running\nlnd-carol running\nrelay running\nmostro {}\n",
-                self.daemon_state
+                "bitcoind running\nlnd-alice running\nlnd-bob running\nlnd-carol running\nrelay running\n{daemon}"
             ));
         }
         ok(String::new())
@@ -536,6 +541,31 @@ async fn status_reports_every_service_node_and_the_identity_in_effect() {
     }
     assert!(rendered.contains(&descriptor.daemon_pubkey), "{rendered}");
     assert!(rendered.contains("ready"), "{rendered}");
+}
+
+#[tokio::test]
+async fn status_reports_a_stopped_container_as_down_not_gone() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    up(
+        &ScriptedStack::fresh(&layout),
+        &Publishes(true),
+        &layout,
+        &quick(),
+    )
+    .await
+    .unwrap();
+    let mut stopped = ScriptedStack::built(&layout);
+    stopped.daemon_state = "exited";
+
+    // Act
+    let report = status(&stopped, &layout).await.unwrap();
+
+    // Assert
+    let rendered = report.render();
+    assert!(!report.is_ready());
+    assert!(rendered.contains("[DOWN] mostro (exited)"), "{rendered}");
+    assert!(!rendered.contains("[GONE] mostro"), "{rendered}");
 }
 
 #[tokio::test]
