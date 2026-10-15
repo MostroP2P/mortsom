@@ -174,6 +174,49 @@ pub async fn sweep_cleanup(ctx: &Context) {
 }
 
 async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> CleanupResult {
+    if let Some(settled) = settled_payout(ctx, maker, order).await {
+        return settled;
+    }
+    // A disputed order is out of the parties' hands: no cancel from either
+    // app closes it. The run's solver, when there is one, rules on it the
+    // way an operator would after a broken run -- returning the escrow.
+    if ctx.solver.is_some() && shown_disputed(ctx, maker, order).await {
+        return resolve_by_solver(ctx, order).await;
+    }
+    let outcome = match cancel_as(ctx, maker, order).await {
+        Ok(CancelOutcome::NotFound) => return confirm_closed_on_relay(ctx, order, UNLISTED).await,
+        Ok(outcome) => outcome,
+        Err(message) => return CleanupResult::Failed { message },
+    };
+    if let Some(settled) = settled_after_maker_cancel(ctx, maker, order, outcome).await {
+        return settled;
+    }
+    let Some(taker) = Actor::ALL.into_iter().find(|a| *a != maker) else {
+        return CleanupResult::Failed {
+            message: "no counterpart to accept the cancel".into(),
+        };
+    };
+    match cancel_as(ctx, taker, order).await {
+        Ok(_) => {}
+        Err(message) => return CleanupResult::Failed { message },
+    }
+    match observed_state(ctx, maker, order).await {
+        Some(state) if state.is_terminal() => confirm_closed(ctx, order, state, outcome).await,
+        Some(state) => CleanupResult::Failed {
+            message: format!("still {state} after both sides cancelled"),
+        },
+        None => confirm_closed_on_relay(ctx, order, UNREADABLE).await,
+    }
+}
+
+/// A recovered order that was already paying out when the run stopped
+/// settles by itself: the daemon's success closes it, not a cancel.
+/// `None` when the order is not at payout.
+async fn settled_payout(
+    ctx: &Context,
+    maker: Actor,
+    order: &OrderReference,
+) -> Option<CleanupResult> {
     if ctx.journal.enabled()
         && let Ok(session) = ctx.actor(maker)
         && ctx
@@ -185,7 +228,7 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
         let shown =
             mortsom_scenario_kit::actions::wait_app_state(ctx, maker, order, OrderState::Completed)
                 .await;
-        return match shown {
+        return Some(match shown {
             Ok(_) => CleanupResult::Done {
                 outcome: CancelOutcome::AlreadyClosed,
             },
@@ -217,66 +260,73 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
                     message: lagging.to_string(),
                 },
             },
-        };
+        });
     }
-    // A disputed order is out of the parties' hands: no cancel from either
-    // app closes it. The run's solver, when there is one, rules on it the
-    // way an operator would after a broken run -- returning the escrow.
-    if ctx.solver.is_some() && shown_disputed(ctx, maker, order).await {
-        return resolve_by_solver(ctx, order).await;
-    }
-    let outcome = match cancel_as(ctx, maker, order).await {
-        Ok(CancelOutcome::NotFound) => return confirm_unlisted_closed(ctx, order).await,
-        Ok(outcome) => outcome,
-        Err(message) => return CleanupResult::Failed { message },
-    };
-    // The maker's request alone closes an unfunded order; a funded one
-    // needs the counterpart's agreement. The maker's screen cannot tell
-    // the two apart: app v2 marks the order cancelled on the request itself,
-    // so a "closed" label is trusted only once the relay carries it.
+    None
+}
+
+/// What the maker's cancel alone settled, or `None` when the counterpart's
+/// agreement is still wanted.
+///
+/// The maker's request alone closes an unfunded order; a funded one needs
+/// the counterpart's agreement. The maker's screen cannot tell the two
+/// apart: app v2 marks the order cancelled on the request itself, so a
+/// "closed" label is trusted only once the relay carries it.
+async fn settled_after_maker_cancel(
+    ctx: &Context,
+    maker: Actor,
+    order: &OrderReference,
+    outcome: CancelOutcome,
+) -> Option<CleanupResult> {
     match observed_state(ctx, maker, order).await {
         Some(state) if state.is_terminal() => {
             match confirm_closed(ctx, order, state, outcome).await {
-                CleanupResult::Failed { .. } if state == OrderState::Cancelled => {}
-                confirmed => return confirmed,
+                CleanupResult::Failed { .. } if state == OrderState::Cancelled => None,
+                confirmed => Some(confirmed),
             }
         }
-        Some(OrderState::Active | OrderState::FiatSent) => {}
-        Some(state) => {
-            return CleanupResult::Failed {
-                message: format!("still {state} after the maker cancelled"),
-            };
-        }
+        Some(OrderState::Active | OrderState::FiatSent) => None,
+        Some(state) => Some(CleanupResult::Failed {
+            message: format!("still {state} after the maker cancelled"),
+        }),
         // App v2 drops a cancelled trade that never went active from My
         // Trades, and its state goes with it. Once the maker's loaded list
         // no longer shows it, only the relay can say the daemon closed it.
         None if listed_by(ctx, maker, order).await == Some(false) => {
-            return confirm_unlisted_closed(ctx, order).await;
+            Some(confirm_closed_on_relay(ctx, order, UNLISTED).await)
         }
-        None => {
-            return CleanupResult::Failed {
+        // The maker's screen cannot be read (live, 2026-10-15: her trade
+        // detail lost `order.id` once she asked to cancel). The relay still
+        // says whether the daemon holds the order: closed is confirmed
+        // there; open means the counterpart's agreement is still wanted.
+        None => match relay_state(ctx, order) {
+            Some(state) if state.is_terminal() => {
+                Some(confirm_closed_on_relay(ctx, order, UNREADABLE).await)
+            }
+            Some(_) => None,
+            None => Some(CleanupResult::Failed {
                 message: "state unreadable after the maker cancelled".into(),
-            };
-        }
-    }
-    let Some(taker) = Actor::ALL.into_iter().find(|a| *a != maker) else {
-        return CleanupResult::Failed {
-            message: "no counterpart to accept the cancel".into(),
-        };
-    };
-    match cancel_as(ctx, taker, order).await {
-        Ok(_) => {}
-        Err(message) => return CleanupResult::Failed { message },
-    }
-    match observed_state(ctx, maker, order).await {
-        Some(state) if state.is_terminal() => confirm_closed(ctx, order, state, outcome).await,
-        Some(state) => CleanupResult::Failed {
-            message: format!("still {state} after both sides cancelled"),
-        },
-        None => CleanupResult::Failed {
-            message: "state unreadable after both sides cancelled".into(),
+            }),
         },
     }
+}
+
+/// Why the relay, not a screen, has to say the order is closed.
+const UNLISTED: &str = "the app lists no trade for it";
+const UNREADABLE: &str = "the maker's app cannot show its state";
+
+/// The daemon's latest published status for `order`, as far as the run's
+/// observer has seen it; `None` before the first order event.
+fn relay_state(ctx: &Context, order: &OrderReference) -> Option<OrderState> {
+    ctx.relay
+        .snapshot()
+        .into_iter()
+        .rev()
+        .filter(|e| {
+            e.kind == mortsom_scenario_kit::actions::ORDER_EVENT_KIND
+                && e.tag("d") == Some(order.id.as_str())
+        })
+        .find_map(|e| e.tag("s").and_then(OrderState::from_protocol_status))
 }
 
 /// Whether `actor`'s app shows `order` disputed right now.
@@ -355,11 +405,16 @@ async fn resolve_by_solver(ctx: &Context, order: &OrderReference) -> CleanupResu
     }
 }
 
-/// An order the app no longer lists is done only when the daemon says it is
-/// closed on the relay (`canceled`, `success` or `expired`). A client that
-/// cannot show a trade it created has not thereby cancelled it: the order
-/// may still sit pending on the daemon, waiting for a taker.
-async fn confirm_unlisted_closed(ctx: &Context, order: &OrderReference) -> CleanupResult {
+/// An order whose state no screen can show is done only when the daemon
+/// says it is closed on the relay (`canceled`, `success` or `expired`). A
+/// client that cannot show a trade it created has not thereby cancelled it:
+/// the order may still sit pending on the daemon, waiting for a taker, or
+/// funded, waiting for the counterpart. `why` names what the screen lacks.
+async fn confirm_closed_on_relay(
+    ctx: &Context,
+    order: &OrderReference,
+    why: &str,
+) -> CleanupResult {
     let id = order.id.clone();
     let closed = ctx
         .relay
@@ -378,7 +433,7 @@ async fn confirm_unlisted_closed(ctx: &Context, order: &OrderReference) -> Clean
                 TimelineKind::RelayEvent,
                 None,
                 format!(
-                    "relay: order {} is closed ({}) although the app lists no trade for it",
+                    "relay: order {} is closed ({}) although {why}",
                     order.id,
                     event.tag("s").unwrap_or("?")
                 ),
@@ -391,7 +446,7 @@ async fn confirm_unlisted_closed(ctx: &Context, order: &OrderReference) -> Clean
         }
         None => CleanupResult::Failed {
             message: format!(
-                "the app lists no trade for order {} and the relay never showed it closed",
+                "order {}: {why} and the relay never showed it closed",
                 order.id
             ),
         },

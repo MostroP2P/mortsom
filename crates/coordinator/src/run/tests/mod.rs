@@ -403,6 +403,10 @@ struct FakeAdapter {
     /// escrow and waits for the counterpart. Only Alice's view is affected.
     maker_screen_lies: bool,
     maker_lied_about: Mutex<Vec<String>>,
+    /// Observed live on 2026-10-15: once the maker asked to cancel a funded
+    /// order, her trade detail no longer exposes `order.id`, so her screen
+    /// cannot be read at all while the daemon still holds the escrow.
+    maker_screen_unreadable: bool,
     /// The trades list never shows the order (app v2 on Web before its
     /// trades store existed): cancel finds nothing to act on.
     hides_trades: bool,
@@ -437,6 +441,7 @@ impl FakeAdapter {
             ui_claims_cancelled: false,
             maker_screen_lies: false,
             maker_lied_about: Mutex::new(Vec::new()),
+            maker_screen_unreadable: false,
             hides_trades: false,
             silence_driver_on_failure: false,
             fail_take: false,
@@ -727,6 +732,14 @@ impl AppAdapter for FakeAdapter {
             .copied()
             .ok_or_else(|| AdapterError::contract("unknown order"))?;
         if device.actor == Actor::Alice
+            && self.maker_screen_unreadable
+            && self.coop_pending.lock().unwrap().contains(&order.id)
+        {
+            return Err(AdapterError::contract(
+                "`order.id` did not appear: element `order.id` not found",
+            ));
+        }
+        if device.actor == Actor::Alice
             && !state.is_terminal()
             && self.maker_lied_about.lock().unwrap().contains(&order.id)
         {
@@ -852,15 +865,15 @@ const FAKE_ORDER_IDS: [&str; 12] = [
 /// never closes an order (no `canceled`, no `success`) whatever the UI says.
 struct FakeObserver {
     publish_closed: bool,
-    /// When set, `canceled` is published for an order only after the
-    /// adapter recorded a daemon-accepted cancellation of it.
-    canceled_gate: Option<Arc<Mutex<Vec<String>>>>,
+    /// When set, an order is published closed (`canceled` or `success`)
+    /// only after the adapter recorded a daemon-accepted cancellation of it.
+    closed_gate: Option<Arc<Mutex<Vec<String>>>>,
 }
 impl Default for FakeObserver {
     fn default() -> Self {
         Self {
             publish_closed: true,
-            canceled_gate: None,
+            closed_gate: None,
         }
     }
 }
@@ -871,7 +884,7 @@ impl ObserverFactory for FakeObserver {
         let keys = Keys::parse(NSEC).unwrap();
         let feeder = Arc::clone(&observer);
         let publish_closed = self.publish_closed;
-        let gate = self.canceled_gate.clone();
+        let gate = self.closed_gate.clone();
         tokio::spawn(async move {
             for _ in 0..200 {
                 for (id, status) in FAKE_ORDER_IDS.iter().flat_map(|id| {
@@ -882,7 +895,7 @@ impl ObserverFactory for FakeObserver {
                         .filter(move |s| publish_closed || !matches!(*s, "canceled" | "success"))
                         .map(move |s| (*id, s))
                 }) {
-                    if status == "canceled"
+                    if matches!(status, "canceled" | "success")
                         && gate
                             .as_ref()
                             .is_some_and(|g| !g.lock().unwrap().iter().any(|c| c == id))

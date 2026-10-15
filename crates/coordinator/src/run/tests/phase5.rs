@@ -167,7 +167,7 @@ async fn cleanup_needs_the_relay_to_confirm_a_funded_cancellation() {
     let adapter = Arc::new(adapter);
     let observer = FakeObserver {
         publish_closed: false,
-        canceled_gate: None,
+        closed_gate: None,
     };
 
     let summary = run_with_observer(
@@ -203,9 +203,9 @@ async fn cleanup_finishes_a_cooperative_cancel_the_maker_screen_called_done() {
     let adapter = Arc::new(adapter);
     let observer = FakeObserver {
         publish_closed: true,
-        canceled_gate: Some(Arc::new(Mutex::new(Vec::new()))),
+        closed_gate: Some(Arc::new(Mutex::new(Vec::new()))),
     };
-    let gate = observer.canceled_gate.clone().unwrap();
+    let gate = observer.closed_gate.clone().unwrap();
     // The fake daemon publishes `canceled` only once Bob's cancel lands.
     let watched = adapter.clone();
     tokio::spawn(async move {
@@ -235,6 +235,126 @@ async fn cleanup_finishes_a_cooperative_cancel_the_maker_screen_called_done() {
     assert_eq!(*adapter.cancelled.lock().unwrap(), ["o1".to_owned()]);
 }
 
+/// The maker's screen going unreadable after her cancel request is not the
+/// end of cleanup. The live run of 2026-10-15 left a funded order active:
+/// Bob had asked to cancel, his detail no longer exposed `order.id`, and
+/// cleanup gave up before asking Alice to accept, so `stack down` refused.
+/// While the relay shows the order open, the counterpart cancels too, and
+/// the daemon's own `canceled` closes the entry.
+#[tokio::test]
+async fn cleanup_asks_the_counterpart_when_the_maker_screen_cannot_be_read() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+    adapter.maker_screen_unreadable = true;
+    let adapter = Arc::new(adapter);
+    let observer = FakeObserver {
+        publish_closed: true,
+        closed_gate: Some(Arc::new(Mutex::new(Vec::new()))),
+    };
+    let gate = observer.closed_gate.clone().unwrap();
+    // The fake daemon publishes `canceled` only once Bob's cancel lands.
+    let watched = adapter.clone();
+    tokio::spawn(async move {
+        loop {
+            let cancelled = watched.cancelled.lock().unwrap().clone();
+            *gate.lock().unwrap() = cancelled;
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+
+    let summary = run_with_observer(
+        &world,
+        adapter.clone(),
+        opts_in(&world, &["happy_sell"]),
+        true,
+        &observer,
+    )
+    .await
+    .unwrap();
+
+    assert!(!summary.passed);
+    let cleanup = summary.cleanup.unwrap();
+    assert!(cleanup.is_clean(), "{cleanup:?}");
+    assert_eq!(*adapter.cancelled.lock().unwrap(), ["o1".to_owned()]);
+}
+
+/// When the relay already shows the order closed while the maker's screen
+/// cannot be read, the daemon's word is enough: nobody is asked to cancel.
+#[tokio::test]
+async fn an_order_the_relay_closed_needs_no_counterpart_when_the_maker_screen_is_unreadable() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+    adapter.maker_screen_unreadable = true;
+    let adapter = Arc::new(adapter);
+    let observer = FakeObserver {
+        publish_closed: true,
+        closed_gate: None,
+    };
+
+    let summary = run_with_observer(
+        &world,
+        adapter.clone(),
+        opts_in(&world, &["happy_sell"]),
+        true,
+        &observer,
+    )
+    .await
+    .unwrap();
+
+    assert!(!summary.passed);
+    let cleanup = summary.cleanup.unwrap();
+    assert!(cleanup.is_clean(), "{cleanup:?}");
+    assert!(
+        adapter.cancelled.lock().unwrap().is_empty(),
+        "the counterpart was asked to cancel an order the relay had closed"
+    );
+}
+
+/// An unreadable maker screen never stands in for the daemon: when the
+/// relay does not close the order after both sides cancelled, the entry
+/// stays unresolved and says why.
+#[tokio::test]
+async fn an_unreadable_maker_screen_stays_unresolved_until_the_relay_closes_the_order() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_release = true;
+    adapter.maker_screen_unreadable = true;
+    let adapter = Arc::new(adapter);
+    let observer = FakeObserver {
+        publish_closed: false,
+        closed_gate: None,
+    };
+
+    let summary = run_with_observer(
+        &world,
+        adapter.clone(),
+        opts_in(&world, &["happy_sell"]),
+        true,
+        &observer,
+    )
+    .await
+    .unwrap();
+
+    assert!(!summary.passed);
+    let cleanup = summary.cleanup.unwrap();
+    assert_eq!(cleanup.unresolved, vec!["o1".to_owned()]);
+    let entry = &cleanup.entries[0];
+    assert!(
+        matches!(&entry.result, Some(mortsom_scenario_kit::cleanup::CleanupResult::Failed { message }) if message.contains("relay never showed it closed")),
+        "{entry:?}"
+    );
+    assert_eq!(
+        *adapter.cancelled.lock().unwrap(),
+        ["o1".to_owned()],
+        "the counterpart was still asked to cancel"
+    );
+}
+
 /// An order the app no longer lists is not thereby closed. The live Web run
 /// of 2026-09-08 created an order the client never showed; the daemon kept it
 /// pending for an hour. "Not found" on screen needs the relay to show the
@@ -249,7 +369,7 @@ async fn cleanup_needs_the_relay_to_close_an_order_the_app_does_not_list() {
     let adapter = Arc::new(adapter);
     let observer = FakeObserver {
         publish_closed: false,
-        canceled_gate: None,
+        closed_gate: None,
     };
 
     let summary = run_with_observer(
@@ -332,7 +452,7 @@ async fn a_never_active_cancel_the_relay_never_closes_stays_unresolved() {
     let adapter = Arc::new(adapter);
     let observer = FakeObserver {
         publish_closed: false,
-        canceled_gate: None,
+        closed_gate: None,
     };
 
     let summary = run_with_observer(
