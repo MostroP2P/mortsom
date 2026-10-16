@@ -57,9 +57,10 @@ cargo release 0.2.0 --execute  # bump, changelog, commit, push the branch
 `.github/workflows/release.yml` reacts to both pushes:
 
 - **Push to `main`** — if the workspace version has a changelog entry and no
-  tag yet, tags the commit `v0.1.1` and publishes a GitHub release with the
-  changelog section as its description. A release cut from `main` is
-  published by this job alone.
+  tag yet, waits for the CI run of that same commit, then tags it `v0.1.1`
+  and publishes a GitHub release with the changelog section as its
+  description. A red CI run leaves the commit untagged; fix forward and cut
+  the next patch.
 - **Push to `release/v*`** — opens a pull request against `main` titled
   `Release v0.2.0`, with the new changelog section as its body. Pushing again
   to the same branch refreshes the title and body instead of opening a second
@@ -76,6 +77,10 @@ build.
   `cargo release` refuses to run on a feature branch.
 - `publish = false`: nothing is pushed to crates.io. Mortsom is a harness, not
   a library.
+- The publish job never tags a red build: `ci/release/wait-for-ci.sh` blocks
+  until the CI workflow run for the release commit has succeeded and fails
+  the job otherwise, whether the commit came straight from `main` or from a
+  merged release pull request.
 - The publish job is idempotent. It does nothing when the tag already exists
   or when the version has no changelog entry, so ordinary pushes to `main`
   are ignored.
