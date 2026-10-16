@@ -85,6 +85,16 @@ jobs:
           echo "release=true" >> "$GITHUB_OUTPUT"
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
 
+      # `ci.yml` starts from the same push and nothing else orders the two
+      # workflows, so a release commit that fails formatting, clippy, tests
+      # or coverage would otherwise get a permanent tag. The tag waits for
+      # the CI run of this exact commit and is only cut when it is green.
+      - name: Wait for CI on this commit
+        if: steps.meta.outputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: ci/release/wait-for-ci.sh "${GITHUB_SHA}"
+
       - name: Tag the release commit
         if: steps.meta.outputs.release == 'true'
         env:

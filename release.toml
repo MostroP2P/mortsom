@@ -1,9 +1,10 @@
 # cargo-release configuration for Mortsom.
 #
-# `cargo release <level> --execute` on a `release/vX.Y.Z` branch bumps the
-# shared workspace version, regenerates CHANGELOG.md and pushes the branch.
-# Tagging and the GitHub release happen in `.github/workflows/release.yml`
-# once the resulting pull request lands on `main`. See `docs/releasing.md`.
+# `cargo release <level> --execute` bumps the shared workspace version,
+# regenerates CHANGELOG.md and pushes the branch. Run from `main` the push is
+# the release: `.github/workflows/release.yml` tags it and publishes the
+# GitHub release. Run from a `release/vX.Y.Z` branch the workflow opens a
+# pull request first and tags once it lands on `main`. See `docs/releasing.md`.
 
 # The harness is not published to crates.io.
 publish = false
@@ -12,11 +13,12 @@ publish = false
 shared-version = true
 consolidate-commits = true
 
-# Releases are reviewed, so the tag is cut from `main` by CI, not locally.
+# The tag is cut from `main` by CI, not locally.
 tag = false
 
-# Refuse to release from `main` or a feature branch.
-allow-branch = ["release/v[0-9]*"]
+# Release from `main` directly or through a reviewed `release/vX.Y.Z` branch;
+# refuse a feature branch.
+allow-branch = ["main", "release/v[0-9]*"]
 
 push = true
 pre-release-commit-message = "chore(release): v{{version}}"
