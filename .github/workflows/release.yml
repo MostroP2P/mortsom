@@ -19,6 +19,8 @@ concurrency:
 permissions:
   contents: write
   pull-requests: write
+  # `ci/release/wait-for-ci.sh` lists the CI runs of the release commit.
+  actions: read
 
 jobs:
   pull-request:
