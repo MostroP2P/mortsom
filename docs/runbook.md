@@ -28,7 +28,15 @@ A run passes only when the scenario passed and cleanup left nothing open. A skip
 4. Relay: `stack status` shows whether the relay and daemon are up and which daemon identity is in effect.
    A relay that answers but delivers nothing usually means the clients were built for a different daemon
    identity; rebuild them.
-5. Run `cleanup <run-id>` before starting again.
+5. A stale chain tip: the stack mines blocks only at `stack up`, and about two hours later the LND nodes
+   report `synced_to_chain: false`. mostrod then enters maintenance mode (`stack logs` shows "maintenance
+   mode ON: new orders and takes are rejected") and skips bond payouts and payment retries ("LND is not
+   synced to chain"). Creates fail with no new trade, and claims are never offered. Mine one block:
+   `docker exec mortsom-regtest-bitcoind-1 bitcoin-cli -regtest -rpcuser=mortsom -rpcpassword=mortsom
+   -rpcwallet=mortsom -generate 1`. The daemon leaves maintenance mode only once LND has been synced for
+   five minutes ("maintenance mode OFF" in its log); start the run after that. The run does not do this
+   for you yet (#87).
+6. Run `cleanup <run-id>` before starting again.
 
 ## 3. App regressions
 
@@ -51,6 +59,15 @@ The runner never retries once sats may have moved.
    the order must be checked through `cleanup`; a failed one needs no action. Unknown never means refunded.
 3. Insufficient liquidity: `doctor` fails the wallet check when a node's balance is below
    `run.max_run_spend_sats`. Fix the stack; never raise the cap to make a run pass.
+4. Anti-abuse bonds (spec 8.8) are hold invoices too, journaled as bonds: a bond in flight after the run is
+   one the daemon neither returned nor slashed. Look its hash up on the payer's node as above; a bond that
+   later failed came back, one that settled was slashed. A claim of a slashed bond's share is an invoice on
+   the winner's node; recovery never cancels it, because it settles on an order that did not complete.
+   Every scenario of the family on a stack without `--bond`, or of any other family on a stack with it, is
+   skipped with the reason; switch with `stack up --bond --replace` or `stack up --replace` (each mints a
+   new daemon identity, so the next run builds the client again). A `daemon-bond` preflight failure means
+   the daemon answering now advertises a bond other than the one the stack declared: it was restarted with
+   other settings since `stack up`. Rebuild the stack; never edit its settings by hand.
 
 ## 5. Cleanup and recovery
 

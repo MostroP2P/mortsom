@@ -4,6 +4,42 @@ One row per scenario and platform. A cell is **accepted** only after a live run 
 proves the assertions in [spec.md](../spec.md) section 2 and finishes verified cleanup. Builds, unit tests,
 onboarding, identity probes, cancellation diagnostics and skipped cases never count.
 
+**Bond family, first live run 2026-10-18 on Linux** (spec 8.8):
+- **Setup:**
+  - App PR MostroP2P/app#846, head `0c1100c2`, app 2.0.17.
+  - mostrod `main` at `f1f7a62` (v0.20.0), on a `stack up --bond` stack (daemon `ef1ca75a…`). The bond is 1% of the order, at least 1000 sats, asked of both sides, slashed on a waiting timeout, with half kept by the node.
+  - Mortsom at this change.
+- **Result: 14 passed, 1 failed, every cleanup clean.** The failure is a product one: the taker's app keeps a take whose bond lapsed (MostroP2P/app#849).
+  - `taker_bond_expires_unpaid` against the fix branch (`fix/taker-bond-lapse` at `ac207d4e`): **passes**, `20261018T224436Z-0460d2323d34`. Bob's app closed the take one second after the daemon republished the order.
+  - Against app `main` (`989735f7`): **fails**, `20261018T225415Z-49e74f4d48b3`.
+- `maker_bond_locked_before_publish` covers app #846's path: the maker pays the bond, and the order reaches the book and the app pending only then. The "order published" notification card itself cannot be read, because notification cards carry no automation identifiers.
+- **Web was not run:** this host has no Chromium.
+
+| Scenario | Linux run 2026-10-18 |
+|---|---|
+| `taker_bond_released_after_trade` | `20261018T214720Z-5f2ca00a94d9` |
+| `seller_taker_bond_then_escrow` | `20261018T213151Z-67799ec50991` |
+| `taker_bond_declined` | `20261018T213613Z-5336ded60a9a` |
+| `taker_bond_expires_unpaid` | **fails** on the app, `20261018T213917Z-b736767e53c0`: Bob's app still holds the order 90 s after the daemon put it back on the book (MostroP2P/app#849) |
+| `maker_bond_locked_before_publish` | `20261018T222108Z-894940572e6d` |
+| `maker_bond_abandoned` | `20261018T221404Z-7e6f088df221` |
+| `maker_bond_expires_unpaid` | `20261018T221549Z-2017e4b64030` |
+| `bonds_released_by_solver_ruling` | `20261018T205053Z-801510f43014` |
+| `buyer_taker_bond_slashed_on_timeout` | `20261018T220700Z-c9e4fb02e18e` |
+| `seller_maker_bond_slashed_on_timeout` | `20261018T223012Z-e677050a9d87` |
+| `seller_taker_bond_slashed_on_timeout` | `20261018T212507Z-c0b53202d2ad` |
+| `buyer_maker_bond_slashed_on_timeout` | `20261018T215753Z-d53fe2db006c` |
+| `taker_bond_slashed_by_solver` | `20261018T215131Z-4e0cc9552db5` |
+| `maker_bond_slashed_by_solver` | `20261018T222337Z-bb644597aa9b` |
+| `bond_claim_fails_then_replaced` | `20261018T204217Z-bba473f2c426` |
+
+Earlier attempts the same day:
+- **A first run of the family, before the review fixes**, passed the same fourteen (`20261018T190632Z-92d63bef22ab` to `20261018T202558Z-bdb56407652a`; `maker_bond_locked_before_publish` also `20261018T190302Z-421522140109`).
+- Its `taker_bond_expires_unpaid` (`20261018T201130Z-a37bb3f5fe46`) waited for Bob's app until the order itself expired, then failed on Alice's. The scenario now bounds Bob's wait by `state_timeout`, so it fails where the defect is.
+- **In the second run, seven scenarios failed between 20:55 and 21:25** (`20261018T205528Z-84db3570cce2` to `20261018T212250Z-7bdf8f3b3b21`).
+  - Cause: the stack's newest block was two hours old, so LND reported itself unsynced and mostrod drained. Creates were refused and no claim was offered (runbook 2.5, #87).
+  - After one block and the daemon's five minutes, all seven passed (the runs above).
+
 **Re-verified 2026-10-14 on Linux against app `main` at `ae3fe214` and mostrod v0.19.3** (stack daemon
 `6f11dd42…`), with the clients built from managed `main` and Mortsom carrying #67 to #76 (this record assumes they are merged: in particular spec 8.5's `released` comes
 with #71): **26 passed, 0
@@ -188,6 +224,10 @@ Newest first. Run artifacts are under gitignored `artifacts/<run-id>/`.
 | `20260908T160318Z-e617fd03c704` | Linux | happy_sell | Order created | Bob could not locate the merged native book-tab label. Fixed in `b6bec7c` |
 
 ## Known app v2 product issues
+
+### A taker's lapsed bond stays in My Trades (open, MostroP2P/app#849)
+
+mostrod tells a taker nothing when their bond lapses unpaid: it republishes the order `pending`. The app closes the take at the bolt11's expiry, but only from the pay-bond screen's countdown or the stale sweep, every 30 minutes. A taker on any other screen keeps the take until the sweep or the order's own expiry (`20261018T201130Z-a37bb3f5fe46`: eight minutes, until the order expired). The fix arms a close at the deadline wherever the user is.
 
 ### Second create form of a session keeps submit disabled (open)
 

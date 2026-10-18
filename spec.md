@@ -82,6 +82,10 @@ mortsom stack up
 mortsom stack status
 mortsom stack down
 
+# The same stack with the daemon's anti-abuse bond switched on (section 8.8).
+mortsom stack up --bond --replace
+mortsom run --tag bond
+
 # Prerequisites for a platform. No order, no payment.
 mortsom doctor --platform linux
 mortsom doctor --platform web
@@ -163,9 +167,16 @@ only let a payment succeed by accident. Carol exists so the daemon never escrows
    skipping work already done so the command is re-runnable against a half-built stack.
 3. Mint the daemon identity for this stack, write its settings with the declared test limits, and start the
    daemon as the invoking user so it can read owner-only files. Verify the running container is the
-   prepared image ID.
+   prepared image ID. With `--bond` the settings also carry the committed `[anti_abuse_bond]` fragment
+   (`stack/mostro-bond.tpl.toml`): the daemon then asks every maker for a bond before it publishes the order
+   and every taker before the trade starts, and the descriptor declares that policy (side, share of the
+   order, floor, timeout slashing, the node's share of a slash, claim window) to every run on the stack. A
+   stack built without it declares no bond. The base template never carries the section itself, so no
+   other family is ever run against a bonded daemon by accident.
 4. Wait until the daemon publishes its info event on the relay, then validate regtest networks, advertised
-   relay endpoints, channel liquidity and declared limits.
+   relay endpoints, channel liquidity and declared limits. The info event's `bond_*` tags must advertise
+   exactly the bond the stack declares, or, without `--bond`, no bond: the settings file is what the daemon
+   was told, its info event what it says it does.
 5. Write the public connection references, daemon public identity, image identity (image ID, container
    creation reference and repository digest when one exists), daemon source provenance (kind `image` or
    `git-ref`; the requested selector; for a ref, the repository, fetched ref and full commit; `pinned-image`
@@ -303,9 +314,18 @@ an error, never a smaller run.
 | Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
 | Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
 
-This version implements the first five families in full, and of the recovery family the relaunches
-(section 8.7); its other scenarios need interruptions Linux and Web clients cannot cause and are skipped. The
-last two families are roadmap (section 14): their tags are reserved, and no scenario carries them yet.
+This version implements the first five families and the anti-abuse bonds (section 8.8) in full, and of the
+recovery family the relaunches (section 8.7); its other scenarios need interruptions Linux and Web clients
+cannot cause and are skipped. The adversarial family is roadmap (section 14): its tag is reserved, and no
+scenario carries it yet.
+
+The bond family is written for a daemon that asks for bonds, and every other family for one that does not:
+a bonded daemon parks each order and each take on a bond those scenarios never pay, and a bondless one
+never opens the pay-bond screen the bond family waits for. A run decides from the bond the stack declares
+(section 5) and skips, with the reason, every scenario written for the other kind of daemon; without a
+Mortsom-owned stack nothing declares a bond, and only the bond family is skipped. One stack therefore
+accepts either the bond family or the rest, and the operator switches with `stack up --bond --replace` or
+`stack up --replace`, each of which mints a new daemon identity and so a new client build.
 
 A scenario whose profile lacks a required capability is **skipped with a reason, never failed**, and a
 skipped scenario is never counted as accepted.
@@ -452,6 +472,63 @@ orders. They are not actions. On a stack Mortsom owns, the run opens each actor 
 the daemon key and keeps its action, never its content; a query does not count. Without the daemon key
 every actor message counts as an action, and the run records that it could not tell them apart.
 
+### 8.8 Anti-abuse bonds
+
+A daemon started with `[anti_abuse_bond]` asks for a second hold invoice, the bond, from whichever side its
+policy names; the stack (`stack up --bond`) bonds both. A maker's bond is asked for right after `new-order`
+and gates publication: until it locks the daemon publishes nothing, and past its payment deadline it drops
+the order unpublished. A taker's is asked for right after the take: the daemon parks the order at
+`waiting-taker-bond` for that taker alone, the maker hears nothing and the book keeps the order `pending`, so
+a taker who never pays blocks no one; the take reaches the book as `in-progress` only once the bond locks.
+On every honest exit the daemon cancels the bond's HTLC, so the sats never leave the payer's wallet. A bond
+is slashed only by a solver's `BondResolution` on `admin-settle` or `admin-cancel`, or by the scheduler when
+a waiting step outlives `expiration_seconds` with `slash_on_waiting_timeout` on: `waiting-buyer-invoice`
+slashes the buyer, `waiting-payment` the seller, maker or taker alike. A taker's failure puts the order back
+on the book; a maker's closes it, returning the other side's bond and any escrow. The slashed HTLC settles,
+the node keeps its share (`slash_node_share_pct`, floored) and offers the rest to the winning counterparty
+with `add-bond-invoice`, asked again every `payout_invoice_window_seconds` until an invoice arrives, which
+it pays; one it cannot pay within its retries is asked for again.
+
+Nothing about a bond is public beyond publication itself: kind 38383 carries no bond and no event marks a
+slash or a payout. The proof is in the wallets, which Mortsom holds: a bond that came back is a payment that
+failed with no settled record, a slashed one a payment settled once for exactly the bond, a claim an invoice
+on the winner's node settled once for exactly the share. The run sizes each against the declared policy:
+the bond is `max(round(amount_pct × order sats), base_amount_sats)`, which every bond invoice must ask
+exactly, and the share is the bond less the node's floored share, which the app must offer exactly. Every
+order here is priced in sats, so both are known before an invoice exists.
+
+Bonds are paid and claims invoiced from outside the app, from the actors' nodes. The pay-bond screen hands
+the bolt11 over (`bond.order_id`, `bond.invoice.text`), and the app moves on by itself once the daemon sees
+the payment; `bond.cancel`, confirmed with `bond.cancel.confirm`, walks away: a taker's cancel of the take,
+a maker's cancel of an order never published. A winner reads the claim (`bond.claim.amount`,
+`bond.claim.status`) from the trade's banner (`trade.bondClaim`) or from the claim-only row a closed trade
+leaves, and hands in an invoice through `bond.claim.text`. A loser's trade carries `trade.bondSlashed` with
+the cause while the row exists; a timeout wipes a never-active row, and then only the wallet speaks.
+
+| Scenario | Narrative | Required evidence |
+|---|---|---|
+| `taker_bond_released_after_trade` | Alice creates and bonds a sell order. Bob takes it, pays his bond, and the trade completes as `happy_sell`. | Alice's app shows the order on its bond until it locks, and the book carries it only then. After the take Bob's app shows the bond window, Alice's still shows the order pending, and the book publishes no `in-progress` for the whole quiet window; once his bond is paid it does. Each bond invoice asks exactly what the policy sizes it at. Hold settled once, payout settled once, both apps completed, and both bonds fail on their nodes with no settled record. |
+| `seller_taker_bond_then_escrow` | Bob creates and bonds a buy order. Alice takes it as seller: the bond first, then the escrow, each a hold invoice paid from her node. The trade completes as `happy_buy`. | The bond evidence above with the roles reversed. After her bond locks Alice's app asks for the escrow; after the escrow is accepted Bob's asks for his invoice. Hold settled once, payout settled once, both bonds returned. |
+| `taker_bond_declined` | Alice creates and bonds a sell order. Bob takes it, sees the bond window and walks away. Alice cancels the order. | Bob's app no longer holds the order; Alice's keeps it pending; the book publishes neither `in-progress` nor `canceled` for the whole quiet window. After Alice's cancel the relay shows it cancelled, her app no longer holds it open and her bond comes back. Bob paid nothing. |
+| `taker_bond_expires_unpaid` | As `taker_bond_declined`, but Bob neither pays nor walks away; he is on the trade screen, not the pay-bond screen, when the bond lapses. | After the bond invoice's lifetime the daemon puts the order back on the book: a `pending` revision later than the take, and never an `in-progress`. Alice's app shows it pending. The daemon tells Bob nothing; his app knows the invoice's expiry and no longer holds the order within `state_timeout` of the revision. Bob paid nothing; Alice's cancel returns her bond. |
+| `maker_bond_locked_before_publish` | Alice creates a sell order and is asked for a bond before it is published. She pays from her node, then cancels the order. | Her app parks the order on the bond (`waiting-bond`) and the book carries nothing for the whole quiet window. Once paid, her app and the book show it pending. After her cancel the relay shows it cancelled, her app no longer holds it open, and her bond fails on her node. |
+| `maker_bond_abandoned` | Alice creates a sell order, is asked for a bond, and walks away on the pay-bond screen. | Her app no longer holds the order; the book never carries it. No payment. |
+| `maker_bond_expires_unpaid` | Alice creates a sell order, is asked for a bond, and neither pays nor walks away. | Her app keeps the order on its bond for the whole quiet window, and no longer holds it once the maker's deadline passes; the book never carries it. No payment. |
+| `bonds_released_by_solver_ruling` | Alice's bonded sell order is taken with Bob's bond, funded and reported fiat sent; Alice disputes. The run's solver takes the dispute and settles it for Bob with a resolution that slashes nobody. | The dispute goes `initiated`, `in-progress`, `settled`; both apps and the book show completion; hold settled once, payout settled once, both bonds returned. |
+| `buyer_taker_bond_slashed_on_timeout` | Alice's bonded sell order; Bob takes it, pays his bond and never hands in his invoice. Alice claims the share, then cancels the order. | After the buyer's deadline the book publishes the order `pending` again. Bob's bond settles on his node and his app no longer holds the order. Alice's app offers a claim for exactly the share, reading `pending`; an invoice from her node for it is handed in, settles once, and the claim reads `completed`. Her cancel returns her own bond. |
+| `seller_maker_bond_slashed_on_timeout` | Alice's bonded sell order; Bob takes it, pays his bond and hands in his invoice; Alice never funds. Bob claims the share. | After the seller's deadline the book shows the order `canceled`. Alice's bond settles on her node and her app no longer holds the order; Bob's bond comes back. Bob's claim is offered, paid and completed as above. |
+| `seller_taker_bond_slashed_on_timeout` | Bob's bonded buy order; Alice takes it, pays her bond and never funds. Bob claims the share, then cancels the order. | After the seller's deadline the book publishes the order `pending` again. Alice's bond settles on her node and her app no longer holds the order; Bob's shows it pending. His claim is offered, paid and completed, and his cancel returns his own bond. |
+| `buyer_maker_bond_slashed_on_timeout` | Bob's bonded buy order; Alice takes it, pays her bond and the escrow; Bob never hands in his invoice. Alice claims the share. | After the buyer's deadline the book shows the order `canceled`. Bob's bond settles on his node and his app no longer holds the order; Alice's escrow payment and her bond both fail on her node (returned). Her claim is offered, paid and completed. |
+| `taker_bond_slashed_by_solver` | As `bonds_released_by_solver_ruling` up to the ruling; the solver cancels the order for Alice with a resolution that slashes the buyer. Alice claims the share. | The dispute goes `initiated`, `in-progress`, `seller-refunded`; both apps and the book show the order cancelled and Alice's escrow fails (returned). Bob's bond settles on his node and his trade shows `trade.bondSlashed` as `dispute`. Alice's claim is offered, paid and completed, and her own bond comes back. |
+| `maker_bond_slashed_by_solver` | As `bonds_released_by_solver_ruling`, but Bob opens the dispute, and the solver settles it for Bob with a resolution that slashes the seller: Alice, the maker. Bob claims the share. | The dispute goes `initiated` by the buyer, `in-progress`, `settled`; both apps and the book show completion; hold settled once and payout settled once. Alice's bond settles on her node and her trade shows `trade.bondSlashed` as `dispute`; Bob's comes back. Bob's claim is offered, paid and completed. |
+| `bond_claim_fails_then_replaced` | As `buyer_taker_bond_slashed_on_timeout` up to the claim; Alice hands in a hold invoice from her node and withdraws it once the daemon's payment is held there. She then claims with an ordinary invoice. | The withdrawn invoice is recorded superseded before the node cancels it, and never settles. The daemon, its retries spent, asks again: Alice's app reads the claim `pending` once more. The replacement settles once for exactly the share and the claim reads `completed`. |
+
+A scenario reached without a declared bond, or with a policy that lacks what it drives (a maker's bond,
+timeout slashing), ends as environment misconfiguration before an order exists. Not covered, and on the
+roadmap (section 14): the lock race between two takers, which needs a third actor; a claim left to forfeit
+and a slash the node keeps whole, which need other policies than the stack's; and a range maker's bond,
+sized from the market price at creation, which the run cannot predict.
+
 ## 9. Identity and isolation
 
 Each run starts with fresh app storage and new generated identities for Alice and Bob. The run observes both
@@ -467,7 +544,9 @@ wallet set at a time; a second run reports the conflict before launching anythin
 These rules protect real funds, even on regtest, and are never relaxed for convenience:
 
 - Reserve budget before any payment: the actual invoice amount plus the fee ceiling. Per-order and cumulative
-  caps are mandatory; a missing cap is an error. Retries and resets never reset the cumulative budget.
+  caps are mandatory; a missing cap is an error. Retries and resets never reset the cumulative budget. The
+  per-order cap bounds every reservation an order holds together: an anti-abuse bond and the escrow paid by
+  one actor on one order count as one spend.
 - Caps and the mainnet guard bind each run. A `run` that selects several scenarios (a tag, or the whole
   catalogue when nothing is named) is a sequence of runs, each cleared and capped on its own, so it can spend
   up to its value-moving scenarios times `max_run_spend_sats`; it says how many scenarios it starts, and how
@@ -493,7 +572,11 @@ On success, failure or interruption, in order:
 1. Preserve sanitized UI, relay and wallet evidence.
 2. Resolve or cancel every tracked order through the normal UI. `pay.cancel` cancels the order; it is not a
    navigation shortcut.
-3. Verify terminal wallet outcomes; record outstanding hashes and escrow.
+3. Verify terminal wallet outcomes; record outstanding hashes and escrow. A payment is journaled with what it
+   pays for. A bond or a claim of a slashed bond's share is judged by its own end, whatever the order came
+   to: returned (failed, nothing settled) or settled once for exactly the journaled amount, never in flight.
+   A claim is never cancelled by recovery, since it settles on an order that did not complete. An actor's
+   bond and escrow on one order, or their payout and their claim, are two intents, never a replay.
 4. Close both sessions and stop owned processes, buses, displays and servers even when a step fails.
 5. Remove profiles and credential storage only after every order and payment is resolved.
 6. Report every cleanup failure. Unresolved cleanup blocks acceptance.
@@ -618,7 +701,9 @@ overlooked bugs. Commits follow Conventional Commits and never include secrets, 
 
 Documented as roadmap, not required by this version:
 
-- The remaining scenario families of section 8.1: anti-abuse bonds and adversarial messages.
+- The adversarial family of section 8.1.
+- What the bond family (section 8.8) leaves out: the lock race between two takers (a third actor), a
+  claim left to forfeit and a slash the node keeps whole (other stack policies), and a range maker's bond.
 - CPU and memory comparison of Linux and Web under matched conditions.
 - Multi-scenario runs with in-process profile reset.
 - NWC wallet mode for desktop clients.

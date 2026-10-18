@@ -332,8 +332,11 @@ families to mark the cheap subset (`happy_sell`, `happy_buy`, `cancel_before_tak
 | Anti-abuse bonds | `bond` | Bonds released, slashed and claimed |
 | Adversarial | `adversarial` | Malformed, replayed, out-of-state and unauthorised messages |
 
-The first five families are implemented; the others are roadmap ([spec.md](spec.md), sections 8 and 14).
-A scenario the app profile cannot support is skipped with a reason, never failed and never counted.
+The first five families and the anti-abuse bonds are implemented; adversarial messages are roadmap
+([spec.md](spec.md), sections 8 and 14). A scenario the app profile cannot support is skipped with a
+reason, never failed and never counted. The bond family needs a stack whose daemon asks for bonds
+(`stack up --bond`), and every other family one whose daemon does not: a run skips, with the reason, every
+scenario written for the other kind.
 
 ## Running scenarios
 
@@ -379,6 +382,24 @@ per-destination cap, each paying out to a hold invoice Bob never settles; the da
 cap and holds the next payout back until Bob settles one, then every trade completes). The limits come
 from `stack/limits.toml` (`payout_invoice_min_expiry_secs`, `max_inflight_payouts_per_destination`); the
 app must carry the `invoice.error` readout and route the daemon's replacement request to the invoice form.
+
+Anti-abuse bonds, on a stack built with `./target/debug/mortsom stack up --bond --replace`, whose daemon
+asks both sides for a bond (`stack/mostro-bond.tpl.toml`: one percent of the order, never under 1000 sats,
+slashed on a waiting timeout, half kept by the node). Every bond is paid from the actor's node and every
+claim invoiced there, and each is sized against the policy the stack declares. Released:
+`taker_bond_released_after_trade` (both bonds lock, the sell completes, both come back),
+`seller_taker_bond_then_escrow` (a buy taken by Alice: her bond, then the escrow), `taker_bond_declined`
+and `taker_bond_expires_unpaid` (Bob walks away from his bond, or lets it lapse; the order stays on the
+book), `maker_bond_locked_before_publish` (Alice's order reaches the book only once her bond locks),
+`maker_bond_abandoned` and `maker_bond_expires_unpaid` (her order never reaches it) and
+`bonds_released_by_solver_ruling` (a ruling that slashes nobody). Slashed and claimed: the four
+waiting-state timeouts, named after who failed the step (`buyer_taker_`, `seller_maker_`, `seller_taker_`
+and `buyer_maker_bond_slashed_on_timeout`); a solver slashing either side (`taker_bond_slashed_by_solver`,
+`maker_bond_slashed_by_solver`); and `bond_claim_fails_then_replaced`, a claim the daemon cannot pay,
+asked for again. Nothing about a bond is published, so the proof is in the wallets: a bond returned fails
+with no settled record, a slashed one settles once for exactly the bond, a claim settles once for exactly
+the share. Switching back to the other families takes `stack up --replace`; each `stack up` mints a new
+daemon identity, and so a new client build.
 
 Range and rating scenarios need an app build carrying the range and star identifiers
 (`order.create.range`, `order.create.fiat_min`, `order.create.fiat_max`, `trade.rate.star.<n>`); an older
@@ -454,7 +475,7 @@ no old evidence or protected storage is changed. A new unresolved run blocks the
 
 | Command | Purpose |
 |---|---|
-| `stack up [--mostro-ref <branch-or-pr-url> \| --mostro-image <ref>]`, `stack status`, `stack logs [service]`, `stack down` | Regtest environment lifecycle (mostrod from Mostro's `main` by default), daemon selection and service logs |
+| `stack up [--mostro-ref <branch-or-pr-url> \| --mostro-image <ref>] [--bond]`, `stack status`, `stack logs [service]`, `stack down` | Regtest environment lifecycle (mostrod from Mostro's `main` by default), daemon selection, the anti-abuse bond (`--bond`) and service logs |
 | `doctor --platform linux\|web` | Read-only prerequisite and readiness checks |
 | `run [<scenario>...] [--tag <family>] [--platform linux\|web]` | Scenarios with isolated clients, caps and cleanup; one run per scenario; every scenario when none is named |
 | `cleanup <run-id>` | Recover a run's identities and orders |
