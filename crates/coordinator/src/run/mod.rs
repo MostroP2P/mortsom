@@ -7,6 +7,7 @@
 mod attribution;
 mod bond_gate;
 mod execute;
+mod maintenance;
 mod needs;
 mod observer;
 mod preflight;

@@ -51,6 +51,11 @@ pub(super) async fn check(
         };
         summary.checks.push("daemon-bond", status, detail);
     }
+    // Without an info event the daemon checks above already fail.
+    if let Some(info) = &preflight.daemon_info {
+        let (status, detail) = super::maintenance::check(info);
+        summary.checks.push("daemon-maintenance", status, detail);
+    }
     summary.checks.is_healthy()
 }
 
