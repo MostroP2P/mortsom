@@ -198,6 +198,36 @@ pub async fn solver_cancels(ctx: &Context, order: &OrderReference) -> Result<(),
     Ok(())
 }
 
+/// The run's solver rules on `order` with a bond resolution: `settle` for
+/// the buyer or cancel for the seller, slashing the bonds `slash` names.
+pub async fn solver_rules_slashing(
+    ctx: &Context,
+    order: &OrderReference,
+    settle: bool,
+    slash: crate::context::BondSlash,
+) -> Result<(), ScenarioError> {
+    let solver = ctx.solver()?;
+    let ruled = if settle {
+        solver.settle_slashing(&order.id, slash).await
+    } else {
+        solver.cancel_slashing(&order.id, slash).await
+    };
+    ruled.map_err(|e| ScenarioError::product(format!("the solver could not rule: {e}")))?;
+    ctx.timeline.push(
+        TimelineKind::Step,
+        Some("solver"),
+        format!(
+            "the solver {} order {} slashing seller={} buyer={}",
+            if settle { "settled" } else { "cancelled" },
+            order.id,
+            slash.seller,
+            slash.buyer
+        ),
+        None,
+    );
+    Ok(())
+}
+
 #[cfg(test)]
 mod status_tests {
     use super::dispute_status;

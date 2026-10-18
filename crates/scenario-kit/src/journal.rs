@@ -27,6 +27,12 @@ pub enum RecoveryEvent {
         hash: String,
         incoming: bool,
         amount_sats: u64,
+        /// An anti-abuse bond, or the share of a slashed one, rather than
+        /// the trade's own payment: a bonded actor pays both on one order,
+        /// and the two are not a replay of each other; a bond's outcome is
+        /// judged on its own, whatever the order came to.
+        #[serde(default)]
+        bond: bool,
     },
     /// Written before an expected payment is withdrawn on purpose: the
     /// invoice is cancelled on its node (or was refused by the daemon) and

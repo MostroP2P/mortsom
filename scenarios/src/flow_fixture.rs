@@ -300,6 +300,7 @@ impl Fixture {
             limits: mortsom_scenario_kit::PayoutLimits {
                 payout_invoice_min_expiry_secs: Some(EXPIRY_FLOOR_SECS),
                 max_inflight_payouts_per_destination: Some(PAYOUT_CAP),
+                bond: None,
             },
             amount_sats: SATS,
             fiat_code: "USD".into(),

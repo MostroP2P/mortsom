@@ -270,7 +270,7 @@ async fn a_refused_invoice_is_superseded_in_the_journal_and_withdrawn_on_the_nod
     let events = journal.events();
     assert!(matches!(
         &events[0],
-        RecoveryEvent::PaymentExpected { order_id, wallet, hash: h, incoming: true, amount_sats: 250_000 }
+        RecoveryEvent::PaymentExpected { order_id, wallet, hash: h, incoming: true, amount_sats: 250_000, .. }
             if order_id == "o1" && wallet == "bob" && *h == hash()
     ));
     assert!(matches!(

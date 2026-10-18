@@ -104,6 +104,44 @@ pub async fn expect_relay_state_absent(
     }
 }
 
+/// Negative correlation: the daemon must publish nothing about `order`
+/// after `since`, in any status, for the whole `window`. For an order the
+/// daemon never puts on the book: a maker's, parked on an unpaid bond.
+pub async fn expect_relay_silent(
+    ctx: &Context,
+    order: &OrderReference,
+    since: u64,
+    window: Duration,
+) -> Result<(), ScenarioError> {
+    let id = order.id.clone();
+    let found = ctx
+        .relay
+        .wait_for(window, |e| {
+            e.seq > since && e.kind == ORDER_EVENT_KIND && e.tag("d") == Some(id.as_str())
+        })
+        .await;
+    match found {
+        None => {
+            ctx.timeline.push(
+                TimelineKind::Assertion,
+                None,
+                format!(
+                    "relay: the daemon published nothing about order {} for {window:?}",
+                    order.id
+                ),
+                None,
+            );
+            Ok(())
+        }
+        Some(event) => Err(ScenarioError::product(format!(
+            "the daemon published order {} as `{}` (event {}); it never reached the book",
+            order.id,
+            event.tag("s").unwrap_or_default(),
+            short(&event.id)
+        ))),
+    }
+}
+
 /// The values of a tag on the daemon's newest event for `order`, waiting
 /// for a first one when none exists yet: the `fa` tag carries the fiat
 /// amount, or a range's two bounds.

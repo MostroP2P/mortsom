@@ -178,6 +178,7 @@ impl DeclaredLimits {
         mortsom_scenario_kit::PayoutLimits {
             payout_invoice_min_expiry_secs: Some(self.payout_invoice_min_expiry_secs),
             max_inflight_payouts_per_destination: self.max_inflight_payouts_per_destination,
+            bond: None,
         }
     }
 }

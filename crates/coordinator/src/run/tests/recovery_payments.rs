@@ -21,6 +21,7 @@ async fn dropped_attempt(
             hash: "c".repeat(64),
             incoming: true,
             amount_sats: 100,
+            bond: false,
         })
         .unwrap();
     let root = journal.root().to_path_buf();

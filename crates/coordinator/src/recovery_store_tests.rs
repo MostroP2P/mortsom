@@ -99,6 +99,7 @@ fn repeated_payment_intents_cannot_authorize_a_second_wallet_submission() {
         hash: "a".repeat(64),
         incoming: false,
         amount_sats: 1000,
+        bond: false,
     };
     journal.record(event.clone()).unwrap();
     assert!(journal.record(event).is_err());
@@ -109,7 +110,8 @@ fn repeated_payment_intents_cannot_authorize_a_second_wallet_submission() {
                 wallet: "alice".into(),
                 hash: "b".repeat(64),
                 incoming: false,
-                amount_sats: 1000
+                amount_sats: 1000,
+                bond: false,
             })
             .is_err()
     );
@@ -138,6 +140,7 @@ fn a_superseded_payment_lets_a_replacement_be_prepared_for_the_same_order() {
         hash: hash.to_string().repeat(64),
         incoming: true,
         amount_sats: 1000,
+        bond: false,
     };
     assert!(
         journal
@@ -197,6 +200,7 @@ fn only_the_prepared_incoming_payment_can_be_superseded() {
             hash: hash.into(),
             incoming,
             amount_sats: 1000,
+            bond: false,
         };
     let supersede = |order: &str, wallet: &str, hash: &str| RecoveryEvent::PaymentSuperseded {
         order_id: order.into(),
@@ -381,5 +385,31 @@ fn node_networks_are_recorded_into_the_environment() {
     assert_eq!(
         reopened.environment.unwrap().node_networks["alice"],
         "regtest"
+    );
+}
+
+/// A bonded actor pays a bond and then the trade's own payment on one
+/// order: two intents, not a replay of one.
+#[test]
+fn a_bond_and_the_escrow_of_one_order_are_two_intents_not_a_replay() {
+    let base = tempfile::tempdir().unwrap();
+    let journal = FileJournal::create(base.path(), manifest()).unwrap();
+    let expected = |hash: char, bond: bool| RecoveryEvent::PaymentExpected {
+        order_id: "o1".into(),
+        wallet: "alice".into(),
+        hash: hash.to_string().repeat(64),
+        incoming: false,
+        amount_sats: 1000,
+        bond,
+    };
+    journal.record(expected('a', true)).unwrap();
+    journal.record(expected('b', false)).unwrap();
+    assert!(
+        journal.record(expected('c', true)).is_err(),
+        "a second bond is a replay"
+    );
+    assert!(
+        journal.record(expected('d', false)).is_err(),
+        "a second escrow is a replay"
     );
 }
