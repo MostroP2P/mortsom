@@ -8,7 +8,7 @@ use mortsom_common::check::{CheckStatus, DoctorReport};
 use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, RelayProbe};
 use mortsom_scenario_kit::outcome::Outcome;
 
-use super::{attribute, daemon_heard};
+use super::{Look, attribute, daemon_heard};
 
 const NOW: u64 = 1_792_069_200;
 const EVERY_30S: Result<Duration, String> = Ok(Duration::from_secs(30));
@@ -84,6 +84,12 @@ fn failed(category: FailureCategory, message: &str) -> Outcome {
     }
 }
 
+/// What the probes found: the checks in `report`, the daemon answering in
+/// maintenance mode when `draining`.
+fn look(report: DoctorReport, draining: bool) -> Look {
+    Look { report, draining }
+}
+
 fn healthy() -> DoctorReport {
     let mut report = DoctorReport::default();
     report.push("relay-port", CheckStatus::Pass, "127.0.0.1:7500 listening");
@@ -112,7 +118,7 @@ fn a_failure_while_the_stack_is_down_is_blamed_on_the_infrastructure() {
     );
 
     // Act
-    let attributed = attribute(outcome, &stack_down());
+    let attributed = attribute(outcome, &look(stack_down(), false));
 
     // Assert
     let Outcome::Failed { category, message } = attributed else {
@@ -144,7 +150,7 @@ fn a_failure_with_the_stack_still_ready_keeps_its_own_category() {
     );
 
     // Act
-    let attributed = attribute(outcome.clone(), &healthy());
+    let attributed = attribute(outcome.clone(), &look(healthy(), false));
 
     // Assert
     assert_eq!(attributed, outcome);
@@ -156,7 +162,7 @@ fn an_infrastructure_failure_is_left_as_reported() {
     let outcome = failed(FailureCategory::TestInfrastructure, "session lost");
 
     // Act
-    let attributed = attribute(outcome.clone(), &stack_down());
+    let attributed = attribute(outcome.clone(), &look(stack_down(), false));
 
     // Assert
     assert_eq!(attributed, outcome);
@@ -170,6 +176,68 @@ fn a_pass_or_a_skip_is_never_rewritten() {
             reason: "needs relay-faults".into(),
         },
     ] {
-        assert_eq!(attribute(outcome.clone(), &stack_down()), outcome);
+        assert_eq!(
+            attribute(outcome.clone(), &look(stack_down(), false)),
+            outcome
+        );
+        assert_eq!(attribute(outcome.clone(), &look(healthy(), true)), outcome);
+    }
+}
+
+#[test]
+fn a_failure_while_the_daemon_drains_is_blamed_on_the_environment() {
+    // Arrange
+    let outcome = failed(
+        FailureCategory::Product,
+        "no new trade appeared in the trades list after creating the order",
+    );
+
+    // Act
+    let attributed = attribute(outcome, &look(healthy(), true));
+
+    // Assert
+    let Outcome::Failed { category, message } = attributed else {
+        panic!("still a failure");
+    };
+    assert_eq!(category, FailureCategory::EnvironmentMisconfiguration);
+    assert!(message.contains("maintenance_mode=true"), "{message}");
+    assert!(message.contains("stale chain tip"), "{message}");
+    assert!(
+        message
+            .contains("product: no new trade appeared in the trades list after creating the order"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_stack_that_stopped_answering_outweighs_a_draining_daemon() {
+    // Arrange
+    let outcome = failed(FailureCategory::Product, "the buyer never saw the payout");
+
+    // Act
+    let attributed = attribute(outcome, &look(stack_down(), true));
+
+    // Assert
+    let Outcome::Failed { category, message } = attributed else {
+        panic!("still a failure");
+    };
+    assert_eq!(category, FailureCategory::TestInfrastructure);
+    assert!(!message.contains("maintenance"), "{message}");
+}
+
+#[test]
+fn an_infrastructure_or_environment_failure_is_left_as_reported_while_the_daemon_drains() {
+    for category in [
+        FailureCategory::TestInfrastructure,
+        FailureCategory::EnvironmentMisconfiguration,
+    ] {
+        // Arrange
+        let outcome = failed(category, "session lost");
+
+        // Act
+        let attributed = attribute(outcome.clone(), &look(healthy(), true));
+
+        // Assert
+        assert_eq!(attributed, outcome);
     }
 }

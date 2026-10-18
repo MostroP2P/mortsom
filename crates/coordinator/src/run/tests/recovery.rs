@@ -204,6 +204,7 @@ async fn attempt_with_wallet_and_book(
     let deps = RunDeps {
         desktop_factory: &RealDesktopFactory,
         net: None,
+        chain: None,
         docker: Arc::new(FakeDocker::default()),
         probe: Arc::new(AlwaysReady),
         adapter: adapter.clone(),
@@ -474,6 +475,7 @@ fn changed_stack_refuses_resume_before_environment_or_process_access() {
     let deps = RunDeps {
         desktop_factory: &RealDesktopFactory,
         net: None,
+        chain: None,
         docker: Arc::new(FakeDocker::default()),
         probe: Arc::new(AlwaysReady),
         adapter: adapter.clone(),

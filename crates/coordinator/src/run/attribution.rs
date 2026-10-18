@@ -8,6 +8,11 @@
 //! scenario and the failure is the infrastructure's; what the scenario
 //! reported is kept in the message.
 //!
+//! A stack that answers can still refuse: a daemon in maintenance mode
+//! rejects every new order and take. A failure while its info event says so
+//! is the environment's, the category the preflight gives the same daemon
+//! before a run starts.
+//!
 //! Only signs of life count. The pre-run preflight also holds the wallets to
 //! the run cap and the daemon's info event to a freshness window meant for
 //! any daemon; a healthy stack stops meeting both in the ordinary course of
@@ -23,6 +28,7 @@ use mortsom_scenario_kit::outcome::{Outcome, ScenarioResult};
 use mortsom_scenario_kit::timeline::{Timeline, TimelineKind};
 use tracing::warn;
 
+use super::maintenance;
 use crate::config::Config;
 use crate::doctor::{NetProbes, PortState};
 
@@ -35,7 +41,8 @@ mod tests;
 const SILENT_INTERVALS: u32 = 2;
 
 /// `result`, blamed on the stack when it is a failure and the stack stopped
-/// answering. Read-only: the probes create no order and pay nothing.
+/// answering, or answered with the daemon in maintenance mode. Read-only:
+/// the probes create no order and pay nothing.
 pub(super) async fn after_failure(
     config: &Config,
     net: Option<&dyn NetProbes>,
@@ -48,21 +55,20 @@ pub(super) async fn after_failure(
     if *category == FailureCategory::TestInfrastructure {
         return result;
     }
+    let reported = *category;
     let interval = info_interval(&config.mostro.settings_file);
-    if liveness(config, net, &interval).await.is_healthy() {
-        return result;
+    let mut after = liveness(config, net, &interval).await;
+    if !after.report.is_healthy() {
+        // A second look, so one probe that timed out cannot overturn a verdict.
+        after = liveness(config, net, &interval).await;
     }
-    // A second look, so one probe that timed out cannot overturn a verdict.
-    let after = liveness(config, net, &interval).await;
     let outcome = attribute(result.outcome, &after);
-    // The failure came in as something else, so an infrastructure verdict
-    // here is this attribution and nothing else.
-    if let Outcome::Failed {
-        category: FailureCategory::TestInfrastructure,
-        message,
-    } = &outcome
+    // A category other than the one reported is this attribution's verdict
+    // and nothing else's.
+    if let Outcome::Failed { category, message } = &outcome
+        && *category != reported
     {
-        warn!(scenario = %result.name, %message, "failure attributed to the stack");
+        warn!(scenario = %result.name, %category, %message, "failure attributed to the stack");
         timeline.push(
             TimelineKind::Assertion,
             None,
@@ -71,6 +77,15 @@ pub(super) async fn after_failure(
         );
     }
     ScenarioResult { outcome, ..result }
+}
+
+/// What the probes taken once a scenario has failed found.
+#[derive(Debug)]
+pub(super) struct Look {
+    /// One check per part of the stack that must answer.
+    pub(super) report: DoctorReport,
+    /// Whether the daemon's info event advertised maintenance mode.
+    pub(super) draining: bool,
 }
 
 /// How often the daemon says it publishes its info event, from its own
@@ -86,13 +101,14 @@ fn info_interval(settings_file: &str) -> Result<Duration, String> {
 
 /// Whether the stack answers: the relay's port, a connection to each relay
 /// the daemon is configured on, the daemon heard on them, and each actor's
-/// wallet.
+/// wallet; and whether the daemon advertises maintenance mode.
 async fn liveness(
     config: &Config,
     net: &dyn NetProbes,
     interval: &Result<Duration, String>,
-) -> DoctorReport {
+) -> Look {
     let mut report = DoctorReport::default();
+    let mut draining = false;
     let port = config.relay.host_port;
     report.push(
         "relay-port",
@@ -111,6 +127,7 @@ async fn liveness(
         }
         let (status, detail) = daemon_heard(&probe, interval.clone(), now_unix());
         report.push("mostro-daemon", status, detail);
+        draining = probe.info.as_ref().is_some_and(maintenance::advertised);
     }
     for (actor, wallet) in [
         ("alice", &config.wallets.alice),
@@ -122,7 +139,7 @@ async fn liveness(
         };
         report.push(format!("wallet {actor}"), status, detail);
     }
-    report
+    Look { report, draining }
 }
 
 /// Whether the daemon was heard lately: a relay keeps serving its last info
@@ -157,7 +174,7 @@ pub(super) fn daemon_heard(
     )
 }
 
-fn now_unix() -> u64 {
+pub(super) fn now_unix() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
@@ -171,16 +188,34 @@ fn pass_if(alive: bool) -> CheckStatus {
     }
 }
 
-/// `outcome` as reported, unless it is a failure not already the
-/// infrastructure's and the probes in `after` found the stack not answering.
-pub(super) fn attribute(outcome: Outcome, after: &DoctorReport) -> Outcome {
+/// `outcome` as reported, unless it is a failure the probes in `after`
+/// explain. A stack that stopped answering makes it the infrastructure's,
+/// unless it already is. A stack that answers with the daemon in
+/// maintenance mode makes it the environment's, unless it already is the
+/// infrastructure's or the environment's: the daemon was up and refused
+/// what the scenario asked of it, the condition the preflight refuses to
+/// start in, under the same category.
+pub(super) fn attribute(outcome: Outcome, after: &Look) -> Outcome {
     let Outcome::Failed { category, message } = outcome else {
         return outcome;
     };
-    if category == FailureCategory::TestInfrastructure || after.is_healthy() {
+    if category == FailureCategory::TestInfrastructure {
         return Outcome::Failed { category, message };
     }
+    if after.report.is_healthy() {
+        if !after.draining || category == FailureCategory::EnvironmentMisconfiguration {
+            return Outcome::Failed { category, message };
+        }
+        return Outcome::Failed {
+            category: FailureCategory::EnvironmentMisconfiguration,
+            message: format!(
+                "{}; the scenario reported {category}: {message}",
+                maintenance::blame()
+            ),
+        };
+    }
     let broken = after
+        .report
         .checks
         .iter()
         .filter(|check| check.status == CheckStatus::Fail)

@@ -58,6 +58,7 @@ async fn teardown_with_evidence_failure(leaf: Option<&str>) -> (RunSummary, bool
     let deps = RunDeps {
         desktop_factory: &RealDesktopFactory,
         net: None,
+        chain: None,
         docker: Arc::new(FakeDocker::default()),
         probe: Arc::new(AlwaysReady),
         adapter: Arc::new(FakeAdapter::full()),
