@@ -54,7 +54,7 @@ pub async fn wait_relay_state_since(
         TimelineKind::RelayEvent,
         None,
         format!(
-            "relay: order {} is {state} again (event {})",
+            "relay: order {} published as {state} (event {})",
             order.id,
             short(&event.id)
         ),

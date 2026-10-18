@@ -194,7 +194,8 @@ pub(crate) struct State {
     /// deadline: the buyer's invoice, the seller's escrow.
     slashes_on_timeout: bool,
     /// The daemon lets an unpaid bond lapse: a maker's order it never
-    /// published is dropped, a taker's take goes back on the book.
+    /// published is dropped, a taker's take ends and the order, `pending`
+    /// all along, is republished.
     expires_unpaid_bonds: bool,
     misbehaviour: Misbehaviour,
 }
