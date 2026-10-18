@@ -1,7 +1,9 @@
 //! A scenario that fails because the stack went away under it is reported
 //! as the infrastructure's failure, not the app's. One that only spent the
 //! wallets below the pre-run floor keeps its own category: the stack still
-//! answers, and the floor is a guard for starting, not a sign of life.
+//! answers, and the floor is a guard for starting, not a sign of life. One
+//! that fails while the daemon answers in maintenance mode is the
+//! environment's.
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use super::*;
@@ -12,6 +14,7 @@ static STACK_DOWN: AtomicBool = AtomicBool::new(false);
 static WALLETS_DRAINED: AtomicBool = AtomicBool::new(false);
 static DAEMON_SILENT: AtomicBool = AtomicBool::new(false);
 static RELAY_BLIPS: AtomicBool = AtomicBool::new(false);
+static DAEMON_DRAINS: AtomicBool = AtomicBool::new(false);
 
 /// What the scenario leaves behind.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -25,6 +28,8 @@ enum Change {
     DaemonSilent,
     /// The relay's port refuses one connection, then answers again.
     Blip,
+    /// Everything answers; the daemon advertises maintenance mode.
+    Drains,
 }
 
 /// [`ReadyNet`] until `flag` is set, then the stack as `change` leaves it.
@@ -63,6 +68,11 @@ impl NetProbes for StackAfter {
     }
 
     async fn daemon(&self, relays: &[String], pubkey: PublicKey) -> DaemonProbe {
+        if self.is(Change::Drains) {
+            return super::maintenance::Advertising("true")
+                .daemon(relays, pubkey)
+                .await;
+        }
         let probe = ReadyNet.daemon(relays, pubkey).await;
         if self.is(Change::DaemonSilent) {
             let info = probe.info.map(|info| DaemonInfo {
@@ -132,6 +142,9 @@ fn daemon_dies(_ctx: &Context) -> ScenarioFuture<'_> {
 fn relay_blips(_ctx: &Context) -> ScenarioFuture<'_> {
     change_then_fail(&RELAY_BLIPS, NO_PAYOUT)
 }
+fn daemon_drains(_ctx: &Context) -> ScenarioFuture<'_> {
+    change_then_fail(&DAEMON_DRAINS, NO_TRADE)
+}
 
 macro_rules! selftest {
     ($name:literal, $body:ident) => {
@@ -154,6 +167,7 @@ selftest!("zz_runner_stack_dies", stack_dies);
 selftest!("zz_runner_wallets_drain", wallets_drain);
 selftest!("zz_runner_daemon_dies", daemon_dies);
 selftest!("zz_runner_relay_blips", relay_blips);
+selftest!("zz_runner_daemon_drains", daemon_drains);
 
 /// How a scenario's failure was reported.
 struct Reported {
@@ -278,5 +292,31 @@ async fn a_probe_that_fails_once_attributes_nothing_and_says_nothing() {
         !reported.log.contains("attributed to the stack"),
         "{}",
         reported.log
+    );
+}
+
+#[tokio::test]
+async fn a_failure_while_the_daemon_drains_is_the_environments() {
+    // Arrange
+    let net = StackAfter::new(&DAEMON_DRAINS, Change::Drains);
+
+    // Act
+    let reported = failure_of("zz_runner_daemon_drains", &net).await;
+
+    // Assert
+    let message = &reported.message;
+    assert_eq!(
+        reported.category,
+        mortsom_common::FailureCategory::EnvironmentMisconfiguration
+    );
+    assert!(message.contains("maintenance_mode=true"), "{message}");
+    assert!(
+        message.contains(&format!("the scenario reported product: {NO_TRADE}")),
+        "{message}"
+    );
+    assert!(
+        reported.timeline.contains("maintenance_mode=true"),
+        "{}",
+        reported.timeline
     );
 }

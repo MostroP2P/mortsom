@@ -22,6 +22,17 @@ const WHY_AND_FIX: &str = "it rejects new orders and takes, and skips bond payou
      synced_to_chain=false about two hours after the newest block. Mine a block (runbook 2.5) and \
      wait five minutes: mostrod leaves maintenance mode once LND has been synced for 300 s";
 
+/// Whether `info` says the daemon is in maintenance mode.
+pub(super) fn advertised(info: &DaemonInfo) -> bool {
+    info.tag(TAG) == Some("true")
+}
+
+/// Why a scenario that failed while the daemon advertised maintenance mode
+/// failed for the environment, not for the app.
+pub(super) fn blame() -> String {
+    format!("the daemon was in maintenance mode ({TAG}=true): {WHY_AND_FIX}")
+}
+
 /// The `daemon-maintenance` preflight check: a run never starts against a
 /// daemon that would refuse its orders. A daemon that does not send the
 /// tag predates maintenance mode and passes; a value that is neither
@@ -103,5 +114,13 @@ mod tests {
         // Assert
         assert_eq!(status, CheckStatus::Fail);
         assert!(detail.contains("\"yes\""), "{detail}");
+    }
+
+    #[test]
+    fn only_true_counts_as_advertised() {
+        assert!(advertised(&info(Some("true"))));
+        for value in [Some("false"), Some("yes"), None] {
+            assert!(!advertised(&info(value)), "{value:?}");
+        }
     }
 }
