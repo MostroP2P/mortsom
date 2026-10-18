@@ -545,8 +545,9 @@ These rules protect real funds, even on regtest, and are never relaxed for conve
 
 - Reserve budget before any payment: the actual invoice amount plus the fee ceiling. Per-order and cumulative
   caps are mandatory; a missing cap is an error. Retries and resets never reset the cumulative budget. The
-  per-order cap bounds every reservation an order holds together: an anti-abuse bond and the escrow paid by
-  one actor on one order count as one spend.
+  per-order cap bounds every reservation an order holds together: the maker's anti-abuse bond, the taker's
+  and the escrow on one order count as one spend, each with its fee ceiling, and a bonded trade checks they
+  fit before it pays any of them.
 - Caps and the mainnet guard bind each run. A `run` that selects several scenarios (a tag, or the whole
   catalogue when nothing is named) is a sequence of runs, each cleared and capped on its own, so it can spend
   up to its value-moving scenarios times `max_run_spend_sats`; it says how many scenarios it starts, and how
@@ -573,9 +574,12 @@ On success, failure or interruption, in order:
 2. Resolve or cancel every tracked order through the normal UI. `pay.cancel` cancels the order; it is not a
    navigation shortcut.
 3. Verify terminal wallet outcomes; record outstanding hashes and escrow. A payment is journaled with what it
-   pays for. A bond or a claim of a slashed bond's share is judged by its own end, whatever the order came
-   to: returned (failed, nothing settled) or settled once for exactly the journaled amount, never in flight.
-   A claim is never cancelled by recovery, since it settles on an order that did not complete. An actor's
+   pays for. A bond is judged by its own end, whatever the order came to: returned (failed, nothing settled)
+   or settled once for exactly the journaled amount, never in flight. A claim of a slashed bond's share is
+   never cancelled by recovery, since it settles on an order that did not complete, and only a claim settled
+   once for exactly the share is at rest: a claim invoice that failed without the scenario withdrawing it
+   leaves the daemon asking for a replacement, which only the retained app can hand in. `cleanup <run-id>` runs on a bonded
+   stack and a bondless one alike, whatever family left the journal. An actor's
    bond and escrow on one order, or their payout and their claim, are two intents, never a replay.
 4. Close both sessions and stop owned processes, buses, displays and servers even when a step fails.
 5. Remove profiles and credential storage only after every order and payment is resolved.

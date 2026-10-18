@@ -56,7 +56,12 @@ pub(in crate::run) async fn verify_payments(
             } else {
                 payment.fee_sats <= node.routing_fee_cap_sats()
             };
-            fee_ok && bond_resolved(payment.state, payment.amount_sats, *amount_sats, count)
+            fee_ok
+                && if *incoming {
+                    claim_resolved(payment.state, payment.amount_sats, *amount_sats, count)
+                } else {
+                    bond_resolved(payment.state, payment.amount_sats, *amount_sats, count)
+                }
         } else if state == OrderState::Completed {
             payment.state == PaymentState::Settled
                 && payment.amount_sats == *amount_sats
@@ -213,6 +218,20 @@ fn bond_resolved(
     }
 }
 
+/// Whether a claim of a slashed bond's share is at rest: paid, once, for
+/// exactly the share. A claim invoice that failed without the scenario
+/// withdrawing it (that case is judged before this) leaves the daemon
+/// owing the share and asking for a replacement, which only the retained
+/// app can hand in.
+fn claim_resolved(
+    state: PaymentState,
+    paid_sats: u64,
+    expected_sats: u64,
+    settled_records: usize,
+) -> bool {
+    state == PaymentState::Settled && paid_sats == expected_sats && settled_records == 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +252,15 @@ mod tests {
     #[test]
     fn a_bond_still_in_flight_is_not_resolved() {
         assert!(!bond_resolved(PaymentState::Pending, 2500, 2500, 0));
+    }
+
+    /// A claim invoice that failed without the scenario withdrawing it
+    /// leaves the daemon owing the share: it asks for a replacement, which
+    /// only the retained app can hand in, so recovery must not close it.
+    #[test]
+    fn a_failed_claim_never_withdrawn_is_not_resolved() {
+        assert!(!claim_resolved(PaymentState::Failed, 0, 500, 0));
+        assert!(claim_resolved(PaymentState::Settled, 500, 500, 1));
+        assert!(!claim_resolved(PaymentState::Settled, 500, 500, 2));
     }
 }

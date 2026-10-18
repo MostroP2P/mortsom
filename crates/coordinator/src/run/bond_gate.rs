@@ -26,6 +26,12 @@ pub(super) fn gate_bond<'a>(
     let mut runnable = Vec::new();
     let mut skipped = Vec::new();
     for def in selected {
+        // `cleanup <run-id>` resumes whatever its journal recorded, on the
+        // stack the run used: it belongs to no family.
+        if std::ptr::eq(def, &super::recovery::CLEANUP) {
+            runnable.push(def);
+            continue;
+        }
         let wants_bond = def.tags.contains(&BOND_FAMILY);
         let reason = match (wants_bond, bonded) {
             (true, Some(true)) | (false, Some(false) | None) => {
@@ -119,6 +125,19 @@ mod tests {
         assert_eq!(names(&runnable), ["happy_sell"]);
         assert_eq!(skipped[0].name, "maker_bond_abandoned");
         assert!(reason(&skipped[0]).contains("stack up --bond"));
+    }
+
+    /// `cleanup <run-id>` resumes a journal whatever family left it, on a
+    /// bonded stack too, where every scenario outside the family is skipped.
+    #[test]
+    fn the_internal_cleanup_runs_on_any_stack() {
+        for bonded in [Some(true), Some(false), None] {
+            let (runnable, skipped) =
+                gate_bond("mobile-v2", vec![&crate::run::recovery::CLEANUP], bonded);
+
+            assert_eq!(names(&runnable), ["cleanup"], "bonded={bonded:?}");
+            assert!(skipped.is_empty(), "bonded={bonded:?}");
+        }
     }
 
     /// Without a Mortsom-owned stack nothing declares a bond: the bond

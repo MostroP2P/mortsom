@@ -25,22 +25,26 @@ pub fn bond_policy(ctx: &Context) -> Result<BondPolicy, ScenarioError> {
 }
 
 /// The environment error a bonded trade ends with, before any wallet
-/// action, when one order cannot hold a seller's bond and escrow together
-/// within the per-order cap: the seller pays both on one order, and the
-/// cap bounds every reservation an order holds (spec 10). Found only at
-/// the escrow, it would strand a locked bond on a half-funded order.
+/// action, when one order cannot hold every bond the policy asks for and
+/// the escrow together within the per-order cap: the maker's bond, the
+/// taker's and the escrow all sit on one order, and the cap bounds every
+/// reservation an order holds (spec 10). Found only at the escrow, it
+/// would strand locked bonds on a half-funded order.
 pub fn require_room_for_bond_and_escrow(ctx: &Context) -> Result<(), ScenarioError> {
-    let bond = bond_policy(ctx)?.bond_sats(ctx.amount_sats);
+    let policy = bond_policy(ctx)?;
+    let bond = policy.bond_sats(ctx.amount_sats);
+    let bonds = u64::from(policy.maker_posts()) + u64::from(policy.apply_to.taker_posts());
     let fee_cap = [Actor::Alice, Actor::Bob]
         .into_iter()
         .filter_map(|actor| ctx.node_wallet(actor))
         .map(|node| node.routing_fee_cap_sats())
         .max()
         .unwrap_or_default();
+    // Each bond and the escrow is a payment with its own fee ceiling.
     let needed = ctx
         .amount_sats
-        .saturating_add(bond)
-        .saturating_add(fee_cap.saturating_mul(2));
+        .saturating_add(bond.saturating_mul(bonds))
+        .saturating_add(fee_cap.saturating_mul(bonds + 1));
     let cap = ctx
         .budget
         .lock()
@@ -49,8 +53,8 @@ pub fn require_room_for_bond_and_escrow(ctx: &Context) -> Result<(), ScenarioErr
         .max_order_sats;
     if needed > cap {
         return Err(ScenarioError::environment(format!(
-            "a seller's {bond} sat bond and {} sat escrow need {needed} sats on one order with their fee \
-             ceilings, over run.max_order_sats {cap}",
+            "{bonds} bond(s) of {bond} sats and the {} sat escrow need {needed} sats on one order with \
+             their fee ceilings, over run.max_order_sats {cap}",
             ctx.amount_sats
         )));
     }
@@ -707,6 +711,28 @@ mod tests {
         assert_eq!(err.category, FailureCategory::EnvironmentMisconfiguration);
         let pending = ctx.pending_holds.lock().unwrap();
         assert_eq!(pending["o1#bond:bob"].payment_hash, "bondhash");
+    }
+
+    /// With both sides bonded, one order holds the maker's bond, the
+    /// taker's and the escrow, each with its fee ceiling: a cap that holds
+    /// one bond and the escrow is not enough.
+    #[test]
+    fn the_room_check_counts_every_bond_the_order_holds() {
+        let mut ctx = ctx();
+        ctx.amount_sats = 1000;
+        *ctx.budget.lock().unwrap() =
+            crate::budget::Budget::new(crate::budget::SpendCaps::new(2500, 100_000).unwrap());
+        ctx.limits.bond = Some(policy());
+        require_room_for_bond_and_escrow(&ctx).unwrap();
+
+        ctx.limits.bond = Some(BondPolicy {
+            apply_to: BondApplyTo::Both,
+            ..policy()
+        });
+        let err = require_room_for_bond_and_escrow(&ctx).unwrap_err();
+
+        assert_eq!(err.category, FailureCategory::EnvironmentMisconfiguration);
+        assert!(err.message.contains("3000 sats"), "{err}");
     }
 
     /// A seller's bond and escrow share one order's cap: a cap that cannot
