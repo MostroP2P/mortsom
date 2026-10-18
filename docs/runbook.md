@@ -28,14 +28,16 @@ A run passes only when the scenario passed and cleanup left nothing open. A skip
 4. Relay: `stack status` shows whether the relay and daemon are up and which daemon identity is in effect.
    A relay that answers but delivers nothing usually means the clients were built for a different daemon
    identity; rebuild them.
-5. A stale chain tip: the stack mines blocks only at `stack up`, and about two hours later the LND nodes
-   report `synced_to_chain: false`. mostrod then enters maintenance mode (`stack logs` shows "maintenance
-   mode ON: new orders and takes are rejected") and skips bond payouts and payment retries ("LND is not
-   synced to chain"). Creates fail with no new trade, and claims are never offered. Mine one block:
+5. A stale chain tip: `stack up` mines blocks only while it builds, and about two hours after the newest one
+   the LND nodes report `synced_to_chain: false`. mostrod then enters maintenance mode (`stack logs` shows
+   "maintenance mode ON: new orders and takes are rejected") and skips bond payouts and payment retries
+   ("LND is not synced to chain"). On a stack it owns, each run mines a block itself when the tip is over an
+   hour old, and waits up to seven minutes for a drained daemon to come back; its `chain-tip` check says
+   what it did. A failed `chain-tip` check, or a `daemon-maintenance` failure on a stack the run does not
+   own, needs it done by hand. Mine one block:
    `docker exec mortsom-regtest-bitcoind-1 bitcoin-cli -regtest -rpcuser=mortsom -rpcpassword=mortsom
    -rpcwallet=mortsom -generate 1`. The daemon leaves maintenance mode only once LND has been synced for
-   five minutes ("maintenance mode OFF" in its log); start the run after that. The run does not do this
-   for you yet (#87).
+   five minutes ("maintenance mode OFF" in its log); start the run after that.
 6. Run `cleanup <run-id>` before starting again.
 
 ## 3. App regressions

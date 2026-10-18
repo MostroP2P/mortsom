@@ -198,7 +198,17 @@ created it, before building, and the replaced directory's generated state is sta
 published ports allow one stack per host, so checkouts share it by selecting the same stack directory
 (`--stack-dir`, or `MORTSOM_STACK_DIR`).
 
-`run` never creates, updates or destroys the stack. Scenario teardown never removes containers or volumes. A
+`run` never creates or destroys the stack, and changes it in one way only: on a Mortsom-owned stack it keeps
+the regtest chain tip fresh. `stack up` mines only while it builds. About two hours after the newest block the
+LND nodes report `synced_to_chain: false`, and mostrod then enters maintenance mode: it rejects new orders
+and takes, and skips bond payout cycles and failed-payment retries. It leaves maintenance mode only once LND
+has been synced for five minutes. So before each run's preflight (one per scenario, and `cleanup`), when
+the newest block is more than an hour old, the run mines one block to the miner wallet; one block barely
+moves a CLTV. It mines only when attached to a stack this checkout owns and when bitcoind itself reports
+`regtest`. The run's `chain-tip` check records the tip's age and any block mined; a tip that cannot be read
+or refreshed fails it, and the preflight with it. If, having mined, the daemon advertises maintenance mode,
+the run waits up to seven minutes for it to leave before the preflight judges the stack.
+Scenario teardown never removes containers or volumes. A
 stack reset is an explicit operator action; it is not evidence that an order was cancelled or a payment
 refunded. The published ports (7500, 10501–10503) are chosen not to collide with a local Polar network
 (10001–10003), a relay on 7000, or Ortsom's regtest stack (7000, 10001–10004), so Mortsom runs beside any of
@@ -536,7 +546,11 @@ public identities through the UI, proves they differ, relaunches each app and pr
 Mnemonics and private keys are never exported.
 
 Observers start before the actions they verify. A run refuses to create an order when the daemon identity
-does not match, the relay is not ready or actor bootstrap failed. Only one run may use a given stack and
+does not match, the relay is not ready, the daemon advertises maintenance mode or actor bootstrap failed.
+The preflight's `daemon-maintenance` check reads the `maintenance_mode` tag of the daemon's info event.
+`true`, or any value but `false`, fails it as `environment-misconfiguration`, naming the likely cause (a
+stale chain tip) and the fix (mine a block, wait five minutes). A daemon that predates the tag passes.
+Only one run may use a given stack and
 wallet set at a time; a second run reports the conflict before launching anything.
 
 ## 10. Value safety
@@ -676,7 +690,12 @@ for starting, which a healthy stack stops meeting in the ordinary course of a ru
 something not answering, the failure is `test-infrastructure`: its message names what did not answer and
 keeps the category and message the scenario reported, and the timeline and `run.log` record the attribution;
 nothing is recorded when the failure keeps its category. A failure already classified `test-infrastructure`
-is left as reported. The scenario narrative
+is left as reported. A stack can answer and still refuse: if the probes find everything answering but the
+daemon's info event advertises `maintenance_mode=true`, the failure is `environment-misconfiguration`, the
+category the preflight gives the same daemon. Its message names maintenance mode, the likely cause and the
+fix, and keeps the category and message the scenario reported. A stack that stopped answering still makes it
+`test-infrastructure`, and a failure already classified `environment-misconfiguration` is left as reported.
+The scenario narrative
 (timeline steps, checks, payments) goes to the run's `run.log` and `timeline.md`, not the terminal, unless
 `RUST_LOG` asks for it.
 

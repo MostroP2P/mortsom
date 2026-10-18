@@ -13,7 +13,8 @@ fifteenth, `taker_bond_expires_unpaid`, fails on the app: a taker's lapsed bond 
 
 The stack on this host is the bonded one (daemon `ef1ca75a…`, mostrod `main` at `f1f7a62`); every other
 family is skipped on it until `stack up --replace`. No recovery journal is pending. A run started two hours
-after the newest block found mostrod drained; until #87 lands, mine a block first (runbook 2.5).
+after the newest block found mostrod drained; each run now keeps an owned stack's tip fresh itself (#87,
+runbook 2.5).
 
 ## Where things stood (2026-10-14)
 
@@ -150,9 +151,10 @@ To watch the daemon at the same time: `docker logs -f mortsom-regtest-mostro-1`,
 - A Web run whose browsers fail to start leaves an empty journal that blocks the next desktop run until
   `cleanup` removes it. If it happens twice in a row, check for a stray ChromeDriver from an earlier attempt.
 - **A stack whose newest block is about two hours old stops trading** (runbook 2.5): LND reports itself
-  unsynced, and mostrod rejects new orders and takes and pays no bond claim. Mine one block and wait five
-  minutes for the daemon to leave maintenance mode. Seen on 2026-10-18 in the second bond family run, which
-  started 1 h 46 min after `stack up`; #87 is to make the run keep the tip fresh itself.
+  unsynced, and mostrod rejects new orders and takes and pays no bond claim. Seen on 2026-10-18 in the second
+  bond family run, which started 1 h 46 min after `stack up`. Since #87 each run on an owned stack mines a
+  block when the tip is over an hour old; mining by hand is only needed off an owned stack, or when the
+  `chain-tip` check fails.
 
 ## Invariants to preserve
 
