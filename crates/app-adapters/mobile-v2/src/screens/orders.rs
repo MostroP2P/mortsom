@@ -24,6 +24,13 @@ const NEW_TRADE_POLL: std::time::Duration = std::time::Duration::from_millis(500
 /// Highest star on the rating screen.
 const MAX_RATING: u8 = 5;
 
+/// The status a take parked on its anti-abuse bond reads as, and the
+/// label the pay-bond screen stands for.
+pub(super) const WAITING_BOND: &str = "waiting-bond";
+/// What a trades row the app keeps for a slashed bond's claim alone is
+/// read as: the trade behind it is over.
+pub(super) const BOND_CLAIM_ROW: &str = "bond-claim";
+
 /// Creates an order and returns it with the id shown in the trades list.
 pub async fn create(
     device: &DeviceContext<'_>,
@@ -48,7 +55,12 @@ pub async fn create(
     // A still-enabled button does not prove the daemon rejected the first
     // request. Submit once, then resolve its outcome through public UI.
     tap(device, Ids::ORDER_CREATE_SUBMIT).await?;
-    if super::appears_within(device, Ids::ORDER_CONFIRM_HOME, device.ui_timeout).await? {
+    // A node that bonds makers parks the order on the pay-bond screen,
+    // pushed over the order's own: it is left there, unpaid, and the order
+    // is read from the trades list like any other.
+    let landed =
+        super::first_present(device, &[Ids::ORDER_CONFIRM_HOME, Ids::BOND_ORDER_ID]).await?;
+    if landed == Some(Ids::ORDER_CONFIRM_HOME) {
         // Closing the new order's screen pops back to the book, which is
         // drawn a moment after the screen leaves. Until then that screen's
         // back is still up, and a look for the book would press it just as
@@ -239,8 +251,12 @@ pub async fn find_and_take(
         OrderKind::Sell => Ids::INVOICE_TEXT,
         OrderKind::Buy => Ids::PAY_INVOICE_TEXT,
     };
-    match super::first_present(device, &[form, Ids::ORDER_STATUS]).await? {
-        Some(id) if id == form => {
+    // A node that asks for a bond opens the pay-bond screen instead of the
+    // invoice form; the trade flow only starts once the bond locks.
+    let landed =
+        super::first_present(device, &[form, Ids::BOND_ORDER_ID, Ids::ORDER_STATUS]).await?;
+    match landed {
+        Some(id) if id == form || id == Ids::BOND_ORDER_ID => {
             invoice_form_state(device, order).await?.ok_or_else(|| {
                 AdapterError::contract("take invoice form disappeared before verification")
             })?;
@@ -248,7 +264,7 @@ pub async fn find_and_take(
         }
         Some(_) => verify_order_id(device, Ids::ORDER_ID, order).await,
         None => Err(AdapterError::contract(
-            "take did not reach the expected invoice form or trade detail",
+            "take did not reach the expected invoice form, pay-bond screen or trade detail",
         )),
     }
 }
@@ -280,7 +296,17 @@ pub async fn open_trade(
 ) -> Result<(), AdapterError> {
     go_home(device).await?;
     tap(device, Ids::NAV_TRADES).await?;
-    tap(device, &Ids::trades_item(&order.id)).await?;
+    let row = Ids::trades_item(&order.id);
+    if !super::listed_within(device, &row, device.ui_timeout).await? {
+        // Say what the screen shows instead, so a missing row can be told
+        // from a screen that never changed.
+        let shown = ids_with_prefix(&page_source(device).await?, "");
+        return Err(AdapterError::contract(format!(
+            "`{row}` is not on the trades screen, which shows: {}",
+            shown.join(", ")
+        )));
+    }
+    tap(device, &row).await?;
     expect(device, Ids::ORDER_STATUS).await
 }
 
@@ -311,10 +337,35 @@ pub async fn observe_detail(
     tap(device, &Ids::trades_item(&order.id)).await?;
     let landed = super::first_present(
         device,
-        &[Ids::ORDER_STATUS, Ids::INVOICE_TEXT, Ids::PAY_INVOICE_TEXT],
+        &[
+            Ids::ORDER_STATUS,
+            Ids::INVOICE_TEXT,
+            Ids::BOND_ORDER_ID,
+            Ids::PAY_INVOICE_TEXT,
+            Ids::BOND_CLAIM_STATUS,
+        ],
     )
     .await?;
     match landed {
+        // A row the app keeps for a slashed bond's claim alone: the trade
+        // behind it ended without completing, and the app's own row reads
+        // it cancelled.
+        Some(id) if id == Ids::BOND_CLAIM_STATUS => {
+            verify_order_id(device, Ids::BOND_CLAIM_ORDER_ID, order).await?;
+            return Ok(AppOrderState {
+                state: OrderState::Cancelled,
+                raw_label: BOND_CLAIM_ROW.into(),
+            });
+        }
+        // Before the pay form: with a wallet connected the bond screen
+        // draws the same pay widget, and only its app bar tells them apart.
+        Some(id) if id == Ids::BOND_ORDER_ID => {
+            verify_order_id(device, Ids::BOND_ORDER_ID, order).await?;
+            return Ok(AppOrderState {
+                state: OrderState::Taken,
+                raw_label: WAITING_BOND.into(),
+            });
+        }
         Some(id) if id == Ids::INVOICE_TEXT => {
             verify_order_id(device, Ids::INVOICE_ORDER_ID, order).await?;
             return Ok(AppOrderState {
@@ -418,8 +469,11 @@ async fn invoice_form_state(
     device: &DeviceContext<'_>,
     order: &OrderReference,
 ) -> Result<Option<AppOrderState>, AdapterError> {
+    // The bond screen is known by its app bar: with a wallet connected it
+    // draws the escrow's pay widget, so the pay form is checked after it.
     for (form, id, raw) in [
         (Ids::INVOICE_TEXT, Ids::INVOICE_ORDER_ID, "waiting-invoice"),
+        (Ids::BOND_ORDER_ID, Ids::BOND_ORDER_ID, WAITING_BOND),
         (Ids::PAY_INVOICE_TEXT, Ids::PAY_ORDER_ID, "waiting-payment"),
     ] {
         if present(device, form).await? {
@@ -476,13 +530,21 @@ pub async fn cancel_if_open(
     }
     tap(device, &Ids::trades_item(&order.id)).await?;
     // A trade waiting on this user's invoice or payment opens its form, not
-    // the detail; the form's own cancel button cancels the order.
+    // the detail; the form's own cancel button cancels the order. A row the
+    // app keeps for a slashed bond's claim alone opens the claim: the trade
+    // behind it is over, and the relay says how.
     let landed = super::first_present(
         device,
-        &[Ids::ORDER_STATUS, Ids::INVOICE_TEXT, Ids::PAY_INVOICE_TEXT],
+        &[
+            Ids::ORDER_STATUS,
+            Ids::INVOICE_TEXT,
+            Ids::PAY_INVOICE_TEXT,
+            Ids::BOND_CLAIM_STATUS,
+        ],
     )
     .await?;
     let form_cancel = match landed {
+        Some(id) if id == Ids::BOND_CLAIM_STATUS => return Ok(CancelOutcome::NotFound),
         Some(id) if id == Ids::INVOICE_TEXT => {
             verify_order_id(device, Ids::INVOICE_ORDER_ID, order).await?;
             Some(Ids::INVOICE_CANCEL)
@@ -504,6 +566,13 @@ pub async fn cancel_if_open(
     let raw = label(device, Ids::ORDER_STATUS).await?;
     if from_v2_label(&raw).is_some_and(OrderState::is_terminal) {
         return Ok(CancelOutcome::AlreadyClosed);
+    }
+    // An order parked on this user's deposit is left on the pay-bond
+    // screen, where the app sends the cancel: a taker's walks away from
+    // the take, a maker's closes the order the daemon never published.
+    if raw.trim().to_ascii_lowercase().replace(['_', ' '], "-") == WAITING_BOND {
+        super::bond::decline_bond(device, order).await?;
+        return Ok(CancelOutcome::Cancelled);
     }
     if !present(device, Ids::TRADE_CANCEL).await? {
         // This side already asked for a cooperative cancel: the request

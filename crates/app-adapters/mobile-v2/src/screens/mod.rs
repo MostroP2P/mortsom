@@ -1,6 +1,7 @@
 //! Screen objects for the v2 app: small, single-purpose sequences over the
 //! UI session. Every wait is bounded by the device's UI timeout.
 
+pub mod bond;
 pub mod invoice;
 pub mod nav;
 pub mod onboarding;

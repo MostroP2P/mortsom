@@ -15,7 +15,9 @@ pub fn from_v2_label(label: &str) -> Option<OrderState> {
     let normalized = label.trim().to_ascii_lowercase().replace(['_', ' '], "-");
     Some(match normalized.as_str() {
         LOADING => return None,
-        "waiting-invoice" | "waiting-payment" | "in-progress" => OrderState::Taken,
+        // `waiting-bond` is the anti-abuse bond window: taken, the trade
+        // flow not started.
+        "waiting-invoice" | "waiting-payment" | "waiting-bond" | "in-progress" => OrderState::Taken,
         "payout-pending" => OrderState::PayoutPending,
         "completed" | "pending-rating" | "rated" => OrderState::Completed,
         "cancelled" => OrderState::Cancelled,
@@ -35,6 +37,8 @@ mod tests {
             ("waiting-invoice", Some(OrderState::Taken)),
             ("waiting-payment", Some(OrderState::Taken)),
             ("in-progress", Some(OrderState::Taken)),
+            ("waiting-bond", Some(OrderState::Taken)),
+            ("Waiting Bond", Some(OrderState::Taken)),
             ("active", Some(OrderState::Active)),
             ("fiat-sent", Some(OrderState::FiatSent)),
             ("payout-pending", Some(OrderState::PayoutPending)),
