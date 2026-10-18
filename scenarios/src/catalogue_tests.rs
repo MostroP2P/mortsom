@@ -76,7 +76,13 @@ fn the_dispute_family_is_every_way_a_dispute_ends() {
         .collect();
     assert_eq!(
         needs_solver,
-        BTreeSet::from(["dispute_settled_by_solver", "dispute_canceled_by_solver"]),
+        BTreeSet::from([
+            "dispute_settled_by_solver",
+            "dispute_canceled_by_solver",
+            "taker_bond_slashed_by_solver",
+            "maker_bond_slashed_by_solver",
+            "bonds_released_by_solver_ruling",
+        ]),
         "only a solver's ruling needs a solver"
     );
 }
@@ -104,6 +110,59 @@ fn the_payment_failure_family_is_what_the_daemon_cannot_pay_and_what_one_payee_c
         BTreeSet::from([
             "payout_fails_then_replaced",
             "payout_slots_capped_per_destination"
+        ])
+    );
+}
+
+#[test]
+fn the_bond_family_releases_slashes_and_claims_every_bond_two_actors_can_reach() {
+    assert_eq!(
+        tagged("bond"),
+        BTreeSet::from([
+            // Released.
+            "taker_bond_released_after_trade",
+            "seller_taker_bond_then_escrow",
+            "taker_bond_declined",
+            "taker_bond_expires_unpaid",
+            "maker_bond_locked_before_publish",
+            "maker_bond_abandoned",
+            "maker_bond_expires_unpaid",
+            "bonds_released_by_solver_ruling",
+            // Slashed by the clock, whoever owed the step, and claimed.
+            "buyer_taker_bond_slashed_on_timeout",
+            "seller_maker_bond_slashed_on_timeout",
+            "seller_taker_bond_slashed_on_timeout",
+            "buyer_maker_bond_slashed_on_timeout",
+            // Slashed by a solver, either side, and claimed.
+            "taker_bond_slashed_by_solver",
+            "maker_bond_slashed_by_solver",
+            // A claim the daemon cannot pay, asked for again.
+            "bond_claim_fails_then_replaced",
+        ])
+    );
+    crate::link();
+    // Only a maker bond nobody pays costs nothing at all.
+    let still: BTreeSet<&str> = registry::all()
+        .into_iter()
+        .filter(|def| def.tags.contains(&"bond"))
+        .filter(|def| !def.moves_value)
+        .map(|def| def.name)
+        .collect();
+    assert_eq!(
+        still,
+        BTreeSet::from(["maker_bond_abandoned", "maker_bond_expires_unpaid"])
+    );
+    let solver: BTreeSet<&str> = registry::all()
+        .into_iter()
+        .filter(|def| def.tags.contains(&"bond") && def.needs_solver)
+        .map(|def| def.name)
+        .collect();
+    assert_eq!(
+        solver,
+        BTreeSet::from([
+            "taker_bond_slashed_by_solver",
+            "maker_bond_slashed_by_solver",
+            "bonds_released_by_solver_ruling"
         ])
     );
 }

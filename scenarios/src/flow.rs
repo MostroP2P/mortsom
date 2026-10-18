@@ -69,7 +69,9 @@ pub async fn create_pending(ctx: &Context) -> Result<OrderReference, ScenarioErr
     create_pending_for(ctx, Actor::Alice, OrderKind::Sell).await
 }
 
-async fn create_pending_for(
+/// `maker` publishes a fixed-price order of `kind`; their app and the
+/// relay show it pending.
+pub async fn create_pending_for(
     ctx: &Context,
     maker: Actor,
     kind: OrderKind,

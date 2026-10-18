@@ -12,7 +12,7 @@ use mortsom_observers::{
     relay::{ObserverScope, RelayObserver},
     wallet::{PaymentState, WalletObserver, WalletReader, payment_hash_of},
 };
-use mortsom_scenario_kit::context::{Context, HoldInvoiceState};
+use mortsom_scenario_kit::context::{BondApplyTo, BondPolicy, Context, HoldInvoiceState};
 use mortsom_scenario_kit::{
     budget::{Budget, SpendCaps},
     cleanup::CleanupRegistry,
@@ -32,6 +32,7 @@ use std::{
 #[path = "flow_test_adapter.rs"]
 mod adapter;
 pub use adapter::Adapter;
+use adapter::DAEMON_DELAY;
 
 /// The order every scenario creates first; later ones are numbered.
 pub const ORDER: &str = "the-order";
@@ -45,6 +46,17 @@ pub const SATS: u64 = 250_000;
 pub const EXPIRY_FLOOR_SECS: u64 = 300;
 /// How many unresolved payouts the fixture daemon lets one payee hold.
 pub const PAYOUT_CAP: u32 = 2;
+/// The bond a bonded fixture daemon asks both sides for: one percent of
+/// the order, never under 1000 sats, half of it kept by the node when
+/// slashed.
+pub const BOND_POLICY: BondPolicy = BondPolicy {
+    apply_to: BondApplyTo::Both,
+    amount_bps: 100,
+    base_amount_sats: 1000,
+    slash_on_waiting_timeout: true,
+    node_share_bps: 5000,
+    payout_claim_window_days: 1,
+};
 
 /// How the fixture daemon deviates from the well-behaved one.
 #[derive(Debug, Clone, Copy, Default)]
@@ -75,6 +87,13 @@ pub struct Misbehaviour {
     /// A cancel of an order that never went active is never published:
     /// the app drops the trade all the same.
     pub never_publishes_cancel: bool,
+    /// The book shows a take as in progress while the bond is still
+    /// outstanding.
+    pub publishes_take_before_bond_lock: bool,
+    /// A bond is settled instead of released when the trade ends well.
+    pub slashes_honest_bonds: bool,
+    /// The taker's app keeps a take whose bond lapsed unpaid.
+    pub keeps_lapsed_takes: bool,
 }
 
 /// What the fixture knows about an invoice one of its nodes issued.
@@ -91,6 +110,31 @@ pub struct IssuedInvoice {
     /// Settled for good: the daemon paid it (a payout invoice), or the
     /// escrow it secures settled at the release (Alice's hold invoice).
     pub settled: bool,
+    /// The daemon's bond invoice, paid by `actor`; held until the trade
+    /// ends and then returned or slashed.
+    pub bond: bool,
+    /// The winner's invoice for a slashed bond's share, paid by the daemon.
+    pub claim: bool,
+}
+
+/// A step the daemon hands out and waits for, under a deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Duty {
+    /// The buyer's payout invoice.
+    BuyerInvoice,
+    /// The seller's escrow.
+    Escrow,
+}
+
+/// A slashed bond's share the fixture daemon offers a winner.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Claim {
+    /// The winner.
+    pub actor: Actor,
+    /// Sats on offer.
+    pub amount: u64,
+    /// `pending`, `submitted` or `completed`.
+    pub phase: String,
 }
 
 pub(crate) struct State {
@@ -131,6 +175,27 @@ pub(crate) struct State {
     /// The fixture daemon's relay and keys, for the wallet side, which
     /// publishes when a held payout settles.
     daemon: Option<(Arc<RelayObserver>, Keys)>,
+    /// The daemon asks both sides for a bond.
+    bonded: bool,
+    /// Orders whose taker's bond is requested and not yet locked.
+    bond_requested: BTreeSet<String>,
+    /// Orders whose maker's bond is requested: created, not published.
+    maker_bond_requested: BTreeSet<String>,
+    /// Orders an actor walked away from (a taker's bond, a maker's unpublished
+    /// order) or lost to a slash: their app no longer lists them.
+    declined: Vec<(Actor, String)>,
+    /// Whose bond the daemon slashed on each order.
+    slashed: BTreeMap<String, Actor>,
+    /// The cause the loser's trade shows for the slash.
+    slash_notice: BTreeMap<String, (Actor, &'static str)>,
+    /// The share on offer to the winner of each slash.
+    claims: BTreeMap<String, Claim>,
+    /// The daemon slashes whoever leaves a waiting step undone past its
+    /// deadline: the buyer's invoice, the seller's escrow.
+    slashes_on_timeout: bool,
+    /// The daemon lets an unpaid bond lapse: a maker's order it never
+    /// published is dropped, a taker's take goes back on the book.
+    expires_unpaid_bonds: bool,
     misbehaviour: Misbehaviour,
 }
 
@@ -156,6 +221,97 @@ impl State {
         self.invoices
             .get_mut(hash)
             .unwrap_or_else(|| panic!("no fixture node issued invoice {hash}"))
+    }
+    /// The taker of the created order: whoever did not create it.
+    pub(crate) fn taker(&self) -> Option<Actor> {
+        self.created.map(|(maker, _)| match maker {
+            Actor::Alice => Actor::Bob,
+            Actor::Bob => Actor::Alice,
+        })
+    }
+    /// The maker of the created order.
+    pub(crate) fn maker(&self) -> Option<Actor> {
+        self.created.map(|(maker, _)| maker)
+    }
+    /// Who buys on the created order: the maker of a buy, the taker of a sell.
+    pub(crate) fn buyer(&self) -> Option<Actor> {
+        match self.created?.1 {
+            OrderKind::Buy => self.maker(),
+            OrderKind::Sell => self.taker(),
+        }
+    }
+    /// The other party of `actor` on the created order.
+    pub(crate) fn counterparty(actor: Actor) -> Actor {
+        match actor {
+            Actor::Alice => Actor::Bob,
+            Actor::Bob => Actor::Alice,
+        }
+    }
+    /// The bond invoice `actor` paid on `order`, if any.
+    pub(crate) fn bond_invoice_mut(
+        &mut self,
+        actor: Actor,
+        order: &str,
+    ) -> Option<&mut IssuedInvoice> {
+        self.invoices.values_mut().find(|invoice| {
+            invoice.bond && invoice.actor == actor && invoice.order.as_deref() == Some(order)
+        })
+    }
+    /// The daemon slashes `loser`'s bond on `order` for `cause`: the HTLC
+    /// settles, the counterparty is offered their share, and the loser's
+    /// trade carries the cause.
+    pub(crate) fn slash(&mut self, order: &str, loser: Actor, cause: &'static str) {
+        if let Some(invoice) = self.bond_invoice_mut(loser, order) {
+            invoice.settled = true;
+        }
+        self.slashed.insert(order.to_owned(), loser);
+        self.slash_notice.insert(order.to_owned(), (loser, cause));
+        let bond = BOND_POLICY.bond_sats(SATS);
+        self.claims.insert(
+            order.to_owned(),
+            Claim {
+                actor: Self::counterparty(loser),
+                amount: BOND_POLICY.counterparty_share_sats(bond),
+                phase: "pending".into(),
+            },
+        );
+        self.actions.push(format!("daemon:slash-{cause}"));
+    }
+    /// The daemon's waiting-state deadline for `duty` on `order` elapsed.
+    /// Undone, it slashes whoever owed it: a taker's failure puts the order
+    /// back on the book, a maker's closes it and returns the escrow. Returns
+    /// what the book then shows, or `None` when the duty was done in time.
+    pub(crate) fn time_out(&mut self, order: &str, duty: Duty) -> Option<&'static str> {
+        let done = match duty {
+            Duty::BuyerInvoice => self.buyer_invoice.contains_key(order),
+            Duty::Escrow => self.funded.contains(order),
+        };
+        if done || self.order(order).is_terminal() {
+            return None;
+        }
+        let buyer = self.buyer()?;
+        let owes = match duty {
+            Duty::BuyerInvoice => buyer,
+            Duty::Escrow => Self::counterparty(buyer),
+        };
+        self.slash(order, owes, "timeout");
+        if self.taker() == Some(owes) {
+            self.declined.push((owes, order.to_owned()));
+            self.set(order, OrderState::Pending);
+            return Some("pending");
+        }
+        if self.funded.contains(order) {
+            self.refunded = true;
+        }
+        self.dropped.push(order.to_owned());
+        self.set(order, OrderState::Cancelled);
+        Some("canceled")
+    }
+    /// Whether `actor` walked away from `order`'s bond.
+    pub(crate) fn declined(&self, actor: Actor, order: &str) -> bool {
+        self.declined
+            .iter()
+            .any(|(who, id)| *who == actor && id == order)
     }
     /// How many payouts the buyer's node is holding unresolved.
     pub(crate) fn held_payouts(&self) -> usize {
@@ -236,6 +392,15 @@ impl Fixture {
             gated: Vec::new(),
             issued: 0,
             daemon: Some((relay.clone(), keys.clone())),
+            bonded: false,
+            bond_requested: BTreeSet::new(),
+            maker_bond_requested: BTreeSet::new(),
+            declined: Vec::new(),
+            slashed: BTreeMap::new(),
+            slash_notice: BTreeMap::new(),
+            claims: BTreeMap::new(),
+            slashes_on_timeout: false,
+            expires_unpaid_bonds: false,
             misbehaviour,
         }));
         let adapter = Arc::new(Adapter {
@@ -289,7 +454,7 @@ impl Fixture {
             relay_control: Arc::new(NoRelayControl),
             solver: Some(adapter.clone()),
             budget: Arc::new(Mutex::new(Budget::new(
-                SpendCaps::new(SATS, SATS * 10).unwrap(),
+                SpendCaps::new(SATS + 2 * BOND_POLICY.bond_sats(SATS), SATS * 10).unwrap(),
             ))),
             cleanup: Arc::new(CleanupRegistry::default()),
             timeline: Arc::new(Timeline::default()),
@@ -340,6 +505,30 @@ impl Fixture {
         self
     }
 
+    /// The daemon asks both sides for the bond [`BOND_POLICY`] sizes, and
+    /// the stack declares that policy to the run.
+    pub fn bonded(mut self) -> Self {
+        self.state.lock().unwrap().bonded = true;
+        self.context.limits.bond = Some(BOND_POLICY);
+        self
+    }
+    /// The daemon slashes whoever leaves a waiting step undone once its
+    /// deadline elapses: a taker's failure puts the order back on the book,
+    /// a maker's closes it.
+    pub fn slashes_on_timeout(self) -> Self {
+        self.state.lock().unwrap().slashes_on_timeout = true;
+        self
+    }
+    /// The daemon lets a bond nobody pays lapse.
+    pub fn expires_unpaid_bonds(self) -> Self {
+        self.state.lock().unwrap().expires_unpaid_bonds = true;
+        self
+    }
+    /// The share on offer for `order`, if the daemon offered one.
+    pub fn claim(&self, order: &str) -> Option<Claim> {
+        self.state.lock().unwrap().claims.get(order).cloned()
+    }
+
     /// A run that registered no solver.
     pub fn without_solver(mut self) -> Self {
         self.context.solver = None;
@@ -365,7 +554,18 @@ impl Fixture {
             .unwrap()
             .invoices
             .values()
-            .filter(|invoice| invoice.actor == Actor::Bob)
+            .filter(|invoice| invoice.actor == Actor::Bob && !invoice.bond)
+            .cloned()
+            .collect()
+    }
+    /// The bond invoices the daemon issued, with what became of each.
+    pub fn bond_invoices(&self) -> Vec<IssuedInvoice> {
+        self.state
+            .lock()
+            .unwrap()
+            .invoices
+            .values()
+            .filter(|invoice| invoice.bond)
             .cloned()
             .collect()
     }
@@ -403,166 +603,6 @@ impl Fixture {
     }
 }
 
-struct Wallet {
-    actor: Actor,
-    state: Arc<Mutex<State>>,
-}
-
-impl Wallet {
-    /// Issues an invoice on this node and remembers it by hash.
-    fn issue(&self, sats: u64, expiry_secs: u64, hold: bool) -> Secret {
-        assert_eq!(self.actor, Actor::Bob);
-        assert_eq!(sats, SATS);
-        let mut state = self.state.lock().unwrap();
-        // The maker of a buy is asked for the invoice only once the seller's
-        // hold is accepted; the taker of a sell hands it in first.
-        if matches!(state.created, Some((_, OrderKind::Buy))) {
-            assert!(
-                !state.funded.is_empty(),
-                "buyer invoice must follow accepted escrow"
-            );
-        }
-        state.issued += 1;
-        let invoice = Secret::new(build_invoice(sats * 1000, expiry_secs, state.issued));
-        let hash = payment_hash_of(&invoice).unwrap();
-        state.invoices.insert(
-            hash,
-            IssuedInvoice {
-                actor: Actor::Bob,
-                order: None,
-                hold: hold.then_some(HoldInvoiceState::Open),
-                superseded: false,
-                settled: false,
-            },
-        );
-        invoice
-    }
-}
-
-#[async_trait]
-impl NodeWallet for Wallet {
-    async fn make_invoice(&self, sats: u64, _: &str) -> Result<Secret, String> {
-        Ok(self.issue(sats, 3600, false))
-    }
-    async fn make_invoice_expiring(
-        &self,
-        sats: u64,
-        _: &str,
-        expiry_secs: u64,
-    ) -> Result<Secret, String> {
-        Ok(self.issue(sats, expiry_secs, false))
-    }
-    async fn make_hold_invoice(&self, sats: u64, _: &str) -> Result<Secret, String> {
-        Ok(self.issue(sats, 3600, true))
-    }
-    async fn cancel_invoice(&self, hash: &str) -> Result<(), String> {
-        let mut state = self.state.lock().unwrap();
-        let actor = self.actor;
-        state.actions.push(format!("cancel-invoice:{actor}"));
-        let invoice = state.invoice_mut(hash);
-        assert_eq!(invoice.actor, actor);
-        if invoice.settled {
-            return Err("a settled invoice cannot be cancelled".into());
-        }
-        invoice.superseded = true;
-        invoice.hold = invoice.hold.map(|_| HoldInvoiceState::Cancelled);
-        Ok(())
-    }
-    async fn settled_record_count(&self, hash: &str, incoming: bool) -> Result<usize, String> {
-        assert!(incoming);
-        let state = self.state.lock().unwrap();
-        Ok(usize::from(state.invoices[hash].settled))
-    }
-    async fn hold_invoice_state(&self, hash: &str) -> Result<HoldInvoiceState, String> {
-        let state = self.state.lock().unwrap();
-        state.invoices[hash]
-            .hold
-            .ok_or_else(|| "not a hold invoice".to_owned())
-    }
-    async fn settle_hold_invoice(&self, hash: &str) -> Result<(), String> {
-        let order = {
-            let mut state = self.state.lock().unwrap();
-            let actor = self.actor;
-            state.actions.push(format!("settle-hold:{actor}"));
-            let invoice = state.invoice_mut(hash);
-            if invoice.hold != Some(HoldInvoiceState::Accepted) {
-                return Err("no held payment to settle".into());
-            }
-            invoice.hold = Some(HoldInvoiceState::Settled);
-            invoice.settled = true;
-            invoice
-                .order
-                .clone()
-                .expect("a held payout names its order")
-        };
-        Adapter::payout_landed(&self.state, &order).await;
-        Ok(())
-    }
-    async fn start_payment(&self, invoice: &Secret) -> Result<(), String> {
-        assert_eq!(self.actor, Actor::Alice);
-        let hash = payment_hash_of(invoice).unwrap();
-        let mut state = self.state.lock().unwrap();
-        state.actions.push("pay:alice".into());
-        if state.misbehaviour.fail_payment {
-            return Err("injected hold payment failure".into());
-        }
-        let order = state.invoices[&hash]
-            .order
-            .clone()
-            .expect("a hold invoice names its order");
-        state.funded.insert(order.clone());
-        // On a sell the daemon tells both parties `active` once the hold
-        // is accepted; on a buy it first asks the maker for the invoice.
-        if matches!(state.created, Some((_, OrderKind::Sell))) {
-            state.set(&order, OrderState::Active);
-        }
-        Ok(())
-    }
-}
-#[async_trait]
-impl WalletReader for Wallet {
-    async fn lookup(&self, hash: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
-        let mut state = self.state.lock().unwrap();
-        let invoice = state.invoices[hash].clone();
-        let payment_state = match invoice.actor {
-            // Alice's node paid the hold: settled once the daemon settled
-            // the escrow at release, returned when the order was cancelled.
-            Actor::Alice => {
-                assert_eq!(self.actor, Actor::Alice);
-                let order = invoice.order.as_deref().expect("hold names its order");
-                if state.refunded {
-                    PaymentState::Failed
-                } else if invoice.settled {
-                    PaymentState::Settled
-                } else {
-                    assert!(state.funded.contains(order));
-                    match state.order(order) {
-                        OrderState::Completed | OrderState::PayoutPending => PaymentState::Settled,
-                        _ => PaymentState::Pending,
-                    }
-                }
-            }
-            // Bob's node issued the payout invoice.
-            Actor::Bob => {
-                assert_eq!(self.actor, Actor::Bob);
-                if invoice.settled {
-                    PaymentState::Settled
-                } else if invoice.superseded {
-                    PaymentState::Failed
-                } else {
-                    PaymentState::Pending
-                }
-            }
-        };
-        state.wallet_checks.push(format!(
-            "{}:{}",
-            self.actor,
-            match payment_state {
-                PaymentState::Settled => "settled",
-                PaymentState::Failed => "failed",
-                _ => "pending",
-            }
-        ));
-        Ok(Some((SATS, 0, payment_state)))
-    }
-}
+#[path = "flow_fixture_wallet.rs"]
+mod wallet;
+use wallet::Wallet;
