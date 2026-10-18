@@ -232,9 +232,13 @@ async fn run_once(
     let net = RealNet::with_daemon_timeout(std::time::Duration::from_secs(
         config.mostro.health_timeout_secs,
     ));
+    let chain = owned_chain(stack_dir);
     let deps = RunDeps {
         desktop_factory: &crate::run::RealDesktopFactory,
         net: Some(&net),
+        chain: chain
+            .as_ref()
+            .map(|chain| chain as &dyn crate::stack::ChainTip),
         docker: Arc::new(docker),
         probe: Arc::new(NostrProbe),
         adapter,
@@ -265,6 +269,21 @@ async fn run_once(
             run,
         },
         Err(RunError::NotStarted(reason)) => Attempt::Refused(reason),
+    }
+}
+
+/// The chain of the Mortsom-owned stack in `stack_dir`, which the run was
+/// just attached to: what keeps its tip fresh. Attaching already read the
+/// same layout, so a failure here is a directory gone since, and says so.
+pub(super) fn owned_chain(
+    stack_dir: &std::path::Path,
+) -> Option<crate::stack::ComposeChain<'static>> {
+    match crate::stack::Layout::new(stack_dir) {
+        Ok(layout) => Some(crate::stack::ComposeChain::new(&layout, &TokioRunner)),
+        Err(error) => {
+            tracing::warn!(%error, "the chain tip is not kept fresh");
+            None
+        }
     }
 }
 

@@ -6,6 +6,7 @@
 
 mod attribution;
 mod bond_gate;
+mod chain_tip;
 mod execute;
 mod maintenance;
 mod needs;
@@ -125,6 +126,9 @@ pub struct RunDeps<'a> {
     pub observer: &'a dyn ObserverFactory,
     /// Read-only network preflight, required before any client starts.
     pub net: Option<&'a dyn crate::doctor::NetProbes>,
+    /// The chain of the Mortsom-owned stack, whose tip each run keeps
+    /// fresh; `None` when the run owns no stack, and then nothing is mined.
+    pub chain: Option<&'a dyn crate::stack::ChainTip>,
 }
 
 /// Runs the selected scenarios.
@@ -206,6 +210,12 @@ pub async fn run_scenarios(
             .map_err(started);
     }
 
+    if let Some(chain) = chain_tip::owned(options, deps) {
+        let now = attribution::now_unix();
+        let (status, detail) =
+            chain_tip::refresh(config, chain, deps.net, now, chain_tip::PATIENCE).await;
+        summary.checks.push(chain_tip::CHECK, status, detail);
+    }
     if !preflight::check(config, options, deps, &mut summary).await {
         preflight::reject(&runnable, &mut summary);
         return finish(&artifacts, &mut summary)

@@ -970,6 +970,7 @@ async fn run_on(
     let deps = RunDeps {
         desktop_factory: &clients,
         net: Some(net),
+        chain: None,
         docker: Arc::clone(&docker) as Arc<dyn ContainerRuntime>,
         probe: Arc::new(AlwaysReady),
         adapter: adapter as Arc<dyn AppAdapter>,
@@ -998,6 +999,7 @@ fn opts_in(world: &World, names: &[&str]) -> RunOptions {
 
 mod attribution;
 mod behavior;
+mod chain_tip;
 mod desktop;
 mod evidence;
 mod isolation;

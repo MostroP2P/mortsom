@@ -2,6 +2,7 @@
 //! checkout creates, inspects and destroys, with nothing but Docker.
 
 mod bond;
+mod chain;
 mod compose;
 mod connections;
 mod daemon;
@@ -17,6 +18,7 @@ mod status;
 mod up;
 
 pub use bond::{describe as describe_bond, verify_advertised as verify_advertised_bond};
+pub use chain::{ChainTip, ComposeChain, Tip};
 pub use compose::Compose;
 pub use connections::credential_reference;
 pub use daemon::DaemonSource;

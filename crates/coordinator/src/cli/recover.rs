@@ -272,9 +272,13 @@ async fn recover(
     let net = RealNet::with_daemon_timeout(std::time::Duration::from_secs(
         config.mostro.health_timeout_secs,
     ));
+    let chain = super::run::owned_chain(stack_dir);
     let deps = RunDeps {
         desktop_factory: &crate::run::RealDesktopFactory,
         net: Some(&net),
+        chain: chain
+            .as_ref()
+            .map(|chain| chain as &dyn crate::stack::ChainTip),
         docker: Arc::new(DockerCli::default()),
         probe: Arc::new(NostrProbe),
         adapter,

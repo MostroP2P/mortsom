@@ -185,23 +185,13 @@ async fn prepare_chain(
         )
     })
     .await?;
-    // Both fail harmlessly on a rerun: the wallet exists and is loaded.
+    // Fails harmlessly on a rerun: the wallet exists.
     attempt(
         runner,
         &compose.bitcoin_cli(&["createwallet", MINER_WALLET]),
     )
     .await?;
-    attempt(runner, &compose.bitcoin_cli(&["loadwallet", MINER_WALLET])).await?;
-    let wallet = format!("-rpcwallet={MINER_WALLET}");
-    let miner = require(
-        runner,
-        &compose.bitcoin_cli(&[&wallet, "getnewaddress"]),
-        STEP_TIMEOUT,
-    )
-    .await?
-    .stdout
-    .trim()
-    .to_owned();
+    let miner = miner_address(runner, compose).await?;
     tracing::info!(blocks = INITIAL_BLOCKS, "mining the initial chain");
     mine(runner, compose, &miner, INITIAL_BLOCKS).await?;
     for node in ALL_NODES {
@@ -487,7 +477,27 @@ async fn start_daemon(
     .await
 }
 
-async fn mine(
+/// A fresh address of the miner wallet, loaded first: `loadwallet` fails
+/// harmlessly when it already is.
+pub(super) async fn miner_address(
+    runner: &dyn CommandRunner,
+    compose: &Compose,
+) -> Result<String, StackError> {
+    attempt(runner, &compose.bitcoin_cli(&["loadwallet", MINER_WALLET])).await?;
+    let wallet = format!("-rpcwallet={MINER_WALLET}");
+    Ok(require(
+        runner,
+        &compose.bitcoin_cli(&[&wallet, "getnewaddress"]),
+        STEP_TIMEOUT,
+    )
+    .await?
+    .stdout
+    .trim()
+    .to_owned())
+}
+
+/// Mines `blocks` blocks paying `miner`.
+pub(super) async fn mine(
     runner: &dyn CommandRunner,
     compose: &Compose,
     miner: &str,
