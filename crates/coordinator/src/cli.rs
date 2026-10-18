@@ -225,6 +225,12 @@ pub enum StackAction {
         /// build here instead. The owner's generated state goes stale.
         #[arg(long)]
         replace: bool,
+        /// Start the daemon with its anti-abuse bond switched on, from
+        /// `stack/mostro-bond.tpl.toml`: every taker locks a bond before the
+        /// trade starts. The `bond` family needs it; no other family is
+        /// written for a bonded daemon.
+        #[arg(long)]
+        bond: bool,
     },
     /// Inspect the persistent services.
     Status,
@@ -292,6 +298,7 @@ async fn stack_cli(stack_dir: &std::path::Path, action: StackAction) -> ExitCode
             mostro_image,
             mostro_ref,
             replace,
+            bond,
         } => {
             let daemon = stack::DaemonSource::from_options(mostro_image, mostro_ref);
             let options = stack::UpOptions {
@@ -299,16 +306,18 @@ async fn stack_cli(stack_dir: &std::path::Path, action: StackAction) -> ExitCode
                 source_cache: crate::mostro_source::WORK_DIR.into(),
                 timing: stack::Timing::default(),
                 replace,
+                bond,
             };
             stack::up(&TokioRunner, &stack::LiveRelay, &layout, &options)
                 .await
                 .map(|descriptor| {
                     format!(
-                        "stack ready\ndaemon      {}\nimage       {}\nimage id    {}\nsource      {}\n",
+                        "stack ready\ndaemon      {}\nimage       {}\nimage id    {}\nsource      {}\nbond        {}\n",
                         descriptor.daemon_pubkey,
                         descriptor.daemon_image.reference,
                         descriptor.daemon_image.image_id,
-                        descriptor.daemon_source
+                        descriptor.daemon_source,
+                        crate::stack::describe_bond(descriptor.declared_limits.bond.as_ref())
                     )
                 })
         }
@@ -889,6 +898,23 @@ mod tests {
             ][..],
         ] {
             assert!(super::Cli::try_parse_from(args).is_err(), "{args:?}");
+        }
+    }
+
+    #[test]
+    fn stack_up_bonds_the_daemon_only_when_asked() {
+        use clap::Parser;
+        for (args, expected) in [
+            (&["mortsom", "stack", "up"][..], false),
+            (&["mortsom", "stack", "up", "--bond"][..], true),
+        ] {
+            let cli = super::Cli::try_parse_from(args).unwrap();
+            assert!(matches!(
+                cli.command,
+                super::Command::Stack {
+                    action: super::StackAction::Up { bond, .. }
+                } if bond == expected
+            ));
         }
     }
 

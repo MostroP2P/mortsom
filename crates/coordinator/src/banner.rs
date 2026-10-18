@@ -300,6 +300,7 @@ mod tests {
                     mostro_image: None,
                     mostro_ref: None,
                     replace: false,
+                    bond: false,
                 },
                 "stack up",
             ),

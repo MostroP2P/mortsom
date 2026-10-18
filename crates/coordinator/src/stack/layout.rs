@@ -44,6 +44,11 @@ impl Layout {
         self.root.join("mostro-settings.tpl.toml")
     }
 
+    /// The `[anti_abuse_bond]` fragment `up --bond` appends to the settings.
+    pub fn bond_template(&self) -> PathBuf {
+        self.root.join("mostro-bond.tpl.toml")
+    }
+
     /// Committed declaration of the daemon limits.
     pub fn limits_file(&self) -> PathBuf {
         self.root.join("limits.toml")

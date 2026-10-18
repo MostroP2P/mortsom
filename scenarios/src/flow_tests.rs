@@ -1,6 +1,6 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use crate::flow_fixture::Fixture;
+use crate::flow_fixture::{BOND_POLICY, Fixture, SATS};
 use mortsom_app_contract::OrderKind;
 use mortsom_common::Actor;
 use mortsom_scenario_kit::{cleanup::CleanupResult, registry};
@@ -57,7 +57,8 @@ async fn buy_flow_respects_the_existing_spend_cap_before_payment() {
     crate::link();
     let definition = registry::find("happy_buy").expect("happy_buy must be registered");
     let mut fixture = Fixture::new(false).await;
-    fixture.context.amount_sats = 250_001;
+    // One sat over what an order may hold: escrow plus both bonds.
+    fixture.context.amount_sats = SATS + 2 * BOND_POLICY.bond_sats(SATS) + 1;
     assert!((definition.run)(&fixture.context).await.is_err());
     assert_eq!(fixture.actions(), ["create:bob", "take:alice"]);
 }

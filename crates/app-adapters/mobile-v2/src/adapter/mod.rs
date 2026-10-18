@@ -2,13 +2,13 @@
 
 use async_trait::async_trait;
 use mortsom_app_contract::{
-    AdapterError, AppAdapter, AppOrderState, AppProfile, CancelOutcome, Capability, CapabilitySet,
-    DeviceContext, Identity, InvoiceSubmission, OrderDraft, OrderKind, OrderReference,
-    PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
+    AdapterError, AppAdapter, AppOrderState, AppProfile, BondClaim, CancelOutcome, Capability,
+    CapabilitySet, DeviceContext, Identity, InvoiceSubmission, OrderDraft, OrderKind,
+    OrderReference, PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };
 use mortsom_common::Secret;
 
-use crate::screens::{self, invoice, label, nav, onboarding, orders, settings, wallet};
+use crate::screens::{self, bond, invoice, label, nav, onboarding, orders, settings, wallet};
 use crate::selectors::Ids;
 
 /// Profile name.
@@ -55,6 +55,7 @@ impl AppAdapter for MobileV2Adapter {
             Capability::Cancel,
             Capability::Dispute,
             Capability::Rating,
+            Capability::Bond,
             Capability::TestEnvironmentMarker,
         ])
     }
@@ -256,6 +257,48 @@ impl AppAdapter for MobileV2Adapter {
         order: &OrderReference,
     ) -> Result<(), AdapterError> {
         orders::cancel_payment(device, order).await
+    }
+
+    async fn pay_bond_invoice(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+        path: PaymentPath,
+    ) -> Result<PaymentHandoff, AdapterError> {
+        bond::pay_bond_invoice(device, order, path).await
+    }
+
+    async fn decline_bond(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<(), AdapterError> {
+        bond::decline_bond(device, order).await
+    }
+
+    async fn bond_claim(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<Option<BondClaim>, AdapterError> {
+        bond::claim(device, order).await
+    }
+
+    async fn submit_bond_claim_invoice(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+        invoice: &Secret,
+    ) -> Result<String, AdapterError> {
+        bond::submit_claim_invoice(device, order, invoice).await
+    }
+
+    async fn bond_slash_notice(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<Option<String>, AdapterError> {
+        bond::slash_notice(device, order).await
     }
 
     async fn observe_order(

@@ -196,8 +196,19 @@ impl Budget {
 
     /// Sats counted against the run cap: reserved plus settled plus fees.
     fn used(&self) -> u64 {
+        self.used_where(|_| true)
+    }
+
+    /// Sats an order already holds or spent, across every reservation it
+    /// took: an order with a bond and an escrow holds both.
+    fn used_by(&self, order_id: &str) -> u64 {
+        self.used_where(|entry| entry.order_id == order_id)
+    }
+
+    fn used_where(&self, keep: impl Fn(&LedgerEntry) -> bool) -> u64 {
         self.ledger
             .iter()
+            .filter(|entry| keep(entry))
             .map(|e| match e.status {
                 EntryStatus::Reserved | EntryStatus::InFlight => e.reserved_sats,
                 EntryStatus::Settled => e.settled_sats + e.fee_sats,
@@ -207,12 +218,14 @@ impl Budget {
     }
 
     /// Reserves `sats` for `order_id`, refusing before any wallet action if
-    /// either cap would be exceeded.
+    /// either cap would be exceeded. The per-order cap bounds everything
+    /// the order holds together, not each reservation on its own.
     pub fn reserve(&mut self, order_id: &str, sats: u64) -> Result<Reservation, BudgetError> {
-        if sats > self.caps.max_order_sats {
+        let held = self.used_by(order_id).saturating_add(sats);
+        if held > self.caps.max_order_sats {
             return Err(BudgetError::ExceedsOrderCap {
                 order_id: order_id.to_owned(),
-                requested: sats,
+                requested: held,
                 cap: self.caps.max_order_sats,
             });
         }
@@ -484,6 +497,30 @@ mod tests {
         assert_eq!(budget.ledger()[0].status, EntryStatus::Reserved);
         assert_eq!(real.order_id(), "o1");
         budget.release(&real).unwrap();
+    }
+
+    /// A bonded order holds its escrow and its bond at once; together they
+    /// stay under the per-order cap, and a released hold no longer counts.
+    #[test]
+    fn the_per_order_cap_bounds_everything_one_order_holds_together() {
+        let mut budget = Budget::new(SpendCaps::new(1000, 10_000).unwrap());
+        let escrow = budget.reserve("o1", 700).unwrap();
+        let err = budget.reserve("o1", 400).unwrap_err();
+        assert!(matches!(
+            err,
+            BudgetError::ExceedsOrderCap {
+                requested: 1100,
+                cap: 1000,
+                ..
+            }
+        ));
+        let bond = budget.reserve("o1", 300).unwrap();
+        // Another order is bounded on its own.
+        assert!(budget.reserve("o2", 1000).is_ok());
+        budget.release(&bond).unwrap();
+        assert!(budget.reserve("o1", 300).is_ok());
+        budget.commit(&escrow, 700, 1, None).unwrap();
+        assert!(budget.reserve("o1", 1).is_err(), "settled sats still count");
     }
 
     #[test]

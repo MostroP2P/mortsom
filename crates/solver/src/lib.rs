@@ -11,8 +11,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use futures::StreamExt;
 use mortsom_common::Secret;
-use mortsom_scenario_kit::context::DisputeSolver;
-use mostro_core::message::{Action, Message, Payload};
+use mortsom_scenario_kit::context::{BondSlash, DisputeSolver};
+use mostro_core::message::{Action, BondResolution, Message, Payload};
 use mostro_core::prelude::{Transport, WrapOptions, unwrap_message_nip44, wrap_message_with};
 use nostr_sdk::prelude::{
     Client, ClientNotification, Event, Filter, Keys, Kind, PublicKey, RelayUrl,
@@ -23,7 +23,8 @@ use uuid::Uuid;
 
 mod protocol;
 pub use protocol::{
-    Reply, add_solver_message, classify_reply, ruling_message, take_dispute_message,
+    Reply, add_solver_message, classify_reply, ruling_message, ruling_message_with,
+    take_dispute_message,
 };
 
 /// Solver failures. Messages never carry key material.
@@ -291,5 +292,35 @@ impl DisputeSolver for Solver {
         .await
         .map(|_| ())
         .map_err(|e| e.to_string())
+    }
+
+    async fn settle_slashing(&self, order_id: &str, slash: BondSlash) -> Result<(), String> {
+        let id = Uuid::parse_str(order_id).map_err(|e| format!("order id: {e}"))?;
+        self.request(
+            ruling_message_with(id, Action::AdminSettle, Some(resolution(slash))),
+            Action::AdminSettled,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+
+    async fn cancel_slashing(&self, order_id: &str, slash: BondSlash) -> Result<(), String> {
+        let id = Uuid::parse_str(order_id).map_err(|e| format!("order id: {e}"))?;
+        self.request(
+            ruling_message_with(id, Action::AdminCancel, Some(resolution(slash))),
+            Action::AdminCanceled,
+        )
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+}
+
+/// The daemon's shape of a slash decision.
+fn resolution(slash: BondSlash) -> BondResolution {
+    BondResolution {
+        slash_seller: slash.seller,
+        slash_buyer: slash.buyer,
     }
 }

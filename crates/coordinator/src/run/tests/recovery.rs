@@ -573,6 +573,7 @@ async fn payment_attempt_with(
             hash: "c".repeat(64),
             incoming,
             amount_sats: 100,
+            bond: false,
         })
         .unwrap();
     if superseded {
@@ -626,6 +627,7 @@ async fn a_client_stuck_on_payout_pending_resolves_only_with_the_daemons_success
                 hash: "c".repeat(64),
                 incoming: true,
                 amount_sats: 100,
+                bond: false,
             })
             .unwrap();
         let root = journal.root().to_path_buf();

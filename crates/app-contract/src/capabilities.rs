@@ -48,6 +48,9 @@ pub enum Capability {
     Dispute,
     /// Rating a counterpart.
     Rating,
+    /// The anti-abuse bond screen: paying the bond the node asks for, or
+    /// walking away from the take.
+    Bond,
     /// System notifications that route to an order.
     Notifications,
     /// Deep links into orders.
@@ -58,7 +61,7 @@ pub enum Capability {
 
 impl Capability {
     /// Every capability, in declaration order.
-    pub const ALL: [Capability; 20] = [
+    pub const ALL: [Capability; 21] = [
         Capability::Onboarding,
         Capability::CustomNodeSelection,
         Capability::LocalRelayConfiguration,
@@ -76,6 +79,7 @@ impl Capability {
         Capability::Cancel,
         Capability::Dispute,
         Capability::Rating,
+        Capability::Bond,
         Capability::Notifications,
         Capability::DeepLinks,
         Capability::TestEnvironmentMarker,
@@ -101,6 +105,7 @@ impl Capability {
             Capability::Cancel => "cancel",
             Capability::Dispute => "dispute",
             Capability::Rating => "rating",
+            Capability::Bond => "bond",
             Capability::Notifications => "notifications",
             Capability::DeepLinks => "deep-links",
             Capability::TestEnvironmentMarker => "test-environment-marker",

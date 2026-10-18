@@ -170,14 +170,66 @@ pub struct DeclaredLimits {
     pub max_inflight_payouts_per_destination: Option<u32>,
     /// Optional declared concurrent payout dispatch capacity.
     pub payout_dispatch_permits: Option<u32>,
+    /// The anti-abuse bond the daemon was started with (`stack up --bond`),
+    /// absent for a bondless daemon, and then absent from the descriptor
+    /// too, so a bondless stack keeps the fingerprint it had before the
+    /// bond existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bond: Option<DeclaredBond>,
+}
+
+/// The `[anti_abuse_bond]` policy the daemon runs with, as far as a run
+/// needs it: who owes a bond and how it is sized.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct DeclaredBond {
+    /// `take`, `make` or `both`.
+    pub apply_to: String,
+    /// `amount_pct` in basis points (100 is one percent).
+    pub amount_bps: u32,
+    /// `base_amount_sats`.
+    pub base_amount_sats: u64,
+    /// `slash_on_waiting_timeout`.
+    pub slash_on_waiting_timeout: bool,
+    /// `slash_node_share_pct` in basis points.
+    pub node_share_bps: u32,
+    /// `payout_claim_window_days`.
+    pub payout_claim_window_days: u32,
+}
+
+impl DeclaredBond {
+    /// The policy as scenarios read it; `None` when the side is not one
+    /// the daemon knows.
+    pub fn policy(&self) -> Option<mortsom_scenario_kit::BondPolicy> {
+        Some(mortsom_scenario_kit::BondPolicy {
+            apply_to: mortsom_scenario_kit::BondApplyTo::parse(&self.apply_to)?,
+            amount_bps: self.amount_bps,
+            base_amount_sats: self.base_amount_sats,
+            slash_on_waiting_timeout: self.slash_on_waiting_timeout,
+            node_share_bps: self.node_share_bps,
+            payout_claim_window_days: self.payout_claim_window_days,
+        })
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), StackError> {
+        if self.policy().is_none()
+            || self.amount_bps > mortsom_scenario_kit::context::BPS_PER_WHOLE
+            || self.node_share_bps > mortsom_scenario_kit::context::BPS_PER_WHOLE
+            || self.base_amount_sats == 0
+            || self.payout_claim_window_days == 0
+        {
+            return Err(invalid("declared bond policy"));
+        }
+        Ok(())
+    }
 }
 
 impl DeclaredLimits {
-    /// The limits scenarios about payouts drive, in the kit's terms.
+    /// The limits scenarios about payouts and bonds drive, in the kit's terms.
     pub fn payout_limits(&self) -> mortsom_scenario_kit::PayoutLimits {
         mortsom_scenario_kit::PayoutLimits {
             payout_invoice_min_expiry_secs: Some(self.payout_invoice_min_expiry_secs),
             max_inflight_payouts_per_destination: self.max_inflight_payouts_per_destination,
+            bond: self.bond.as_ref().and_then(DeclaredBond::policy),
         }
     }
 }
@@ -196,6 +248,9 @@ impl DeclaredLimits {
             || self.payout_dispatch_permits == Some(0)
         {
             return Err(invalid("declared daemon limits"));
+        }
+        if let Some(bond) = &self.bond {
+            bond.validate()?;
         }
         Ok(())
     }
@@ -370,5 +425,81 @@ mod tests {
         assert!(image.validate().is_err());
         image.reference = format!("@{digest}");
         assert!(image.validate().is_err());
+    }
+
+    fn bond() -> DeclaredBond {
+        DeclaredBond {
+            apply_to: "take".into(),
+            amount_bps: 100,
+            base_amount_sats: 1000,
+            slash_on_waiting_timeout: false,
+            node_share_bps: 5000,
+            payout_claim_window_days: 1,
+        }
+    }
+
+    #[test]
+    fn a_declared_bond_names_a_side_a_share_of_the_order_and_a_floor() {
+        assert!(bond().validate().is_ok());
+        let policy = bond().policy().unwrap();
+        assert_eq!(policy.apply_to, mortsom_scenario_kit::BondApplyTo::Take);
+        assert_eq!(policy.bond_sats(1_000), 1_000);
+        for broken in [
+            DeclaredBond {
+                apply_to: "taker".into(),
+                ..bond()
+            },
+            DeclaredBond {
+                amount_bps: 10_001,
+                ..bond()
+            },
+            DeclaredBond {
+                base_amount_sats: 0,
+                ..bond()
+            },
+            DeclaredBond {
+                node_share_bps: 10_001,
+                ..bond()
+            },
+            DeclaredBond {
+                payout_claim_window_days: 0,
+                ..bond()
+            },
+        ] {
+            assert!(broken.validate().is_err(), "{broken:?}");
+        }
+    }
+
+    /// A limits file or descriptor written before the bond existed still
+    /// reads, and a bondless daemon declares no policy to the run.
+    #[test]
+    fn limits_without_a_bond_still_parse_and_declare_none() {
+        let limits: DeclaredLimits = toml::from_str(
+            "order_expiration_secs = 600\nhold_invoice_expiry_secs = 120\n\
+             buyer_invoice_deadline_secs = 120\npayout_invoice_min_expiry_secs = 300\n",
+        )
+        .unwrap();
+        assert_eq!(limits.bond, None);
+        assert_eq!(limits.payout_limits().bond, None);
+        let bonded = DeclaredLimits {
+            bond: Some(bond()),
+            ..limits
+        };
+        assert!(bonded.validate().is_ok());
+        assert_eq!(
+            bonded
+                .payout_limits()
+                .bond
+                .map(|policy| policy.base_amount_sats),
+            Some(1000)
+        );
+        let broken = DeclaredLimits {
+            bond: Some(DeclaredBond {
+                base_amount_sats: 0,
+                ..bond()
+            }),
+            ..bonded
+        };
+        assert!(broken.validate().is_err());
     }
 }

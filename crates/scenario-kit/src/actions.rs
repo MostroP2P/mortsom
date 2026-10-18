@@ -283,6 +283,7 @@ pub async fn wait_app_label(
     let device = session.device(ctx.ui_timeout);
     let normalize = |raw: &str| raw.trim().to_ascii_lowercase().replace(['_', ' '], "-");
     let infra: Mutex<InfraFailures> = Mutex::new(InfraFailures::default());
+    let last: Mutex<LastSeen> = Mutex::new(LastSeen::default());
     let found = wait_until(ctx.state_timeout, STATE_POLL, || async {
         let observed = ctx.adapter.observe_order_detail(&device, order).await;
         if let Some(dead) = infra
@@ -291,6 +292,13 @@ pub async fn wait_app_label(
             .observe(observed.as_ref().map(|_| ()))
         {
             return Some(Err(dead));
+        }
+        {
+            let mut seen = last.lock().unwrap_or_else(|p| p.into_inner());
+            match &observed {
+                Ok(state) => seen.read(state.raw_label.clone()),
+                Err(e) => seen.failed(e.to_string()),
+            }
         }
         match observed {
             Ok(state) if labels.contains(&normalize(&state.raw_label).as_str()) => {
@@ -309,11 +317,12 @@ pub async fn wait_app_label(
     match found {
         Some(result) => result,
         None => Err(ScenarioError::product(format!(
-            "order {} did not show {} on {} within {:?}",
+            "order {} did not show {} on {} within {:?}; the app {}",
             order.id,
             labels.join("|"),
             actor.as_str(),
-            ctx.state_timeout
+            ctx.state_timeout,
+            last.lock().unwrap_or_else(|p| p.into_inner())
         ))),
     }
 }
@@ -587,18 +596,29 @@ pub async fn wait_relay_state(
 #[path = "actions/hold.rs"]
 mod hold;
 pub use hold::{expect_hold_refunded, pay_hold_invoice, settle_hold_payment};
+#[path = "actions/bond.rs"]
+mod bond;
+pub use bond::{
+    bond_policy, claim_bond_payout, decline_bond, expect_bond_released, expect_bond_slash_notice,
+    expect_bond_slashed, fail_bond_claim, pay_bond, require_room_for_bond_and_escrow,
+    wait_bond_claim,
+};
 #[path = "actions/rating.rs"]
 mod rating;
 pub use rating::{RATING_EVENT_KIND, rate_counterpart, wait_rating_published};
 #[path = "actions/dispute.rs"]
 mod dispute;
 pub use dispute::{
-    DISPUTE_EVENT_KIND, Dispute, dispute_status, open_dispute, solver_cancels, solver_settles,
-    solver_takes_dispute, wait_dispute_opened, wait_dispute_status,
+    DISPUTE_EVENT_KIND, Dispute, dispute_status, open_dispute, solver_cancels,
+    solver_rules_slashing, solver_settles, solver_takes_dispute, wait_dispute_opened,
+    wait_dispute_status,
 };
 #[path = "actions/relay.rs"]
 mod relay;
-pub use relay::{expect_relay_state_absent, relay_cursor, relay_order_tag, wait_relay_state_since};
+pub use relay::{
+    expect_relay_silent, expect_relay_state_absent, relay_cursor, relay_order_tag,
+    wait_relay_state_since,
+};
 
 mod buyer_invoice;
 pub use buyer_invoice::BuyerInvoice;
@@ -745,6 +765,7 @@ pub async fn expect_payout_settled(
                     hash: expected_hash,
                     incoming: true,
                     amount_sats,
+                    ..
                 } if order_id == &order.id && wallet == actor.as_str() && expected_hash == hash => {
                     Some(*amount_sats)
                 }

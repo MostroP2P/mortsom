@@ -3,7 +3,19 @@
 Read [spec.md](../spec.md) first; it is normative. This file says where the work is and what comes next.
 Repository content is English; the operator conversation is Spanish.
 
-## Where things stand (2026-10-14)
+## Where things stand (2026-10-18)
+
+**The anti-abuse bond family (spec 8.8) is implemented and ran live on Linux: 14 of 15 pass.** The
+fifteenth, `taker_bond_expires_unpaid`, fails on the app: a taker's lapsed bond stays in My Trades
+(MostroP2P/app#849, fixed on the app's `fix/taker-bond-lapse`). It runs on its own stack profile,
+`stack up --bond` (item 9 below), against mostrod v0.20.0. Run ids are in
+[the acceptance ledger](acceptance-ledger.md). Web was not run (no Chromium on this host).
+
+The stack on this host is the bonded one (daemon `ef1ca75a…`, mostrod `main` at `f1f7a62`); every other
+family is skipped on it until `stack up --replace`. No recovery journal is pending. A run started two hours
+after the newest block found mostrod drained; until #87 lands, mine a block first (runbook 2.5).
+
+## Where things stood (2026-10-14)
 
 **Linux is re-verified against app `main` (`ae3fe214`) and mostrod v0.19.3: 26 passed, 0 failed, 8 skipped.**
 That covers the twenty cells of the five specified families, plus, for the first time live,
@@ -81,9 +93,16 @@ resolve (see the caveats below). It is up, and no recovery journal is pending on
    since #54 was verified locally only (see *Last verification*).
 7. **Open issues**: #46 (retry prepared abandonment cleanup after journal resolution) and #48 (split the
    public core from private adversarial scenarios).
-8. **Further families**, when the operator asks: anti-abuse bonds and adversarial messages (spec section
-   8.1; section 14 is the roadmap). Chat, dispute chat, NWC, account backup and import, and notifications
-   have no scenarios yet.
+8. **Further families**, when the operator asks: adversarial messages (spec section 8.1; section 14 is the
+   roadmap), and what the bond family leaves out (spec 8.8): the lock race between two takers needs a third
+   actor; a forfeited claim and a slash the node keeps whole need other stack policies; a range maker's bond
+   is sized from the market price. Chat, dispute chat, NWC, account backup and import, and notifications
+   have no scenarios yet: the app's notification cards carry no automation identifiers, so neither the
+   "Order published" card nor the bond notices can be read black-box.
+9. **The bond family runs on its own stack.** `stack up --bond --replace` for it, `stack up --replace` for
+   every other family; each mints a new daemon identity and so a new client build (spec 8.1). The ported
+   September work (`feat/bond-family`, never merged, 29 commits) is folded into `feat/bond-scenarios`; that
+   old branch is kept locally for reference only.
 
 ## Running a live cell
 
@@ -130,6 +149,10 @@ To watch the daemon at the same time: `docker logs -f mortsom-regtest-mostro-1`,
   machine awake during Web families.
 - A Web run whose browsers fail to start leaves an empty journal that blocks the next desktop run until
   `cleanup` removes it. If it happens twice in a row, check for a stray ChromeDriver from an earlier attempt.
+- **A stack whose newest block is about two hours old stops trading** (runbook 2.5): LND reports itself
+  unsynced, and mostrod rejects new orders and takes and pays no bond claim. Mine one block and wait five
+  minutes for the daemon to leave maintenance mode. Seen on 2026-10-18 in the second bond family run, which
+  started 1 h 46 min after `stack up`; #87 is to make the run keep the tip fresh itself.
 
 ## Invariants to preserve
 
@@ -141,6 +164,12 @@ identities, exact bundle and stack; missing or tampered storage refuses. SIGKILL
 completed task after fmt, strict clippy and meaningful tests.
 
 ## Last verification
+
+On 2026-10-18, on `feat/bond-scenarios` (Rust 1.99.0): formatting and strict workspace clippy clean, 1037
+workspace tests passed, each commit compiling on its own. Live: the bond family on Linux, as in the ledger.
+GitHub Actions has not run on it.
+
+### Before (2026-10-14)
 
 On 2026-10-14, on the local integration of #67 to #76 (Rust 1.99.0): formatting and strict workspace
 clippy clean, 864 workspace tests passed (each PR branch also passes on its own). Live: the Linux catalogue above, `20261014T045514Z-5722ecfe2ca9`

@@ -216,7 +216,8 @@ async fn a_pending_hold_settles_after_release_and_refunds_after_cancel() {
             payment_hash: "aa".into(),
             reservation,
         },
-    );
+    )
+    .unwrap();
 
     let obs = settle_hold_payment(&ctx, &order).await.unwrap().unwrap();
 
@@ -246,7 +247,8 @@ async fn a_pending_hold_settles_after_release_and_refunds_after_cancel() {
             payment_hash: "bb".into(),
             reservation,
         },
-    );
+    )
+    .unwrap();
 
     expect_hold_refunded(&ctx, &order2).await.unwrap();
 

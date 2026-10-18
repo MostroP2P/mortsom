@@ -343,3 +343,14 @@ mod draft_tests {
         assert_eq!(back, range);
     }
 }
+
+/// A slashed bond's share on offer to this user, as the claim screen
+/// shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BondClaim {
+    /// Sats on offer.
+    pub amount_sats: u64,
+    /// The claim's phase as rendered: `pending`, `submitted`,
+    /// `acknowledged`, `completed` or `expired`.
+    pub status: String,
+}

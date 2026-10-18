@@ -2,6 +2,7 @@
 //! adversarial scenarios expressed against the scenario kit. Scenarios are
 //! typed domain narratives; they self-register with the kit's registry.
 
+pub mod bond;
 pub mod cancellation;
 pub mod dispute;
 pub mod expiration;
@@ -134,6 +135,7 @@ pub fn link() {
     dispute::link();
     expiration::link();
     payment_failure::link();
+    bond::link();
     recovery::link();
     regression::link();
 }

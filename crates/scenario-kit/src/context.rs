@@ -192,6 +192,106 @@ pub struct PayoutLimits {
     /// it stops dispatching to that destination
     /// (`[lightning].max_inflight_payouts_per_destination`).
     pub max_inflight_payouts_per_destination: Option<u32>,
+    /// The anti-abuse bond the daemon was started with
+    /// (`[anti_abuse_bond]`), `None` for a bondless daemon.
+    pub bond: Option<BondPolicy>,
+}
+
+/// Which side the daemon asks a bond from (`[anti_abuse_bond].apply_to`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BondApplyTo {
+    /// The taker, right after the take.
+    Take,
+    /// The maker, before the order is published.
+    Make,
+    /// Both, each at their own moment.
+    Both,
+}
+
+impl BondApplyTo {
+    /// Parses the daemon's own spelling.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "take" => Some(Self::Take),
+            "make" => Some(Self::Make),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+
+    /// The daemon's own spelling.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Take => "take",
+            Self::Make => "make",
+            Self::Both => "both",
+        }
+    }
+
+    /// Whether a taker posts a bond under this policy.
+    pub fn taker_posts(self) -> bool {
+        matches!(self, Self::Take | Self::Both)
+    }
+}
+
+/// The anti-abuse bond policy the daemon was started with, as the stack
+/// declares it: enough to know who owes a bond and how much.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BondPolicy {
+    /// Who posts a bond.
+    pub apply_to: BondApplyTo,
+    /// `amount_pct` in basis points: 100 is one percent of the order.
+    pub amount_bps: u32,
+    /// The floor in sats a bond never goes under.
+    pub base_amount_sats: u64,
+    /// Whether a waiting-state timeout slashes the responsible party's bond.
+    pub slash_on_waiting_timeout: bool,
+    /// `slash_node_share_pct` in basis points: the share of a slashed bond
+    /// the node keeps; the rest is paid to the winning counterparty.
+    pub node_share_bps: u32,
+    /// Days the winner has to claim their share.
+    pub payout_claim_window_days: u32,
+}
+
+/// Basis points in a whole.
+pub const BPS_PER_WHOLE: u32 = 10_000;
+
+impl BondPolicy {
+    /// The bond the daemon asks for an order of `amount_sats`:
+    /// `max(round(amount_pct * amount_sats), base_amount_sats)`, computed
+    /// the way the daemon computes it, in floating point from the fraction
+    /// its settings carry, so a tie rounds the same way on both sides.
+    pub fn bond_sats(&self, amount_sats: u64) -> u64 {
+        let fraction = f64::from(self.amount_bps) / f64::from(BPS_PER_WHOLE);
+        let by_pct = (amount_sats as f64 * fraction).round();
+        // Rounded and non-negative: the cast saturates at u64::MAX.
+        (by_pct as u64).max(self.base_amount_sats)
+    }
+
+    /// What the winning counterparty is offered from a slashed bond of
+    /// `bond_sats`: the bond less the node's share, floored the way the
+    /// daemon floors it (`floor(amount × pct)`), so the two add up exactly.
+    pub fn counterparty_share_sats(&self, bond_sats: u64) -> u64 {
+        let fraction = f64::from(self.node_share_bps) / f64::from(BPS_PER_WHOLE);
+        let node_share = (bond_sats as f64 * fraction).floor() as u64;
+        bond_sats.saturating_sub(node_share)
+    }
+
+    /// Whether a maker posts a bond under this policy.
+    pub fn maker_posts(&self) -> bool {
+        matches!(self.apply_to, BondApplyTo::Make | BondApplyTo::Both)
+    }
+}
+
+/// Which bonds a solver's ruling slashes: the daemon's `BondResolution`,
+/// decoupled from whether the trade is settled or cancelled. Neither is
+/// the release-by-default every legacy ruling means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct BondSlash {
+    /// Slash the seller's bond.
+    pub seller: bool,
+    /// Slash the buyer's bond.
+    pub buyer: bool,
 }
 
 /// A dispute solver registered with the daemon under test.
@@ -212,6 +312,16 @@ pub trait DisputeSolver: Send + Sync {
     /// Cancels the disputed `order_id` in the seller's favour: the escrow
     /// is returned.
     async fn cancel(&self, order_id: &str) -> Result<(), String>;
+    /// Settles `order_id` for the buyer and slashes the bonds `slash`
+    /// names; the rest are released.
+    async fn settle_slashing(&self, _order_id: &str, _slash: BondSlash) -> Result<(), String> {
+        Err("this solver cannot rule on bonds".into())
+    }
+    /// Cancels `order_id` for the seller and slashes the bonds `slash`
+    /// names; the rest are released.
+    async fn cancel_slashing(&self, _order_id: &str, _slash: BondSlash) -> Result<(), String> {
+        Err("this solver cannot rule on bonds".into())
+    }
 }
 
 /// A hold-invoice payment that is in flight but not yet settled.
@@ -338,10 +448,24 @@ impl Context {
         self.evidence.protect(secret);
     }
 
-    /// Records a hold payment whose settlement is deferred to release.
-    pub fn record_pending_hold(&self, order_id: &str, pending: PendingHold) {
+    /// Records a hold payment whose settlement is deferred to release, in
+    /// the slot `key` names (the order's escrow, or an actor's bond on it).
+    /// A slot already holding a payment is never replaced: the first one
+    /// would be left in flight with nothing to resolve it.
+    pub fn record_pending_hold(
+        &self,
+        key: &str,
+        pending: PendingHold,
+    ) -> Result<(), ScenarioError> {
         let mut holds = self.pending_holds.lock().unwrap_or_else(|p| p.into_inner());
-        holds.insert(order_id.to_owned(), pending);
+        if let Some(held) = holds.get(key) {
+            return Err(ScenarioError::environment(format!(
+                "slot {key} already holds payment {} in flight; a second hold for it would hide the first",
+                held.payment_hash
+            )));
+        }
+        holds.insert(key.to_owned(), pending);
+        Ok(())
     }
 
     /// Removes and returns the pending hold for `order_id`, if any.
@@ -389,5 +513,83 @@ mod tests {
 
         ctx.env.lane = Lane::Canary;
         assert!(ctx.require_mainnet().is_ok());
+    }
+
+    fn one_percent_floor_1000() -> BondPolicy {
+        BondPolicy {
+            apply_to: BondApplyTo::Take,
+            amount_bps: 100,
+            base_amount_sats: 1000,
+            slash_on_waiting_timeout: false,
+            node_share_bps: 5000,
+            payout_claim_window_days: 1,
+        }
+    }
+
+    /// The winner's share is the bond less the node's floored share.
+    #[test]
+    fn the_counterparty_share_is_what_the_node_does_not_keep() {
+        let policy = one_percent_floor_1000();
+        assert_eq!(policy.counterparty_share_sats(1000), 500);
+        assert_eq!(
+            policy.counterparty_share_sats(1001),
+            501,
+            "the node floors its share"
+        );
+        assert_eq!(
+            BondPolicy {
+                node_share_bps: 10_000,
+                ..policy
+            }
+            .counterparty_share_sats(1000),
+            0
+        );
+        assert!(!policy.maker_posts());
+        assert!(
+            BondPolicy {
+                apply_to: BondApplyTo::Both,
+                ..policy
+            }
+            .maker_posts()
+        );
+    }
+
+    /// The daemon's formula: the percentage, rounded, never under the floor.
+    #[test]
+    fn the_bond_is_the_rounded_percentage_or_the_floor_whichever_is_more() {
+        let policy = one_percent_floor_1000();
+        assert_eq!(
+            policy.bond_sats(1_000),
+            1_000,
+            "1% of 1000 is under the floor"
+        );
+        assert_eq!(policy.bond_sats(100_000), 1_000, "exactly the floor");
+        assert_eq!(policy.bond_sats(250_000), 2_500);
+        assert_eq!(policy.bond_sats(250_050), 2_501, "rounds half up");
+        assert_eq!(policy.bond_sats(250_049), 2_500);
+        assert_eq!(
+            BondPolicy {
+                amount_bps: 0,
+                ..policy
+            }
+            .bond_sats(1_000_000),
+            1_000,
+            "no percentage: the floor"
+        );
+    }
+
+    #[test]
+    fn apply_to_is_spelled_the_daemon_way_and_says_who_posts() {
+        for (spelling, expected, taker) in [
+            ("take", BondApplyTo::Take, true),
+            ("make", BondApplyTo::Make, false),
+            ("both", BondApplyTo::Both, true),
+        ] {
+            let parsed = BondApplyTo::parse(spelling).unwrap();
+            assert_eq!(parsed, expected);
+            assert_eq!(parsed.as_str(), spelling);
+            assert_eq!(parsed.taker_posts(), taker);
+        }
+        assert!(BondApplyTo::parse("taker").is_none());
     }
 }

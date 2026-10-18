@@ -5,6 +5,7 @@
 //! sweeps cleanup, and writes the joined evidence.
 
 mod attribution;
+mod bond_gate;
 mod execute;
 mod needs;
 mod observer;
@@ -190,6 +191,12 @@ pub async fn run_scenarios(
     );
     summary.results.extend(gated);
     let (runnable, gated) = gate_solver(&summary.app_profile, runnable, options.stack.is_some());
+    summary.results.extend(gated);
+    let bonded = options
+        .stack
+        .as_ref()
+        .map(|stack| stack.declared_limits.bond.is_some());
+    let (runnable, gated) = bond_gate::gate_bond(&summary.app_profile, runnable, bonded);
     summary.results.extend(gated);
     summary.results.extend(needs_gated);
     if runnable.is_empty() {

@@ -81,6 +81,7 @@ pub(super) async fn prepare(
             hash: hash.clone(),
             incoming: true,
             amount_sats: requested,
+            bond: false,
         })
         .map_err(ScenarioError::environment)?;
     if ctx.adapter.buyer_invoice_amount(&device, order).await? != requested {

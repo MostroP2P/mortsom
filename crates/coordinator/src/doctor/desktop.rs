@@ -253,7 +253,7 @@ async fn check_network(
     config: &Config,
     net: &dyn NetProbes,
     report: &mut DoctorReport,
-) -> Option<String> {
+) -> Option<mortsom_environment::daemon::DaemonInfo> {
     let status = if net.local_port(config.relay.host_port).await == super::PortState::InUse {
         CheckStatus::Pass
     } else {
@@ -264,10 +264,8 @@ async fn check_network(
         status,
         format!("persistent relay port {}", config.relay.host_port),
     );
-    let version = if let Some(key) = config.mobile.mostro_pubkey() {
-        net::check_daemon(net, &config.mostro.relays, key, None, report)
-            .await
-            .and_then(|info| info.tag("mostro_version").map(str::to_owned))
+    let info = if let Some(key) = config.mobile.mostro_pubkey() {
+        net::check_daemon(net, &config.mostro.relays, key, None, report).await
     } else {
         None
     };
@@ -295,13 +293,15 @@ async fn check_network(
             );
         }
     }
-    version
+    info
 }
 
 /// Read-only daemon and wallet facts required before desktop clients start.
 pub struct DesktopPreflight {
     /// Version observed in the daemon's signed info event.
     pub daemon_version: Option<String>,
+    /// The daemon's signed info event, as observed: what it says it runs.
+    pub daemon_info: Option<mortsom_environment::daemon::DaemonInfo>,
     /// Checks retained in the run's evidence.
     pub checks: DoctorReport,
 }
@@ -309,7 +309,10 @@ pub struct DesktopPreflight {
 /// Requires observed protocol/version/readiness, without any payment or order operation.
 pub async fn desktop_preflight(config: &Config, net: &dyn NetProbes) -> DesktopPreflight {
     let mut checks = DoctorReport::default();
-    let mut daemon_version = check_network(config, net, &mut checks).await;
+    let daemon_info = check_network(config, net, &mut checks).await;
+    let mut daemon_version = daemon_info
+        .as_ref()
+        .and_then(|info| info.tag("mostro_version").map(str::to_owned));
     if daemon_version.as_deref().is_none_or(|value| {
         value.is_empty()
             || value.len() > 64
@@ -344,6 +347,7 @@ pub async fn desktop_preflight(config: &Config, net: &dyn NetProbes) -> DesktopP
     }
     DesktopPreflight {
         daemon_version,
+        daemon_info,
         checks,
     }
 }

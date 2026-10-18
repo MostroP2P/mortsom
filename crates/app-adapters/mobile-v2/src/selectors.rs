@@ -129,6 +129,28 @@ impl Ids {
     pub const PAY_ORDER_ID: &'static str = "pay.order_id";
     pub const PAY_NWC: &'static str = "pay.nwc";
     pub const PAY_CANCEL: &'static str = "pay.cancel";
+    // Anti-abuse bond: the pay-bond screen a take lands on when the node
+    // asks for a bond, and the trade detail's way back to it.
+    pub const TRADE_PAY_BOND: &'static str = "trade.payBond";
+    pub const MY_ORDER_PAY_BOND: &'static str = "order.payBond";
+    pub const BOND_INVOICE_TEXT: &'static str = "bond.invoice.text";
+    pub const BOND_ORDER_ID: &'static str = "bond.order_id";
+    pub const BOND_EXPLAINER: &'static str = "bond.explainer";
+    pub const BOND_CANCEL: &'static str = "bond.cancel";
+    pub const BOND_CANCEL_CONFIRM: &'static str = "bond.cancel.confirm";
+    pub const BOND_REMOVE_FROM_DEVICE: &'static str = "bond.remove_from_device";
+    // A slashed bond: the durable notice on the loser's trade, and the
+    // winner's claim of their share, from the trade detail or the claim
+    // screen a trade-less claim opens on its own.
+    pub const TRADE_BOND_SLASHED: &'static str = "trade.bondSlashed";
+    pub const TRADE_BOND_CLAIM: &'static str = "trade.bondClaim";
+    pub const TRADE_BOND_CLAIM_OPEN: &'static str = "trade.bondClaim.open";
+    pub const BOND_CLAIM_ORDER_ID: &'static str = "bond.claim.order_id";
+    pub const BOND_CLAIM_AMOUNT: &'static str = "bond.claim.amount";
+    pub const BOND_CLAIM_STATUS: &'static str = "bond.claim.status";
+    pub const BOND_CLAIM_TEXT: &'static str = "bond.claim.text";
+    pub const BOND_CLAIM_SUBMIT: &'static str = "bond.claim.submit";
+    pub const BOND_CLAIM_MANUAL: &'static str = "bond.claim.manual";
 
     /// Every static identifier, for contract tests.
     pub const ALL: &'static [&'static str] = &[
@@ -221,6 +243,23 @@ impl Ids {
         Self::PAY_ORDER_ID,
         Self::PAY_NWC,
         Self::PAY_CANCEL,
+        Self::TRADE_PAY_BOND,
+        Self::MY_ORDER_PAY_BOND,
+        Self::BOND_INVOICE_TEXT,
+        Self::BOND_ORDER_ID,
+        Self::BOND_EXPLAINER,
+        Self::BOND_CANCEL,
+        Self::BOND_CANCEL_CONFIRM,
+        Self::BOND_REMOVE_FROM_DEVICE,
+        Self::TRADE_BOND_SLASHED,
+        Self::TRADE_BOND_CLAIM,
+        Self::TRADE_BOND_CLAIM_OPEN,
+        Self::BOND_CLAIM_ORDER_ID,
+        Self::BOND_CLAIM_AMOUNT,
+        Self::BOND_CLAIM_STATUS,
+        Self::BOND_CLAIM_TEXT,
+        Self::BOND_CLAIM_SUBMIT,
+        Self::BOND_CLAIM_MANUAL,
     ];
 
     /// Card of the node `pubkey` (hex) on the first run's node choice.

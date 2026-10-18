@@ -307,9 +307,10 @@ impl RecoveryJournal for FileJournal {
             wallet,
             hash,
             incoming,
+            bond,
             ..
         } = &event
-            && history.events.iter().any(|known| matches!(known, RecoveryEvent::PaymentExpected { order_id: order, wallet: actor, hash: known_hash, incoming: direction, .. } if known_hash == hash || (order == order_id && actor == wallet && direction == incoming && !superseded(&history.events, actor, known_hash)))) {
+            && history.events.iter().any(|known| matches!(known, RecoveryEvent::PaymentExpected { order_id: order, wallet: actor, hash: known_hash, incoming: direction, bond: known_bond, .. } if known_hash == hash || (order == order_id && actor == wallet && direction == incoming && known_bond == bond && !superseded(&history.events, actor, known_hash)))) {
                 return Err("a payment was already prepared for this order and actor; refusing replay".into());
         }
         if let RecoveryEvent::PaymentSuperseded {

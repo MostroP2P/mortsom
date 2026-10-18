@@ -1,6 +1,7 @@
 //! The messages a solver sends and how the daemon's answers are read.
 //! Pure: unit tested without a relay.
 
+use mostro_core::message::BondResolution;
 use mostro_core::message::{Action, Message, Payload};
 use nostr_sdk::prelude::{PublicKey, ToBech32};
 use uuid::Uuid;
@@ -55,7 +56,24 @@ pub fn take_dispute_message(dispute_id: Uuid) -> Message {
 /// from it, unlike the take, which carries the dispute id), and the
 /// dispute must already be this solver's.
 pub fn ruling_message(order_id: Uuid, ruling: Action) -> Message {
-    Message::new_dispute(Some(order_id), Some(request_id()), None, ruling, None)
+    ruling_message_with(order_id, ruling, None)
+}
+
+/// A ruling with a bond resolution: which bonds the daemon slashes along
+/// with the settle or cancel. `None` is the legacy ruling, which releases
+/// every bond.
+pub fn ruling_message_with(
+    order_id: Uuid,
+    ruling: Action,
+    resolution: Option<BondResolution>,
+) -> Message {
+    Message::new_dispute(
+        Some(order_id),
+        Some(request_id()),
+        None,
+        ruling,
+        resolution.map(Payload::BondResolution),
+    )
 }
 
 /// Reads a daemon message as the answer to a request that expects
@@ -126,6 +144,31 @@ mod tests {
             ruling_message(order, Action::AdminSettle)
                 .get_inner_message_kind()
                 .request_id
+        );
+    }
+
+    /// A ruling that slashes carries the resolution the daemon reads; a
+    /// plain ruling carries none, which releases every bond.
+    #[test]
+    fn a_ruling_carries_its_bond_resolution_and_still_verifies() {
+        let order = Uuid::new_v4();
+        let resolution = BondResolution {
+            slash_seller: false,
+            slash_buyer: true,
+        };
+        let message = ruling_message_with(order, Action::AdminCancel, Some(resolution.clone()));
+        let kind = message.get_inner_message_kind();
+        assert_eq!(kind.action, Action::AdminCancel);
+        assert!(kind.verify());
+        assert!(matches!(
+            &kind.payload,
+            Some(Payload::BondResolution(carried)) if *carried == resolution
+        ));
+        assert!(
+            ruling_message(order, Action::AdminSettle)
+                .get_inner_message_kind()
+                .payload
+                .is_none()
         );
     }
 
