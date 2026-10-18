@@ -86,6 +86,35 @@ impl ChainTip for ComposeChain<'_> {
     }
 }
 
+/// The chain of an owned stack whose layout could not be read when the
+/// run started: every look fails with why, so the run's `chain-tip` check
+/// fails closed instead of skipping a stack that may still run stale.
+pub struct UnreadableChain {
+    reason: String,
+}
+
+impl UnreadableChain {
+    /// A chain that answers every call with `reason`.
+    pub fn new(reason: String) -> Self {
+        Self { reason }
+    }
+
+    fn error(&self) -> StackError {
+        StackError::Configuration(format!("the stack's layout is unreadable: {}", self.reason))
+    }
+}
+
+#[async_trait]
+impl ChainTip for UnreadableChain {
+    async fn tip(&self) -> Result<Tip, StackError> {
+        Err(self.error())
+    }
+
+    async fn mine_block(&self) -> Result<(), StackError> {
+        Err(self.error())
+    }
+}
+
 #[derive(Deserialize)]
 struct ChainInfo {
     chain: String,

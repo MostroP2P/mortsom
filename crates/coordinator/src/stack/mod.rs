@@ -18,7 +18,7 @@ mod status;
 mod up;
 
 pub use bond::{describe as describe_bond, verify_advertised as verify_advertised_bond};
-pub use chain::{ChainTip, ComposeChain, Tip};
+pub use chain::{ChainTip, ComposeChain, Tip, UnreadableChain};
 pub use compose::Compose;
 pub use connections::credential_reference;
 pub use daemon::DaemonSource;

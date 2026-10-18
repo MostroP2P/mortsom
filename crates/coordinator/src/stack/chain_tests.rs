@@ -167,6 +167,26 @@ async fn a_bitcoind_that_does_not_answer_is_an_error() {
     assert!(error.to_string().contains("not running"), "{error}");
 }
 
+/// A stack whose layout can no longer be read keeps a chain all the same,
+/// one that fails every look: the run's `chain-tip` check then fails
+/// instead of being skipped on a stack still running with a stale tip.
+#[tokio::test]
+async fn a_chain_whose_layout_is_gone_fails_every_look() {
+    // Arrange
+    let chain = UnreadableChain::new("stack directory gone".into());
+
+    // Act
+    let tip = chain.tip().await.unwrap_err();
+    let mined = chain.mine_block().await.unwrap_err();
+
+    // Assert
+    assert!(tip.to_string().contains("stack directory gone"), "{tip}");
+    assert!(
+        mined.to_string().contains("stack directory gone"),
+        "{mined}"
+    );
+}
+
 #[test]
 fn refuses_replies_that_are_not_what_bitcoind_prints() {
     assert!(chain_info("error code: -28 Loading block index").is_err());

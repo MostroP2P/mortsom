@@ -236,9 +236,7 @@ async fn run_once(
     let deps = RunDeps {
         desktop_factory: &crate::run::RealDesktopFactory,
         net: Some(&net),
-        chain: chain
-            .as_ref()
-            .map(|chain| chain as &dyn crate::stack::ChainTip),
+        chain: Some(chain.as_ref()),
         docker: Arc::new(docker),
         probe: Arc::new(NostrProbe),
         adapter,
@@ -274,15 +272,15 @@ async fn run_once(
 
 /// The chain of the Mortsom-owned stack in `stack_dir`, which the run was
 /// just attached to: what keeps its tip fresh. Attaching already read the
-/// same layout, so a failure here is a directory gone since, and says so.
-pub(super) fn owned_chain(
-    stack_dir: &std::path::Path,
-) -> Option<crate::stack::ComposeChain<'static>> {
+/// same layout, so a failure here is a directory gone since. The run still
+/// gets a chain, one that fails every look, so its `chain-tip` check fails
+/// closed instead of being skipped on a stack that may run stale.
+pub(super) fn owned_chain(stack_dir: &std::path::Path) -> Box<dyn crate::stack::ChainTip> {
     match crate::stack::Layout::new(stack_dir) {
-        Ok(layout) => Some(crate::stack::ComposeChain::new(&layout, &TokioRunner)),
+        Ok(layout) => Box::new(crate::stack::ComposeChain::new(&layout, &TokioRunner)),
         Err(error) => {
-            tracing::warn!(%error, "the chain tip is not kept fresh");
-            None
+            tracing::warn!(%error, "the chain tip cannot be kept fresh");
+            Box::new(crate::stack::UnreadableChain::new(error.to_string()))
         }
     }
 }

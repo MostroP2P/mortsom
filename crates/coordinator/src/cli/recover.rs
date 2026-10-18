@@ -276,9 +276,7 @@ async fn recover(
     let deps = RunDeps {
         desktop_factory: &crate::run::RealDesktopFactory,
         net: Some(&net),
-        chain: chain
-            .as_ref()
-            .map(|chain| chain as &dyn crate::stack::ChainTip),
+        chain: Some(chain.as_ref()),
         docker: Arc::new(DockerCli::default()),
         probe: Arc::new(NostrProbe),
         adapter,
