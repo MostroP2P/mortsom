@@ -11,7 +11,7 @@ use mortsom_ui_driver::ui::UiSession;
 use crate::capabilities::CapabilitySet;
 use crate::error::AdapterError;
 use crate::types::{
-    AppOrderState, AppProfile, CancelOutcome, Identity, InvoiceSubmission, OrderDraft,
+    AppOrderState, AppProfile, BondClaim, CancelOutcome, Identity, InvoiceSubmission, OrderDraft,
     OrderReference, PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };
 
@@ -218,6 +218,67 @@ pub trait AppAdapter: Send + Sync {
         _order: &OrderReference,
     ) -> Result<(), AdapterError> {
         Err(AdapterError::contract("opening a dispute is not supported"))
+    }
+    /// Hands off the anti-abuse bond invoice along `path`, from the
+    /// pay-bond screen the app opens after a take on a bonded node, with
+    /// the same meaning as [`Self::pay_hold_invoice`]: on
+    /// [`PaymentPath::ExternalWallet`] the app is left waiting and the
+    /// caller pays what comes back.
+    async fn pay_bond_invoice(
+        &self,
+        _device: &DeviceContext<'_>,
+        _order: &OrderReference,
+        _path: PaymentPath,
+    ) -> Result<PaymentHandoff, AdapterError> {
+        Err(AdapterError::contract(
+            "paying an anti-abuse bond is not supported",
+        ))
+    }
+    /// Walks away from a take parked on its bond, from the pay-bond screen:
+    /// nothing was paid and the order stays in the book for others.
+    async fn decline_bond(
+        &self,
+        _device: &DeviceContext<'_>,
+        _order: &OrderReference,
+    ) -> Result<(), AdapterError> {
+        Err(AdapterError::contract(
+            "declining an anti-abuse bond is not supported",
+        ))
+    }
+    /// Reads the claim of a slashed bond's share for `order`, as the app
+    /// offers it: `None` when the app shows no claim for the order.
+    async fn bond_claim(
+        &self,
+        _device: &DeviceContext<'_>,
+        _order: &OrderReference,
+    ) -> Result<Option<BondClaim>, AdapterError> {
+        Err(AdapterError::contract(
+            "reading a bond payout claim is not supported",
+        ))
+    }
+    /// Types `invoice` into the claim screen's form for `order` and sends
+    /// it; returns the claim's phase as the screen reads it afterwards.
+    async fn submit_bond_claim_invoice(
+        &self,
+        _device: &DeviceContext<'_>,
+        _order: &OrderReference,
+        _invoice: &Secret,
+    ) -> Result<String, AdapterError> {
+        Err(AdapterError::contract(
+            "claiming a bond payout is not supported",
+        ))
+    }
+    /// The cause the app shows on `order`'s trade for this user's own
+    /// slashed bond (`dispute` or `timeout`), or `None` when the trade
+    /// carries no such notice or is no longer listed.
+    async fn bond_slash_notice(
+        &self,
+        _device: &DeviceContext<'_>,
+        _order: &OrderReference,
+    ) -> Result<Option<String>, AdapterError> {
+        Err(AdapterError::contract(
+            "reading a bond slash notice is not supported",
+        ))
     }
     /// Cancels the order from the pay-invoice screen instead of paying.
     async fn cancel_payment(
