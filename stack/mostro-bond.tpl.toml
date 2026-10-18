@@ -1,0 +1,37 @@
+# mostrod anti-abuse bond for Mortsom's regtest stack. TEST VALUES, never
+# production.
+#
+# `mortsom stack up --bond` appends this fragment to the settings rendered
+# from mostro-settings.tpl.toml, so the daemon asks every maker for a bond
+# before it publishes the order, and every taker before the trade flow
+# starts (the daemon's docs/ANTI_ABUSE_BOND.md). The policy here is what the
+# stack declares to a run, and what `stack up` checks the daemon advertises;
+# the `bond` family drives it, and every other family is skipped on it.
+
+[anti_abuse_bond]
+enabled = true
+# bond = max(round(amount_pct * order_amount_sats), base_amount_sats)
+# amount_pct is a unitless fraction (0.01 = 1%); base_amount_sats is a sat floor.
+amount_pct = 0.01
+base_amount_sats = 1000
+# "take" | "make" | "both": the family drives both sides.
+apply_to = "both"
+# A waiting-state timeout slashes the responsible party's bond; the
+# released-bond scenarios never let a timeout elapse.
+slash_on_waiting_timeout = true
+# Fraction of a slashed bond the node keeps; the rest is paid to the
+# winning counterparty.
+slash_node_share_pct = 0.5
+# How often the winner is asked for a payout invoice while none arrived.
+# The daemon's payout job runs once a minute, so less changes nothing.
+payout_invoice_window_seconds = 60
+# Failed payments to one claim invoice before the winner is asked for a new
+# one: the first failure re-prompts, so a failed claim is replaced in a tick.
+payout_max_retries = 1
+# Days the winner has to claim their share. Whole days only; 0 would forfeit
+# every share to the node before the winner is ever asked.
+payout_claim_window_days = 1
+# Seconds a maker has to pay the bond before the daemon drops the order it
+# never published. Long enough to create, prove the order unpublished for
+# the quiet window and pay; short enough to watch it lapse.
+maker_bond_payment_timeout_seconds = 180

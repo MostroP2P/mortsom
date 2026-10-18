@@ -37,6 +37,7 @@ async fn a_mostro_ref_is_built_at_its_exact_commit_and_reaches_a_ready_stack() {
         source_cache: dir.path().join("source-cache"),
         timing: stack::Timing::default(),
         replace: false,
+        bond: false,
     };
 
     // Act

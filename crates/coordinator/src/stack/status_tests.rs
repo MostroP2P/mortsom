@@ -31,6 +31,7 @@ fn descriptor() -> Descriptor {
             payout_invoice_min_expiry_secs: 900,
             max_inflight_payouts_per_destination: None,
             payout_dispatch_permits: None,
+            bond: None,
         },
     )
     .unwrap()

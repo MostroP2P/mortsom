@@ -188,8 +188,17 @@ struct Publishes(bool);
 
 #[async_trait]
 impl InfoProbe for Publishes {
-    async fn daemon_published_info(&self, _relay_url: &str, _pubkey: PublicKey) -> bool {
-        self.0
+    async fn daemon_info(
+        &self,
+        relay_url: &str,
+        pubkey: PublicKey,
+    ) -> Option<mortsom_environment::daemon::DaemonInfo> {
+        if !self.0 {
+            return None;
+        }
+        bond_up::Advertises(&[("bond_enabled", "false")])
+            .daemon_info(relay_url, pubkey)
+            .await
     }
 }
 
@@ -208,6 +217,11 @@ fn scratch() -> (tempfile::TempDir, Layout) {
         include_str!("../../../../stack/limits.toml"),
     )
     .unwrap();
+    std::fs::write(
+        dir.path().join("mostro-bond.tpl.toml"),
+        include_str!("../../../../stack/mostro-bond.tpl.toml"),
+    )
+    .unwrap();
     let layout = Layout::new(dir.path()).unwrap();
     (dir, layout)
 }
@@ -221,6 +235,7 @@ fn quick() -> UpOptions {
             poll: Duration::ZERO,
         },
         replace: false,
+        bond: false,
     }
 }
 
@@ -845,3 +860,6 @@ mod source_load_tests;
 
 #[path = "ref_tests.rs"]
 mod ref_tests;
+
+#[path = "tests_bond.rs"]
+mod bond_up;

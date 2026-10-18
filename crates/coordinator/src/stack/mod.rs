@@ -1,6 +1,7 @@
 //! Mortsom's own regtest stack (spec section 5): a Compose project this
 //! checkout creates, inspects and destroys, with nothing but Docker.
 
+mod bond;
 mod compose;
 mod connections;
 mod daemon;
@@ -15,6 +16,7 @@ mod ownership;
 mod status;
 mod up;
 
+pub use bond::{describe as describe_bond, verify_advertised as verify_advertised_bond};
 pub use compose::Compose;
 pub use connections::credential_reference;
 pub use daemon::DaemonSource;
@@ -22,7 +24,7 @@ pub use descriptor::Descriptor;
 pub use fingerprint::StackFingerprint;
 pub use image::{LOCAL_REPOSITORY, commit_tag};
 pub use layout::{Layout, PROJECT};
-pub use metadata::{DaemonImage, DaemonProvenance, DeclaredLimits, StackSnapshot};
+pub use metadata::{DaemonImage, DaemonProvenance, DeclaredBond, DeclaredLimits, StackSnapshot};
 pub use ownership::ProjectOwner;
 pub use status::Status;
 pub use up::{Timing, UpOptions, up};
@@ -74,8 +76,12 @@ pub enum StackError {
 /// How `up` learns that the daemon is alive on the relay.
 #[async_trait]
 pub trait InfoProbe: Send + Sync {
-    /// Whether `pubkey` has published its info event on `relay_url`.
-    async fn daemon_published_info(&self, relay_url: &str, pubkey: PublicKey) -> bool;
+    /// The info event `pubkey` has published on `relay_url`, if any.
+    async fn daemon_info(
+        &self,
+        relay_url: &str,
+        pubkey: PublicKey,
+    ) -> Option<mortsom_environment::daemon::DaemonInfo>;
 }
 
 /// Fetches the info event from the real relay.
@@ -85,7 +91,11 @@ const INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[async_trait]
 impl InfoProbe for LiveRelay {
-    async fn daemon_published_info(&self, relay_url: &str, pubkey: PublicKey) -> bool {
+    async fn daemon_info(
+        &self,
+        relay_url: &str,
+        pubkey: PublicKey,
+    ) -> Option<mortsom_environment::daemon::DaemonInfo> {
         mortsom_environment::daemon::probe_daemon(
             &[relay_url.to_owned()],
             pubkey,
@@ -93,7 +103,6 @@ impl InfoProbe for LiveRelay {
         )
         .await
         .info
-        .is_some()
     }
 }
 

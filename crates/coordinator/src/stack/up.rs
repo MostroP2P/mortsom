@@ -61,6 +61,9 @@ pub struct UpOptions {
     /// Remove a project this directory cannot be shown to own -- another
     /// checkout's, or resources left without containers -- before building.
     pub replace: bool,
+    /// Start the daemon with its anti-abuse bond switched on, from the
+    /// `mostro-bond.tpl.toml` fragment, and declare that policy to runs.
+    pub bond: bool,
 }
 
 /// Builds or completes the stack and returns its public descriptor.
@@ -79,6 +82,20 @@ pub async fn up(
         )));
     }
     let limits = load_limits(&layout.limits_file())?;
+    let (template, limits) = if options.bond {
+        let fragment = read(&layout.bond_template())?;
+        let bond = super::bond::parse_fragment(&fragment)?;
+        let template = super::bond::append_fragment(&template, &fragment)?;
+        (
+            template,
+            super::metadata::DeclaredLimits {
+                bond: Some(bond),
+                ..limits
+            },
+        )
+    } else {
+        (template, limits)
+    };
 
     let (expected, provenance) =
         daemon::prepare(runner, &options.daemon, &options.source_cache).await?;
@@ -117,10 +134,18 @@ pub async fn up(
     tracing::info!("waiting for the daemon to publish its info event");
     let relay_url = descriptor.connections.relay_url.clone();
     let pubkey = keys.public_key();
+    let published = std::sync::Mutex::new(None);
     wait_for(options.timing, "the daemon's info event", || async {
-        Ok(probe.daemon_published_info(&relay_url, pubkey).await)
+        let info = probe.daemon_info(&relay_url, pubkey).await;
+        let seen = info.is_some();
+        *published.lock().unwrap_or_else(|e| e.into_inner()) = info;
+        Ok(seen)
     })
     .await?;
+    // `wait_for` returns only once an info event was seen.
+    if let Some(info) = published.into_inner().unwrap_or_else(|e| e.into_inner()) {
+        super::bond::verify_advertised(&info, descriptor.declared_limits.bond.as_ref())?;
+    }
     image::verify_running(runner, &compose, layout, &expected).await?;
     Ok(descriptor)
 }
