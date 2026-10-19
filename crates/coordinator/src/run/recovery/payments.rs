@@ -8,6 +8,9 @@ pub(in crate::run) async fn verify_payments(
     journal: &FileJournal,
 ) -> Result<(), String> {
     let events = journal.snapshot().events;
+    // A terminal state is final: read once, it holds for every payment on
+    // the order. Each payment is still settled by its own hash below.
+    let mut terminal: BTreeMap<&str, OrderState> = BTreeMap::new();
     for event in &events {
         let RecoveryEvent::PaymentExpected {
             order_id,
@@ -20,7 +23,14 @@ pub(in crate::run) async fn verify_payments(
         else {
             continue;
         };
-        let state = terminal_order_state(ctx, &events, order_id).await?;
+        let state = match terminal.get(order_id.as_str()) {
+            Some(state) => *state,
+            None => {
+                let state = terminal_order_state(ctx, &events, order_id).await?;
+                terminal.insert(order_id, state);
+                state
+            }
+        };
         let node = ctx
             .node_wallets
             .get(wallet)
@@ -104,9 +114,10 @@ async fn terminal_order_state(
         .ok_or("payment recovery has no known order owner")?;
     let session = ctx.actor(maker).map_err(|e| e.to_string())?;
     let device = session.device(ctx.ui_timeout);
-    let state = match ctx.adapter.observe_order(&device, &order).await {
-        Ok(shown) => shown.state,
-        Err(unread) => return closed_off_the_list(ctx, &device, &order, unread.to_string()).await,
+    let state = match ctx.adapter.observe_listed_order(&device, &order).await {
+        Ok(Some(shown)) => shown.state,
+        Ok(None) => return closed_off_the_list(ctx, &order).await,
+        Err(unread) => return Err(unread.to_string()),
     };
     if matches!(state, OrderState::Completed | OrderState::PayoutPending) {
         for actor in Actor::ALL {
@@ -149,25 +160,12 @@ async fn terminal_order_state(
     ))
 }
 
-/// The terminal state of an order the maker's app could not show. App v2
-/// drops a trade that never went active from My Trades once it is
-/// cancelled, so its state goes with the row: only when the loaded list no
-/// longer shows it does the daemon's own status on the relay decide, and
-/// only a cancel or an expiry can, since a completed trade stays listed.
-async fn closed_off_the_list(
-    ctx: &Context,
-    device: &mortsom_app_contract::DeviceContext<'_>,
-    order: &OrderReference,
-    unread: String,
-) -> Result<OrderState, String> {
-    let listed = ctx
-        .adapter
-        .owned_orders(device)
-        .await
-        .map_err(|e| e.to_string())?;
-    if listed.contains(&order.id) {
-        return Err(unread);
-    }
+/// The terminal state of an order the maker's loaded list no longer shows.
+/// App v2 drops a trade that never went active from My Trades once it is
+/// cancelled, so its state goes with the row: the daemon's own status on
+/// the relay decides, and only a cancel or an expiry can, since a completed
+/// trade stays listed.
+async fn closed_off_the_list(ctx: &Context, order: &OrderReference) -> Result<OrderState, String> {
     let _ = ctx.relay.add_order(&order.id).await;
     let id = order.id.clone();
     let closed = ctx
@@ -196,8 +194,8 @@ async fn closed_off_the_list(
             Ok(state)
         }
         None => Err(format!(
-            "{unread}; the maker's app no longer lists order {} and the relay never showed it \
-             cancelled or expired",
+            "the maker's app no longer lists order {} and the relay never showed it cancelled or \
+             expired",
             order.id
         )),
     }

@@ -586,8 +586,11 @@ On success, failure or interruption, in order:
 
 1. Preserve sanitized UI, relay and wallet evidence.
 2. Resolve or cancel every tracked order through the normal UI. `pay.cancel` cancels the order; it is not a
-   navigation shortcut.
-3. Verify terminal wallet outcomes; record outstanding hashes and escrow. A payment is journaled with what it
+   navigation shortcut. A trade the maker's loaded My Trades no longer lists is not opened again: the
+   relay decides whether the daemon closed it (8.3).
+3. Verify terminal wallet outcomes; record outstanding hashes and escrow. An order's terminal state is read once,
+   from its loaded list first, and holds for every payment on it; each payment is still judged by its own
+   hash. A payment is journaled with what it
    pays for. A bond is judged by its own end, whatever the order came to: returned (failed, nothing settled)
    or settled once for exactly the journaled amount, never in flight. A claim of a slashed bond's share is
    never cancelled by recovery, since it settles on an order that did not complete, and only a claim settled

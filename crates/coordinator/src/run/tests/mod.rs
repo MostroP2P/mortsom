@@ -418,6 +418,11 @@ struct FakeAdapter {
     /// leaves My Trades, so its state can no longer be read.
     drops_never_active: bool,
     dropped: Mutex<Vec<String>>,
+    /// Reads that tried to open a row the app had already dropped: on a
+    /// real device each one waits out the UI timeout for nothing.
+    reopened_dropped: Mutex<usize>,
+    /// My Trades cannot be read at all: the list proves nothing either way.
+    unreadable_list: bool,
 }
 
 impl FakeAdapter {
@@ -447,6 +452,8 @@ impl FakeAdapter {
             fail_take: false,
             drops_never_active: false,
             dropped: Mutex::new(Vec::new()),
+            reopened_dropped: Mutex::new(0),
+            unreadable_list: false,
         }
     }
     fn set(&self, id: &str, state: OrderState) {
@@ -519,6 +526,11 @@ impl AppAdapter for FakeAdapter {
             .lock()
             .unwrap()
             .push(format!("owned:{}", device.actor));
+        if self.unreadable_list {
+            return Err(AdapterError::contract(
+                "`trades.empty` or a row never appeared",
+            ));
+        }
         let dropped = self.dropped.lock().unwrap().clone();
         Ok(self
             .orders()
@@ -715,6 +727,7 @@ impl AppAdapter for FakeAdapter {
     ) -> Result<AppOrderState, AdapterError> {
         self.observed_actors.lock().unwrap().push(device.actor);
         if self.dropped.lock().unwrap().contains(&order.id) {
+            *self.reopened_dropped.lock().unwrap() += 1;
             return Err(AdapterError::contract(format!(
                 "`trades.item.{}` did not appear",
                 order.id

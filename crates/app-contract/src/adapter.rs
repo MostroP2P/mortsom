@@ -190,6 +190,22 @@ pub trait AppAdapter: Send + Sync {
     ) -> Result<AppOrderState, AdapterError> {
         self.observe_order(device, order).await
     }
+    /// Reads the order's displayed state through the actor's own trades
+    /// list: `Ok(None)` when the loaded list no longer shows it, without
+    /// opening a row that is gone -- app v2 drops a cancelled trade that
+    /// never went active, and a read through its row only waits out the UI
+    /// timeout. A list that cannot be read proves nothing: the state is then
+    /// read as [`Self::observe_order`] reads it.
+    async fn observe_listed_order(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<Option<AppOrderState>, AdapterError> {
+        match self.owned_orders(device).await {
+            Ok(listed) if !listed.contains(&order.id) => Ok(None),
+            _ => self.observe_order(device, order).await.map(Some),
+        }
+    }
     /// Names of the trade actions the app currently offers for `order`
     /// (normalized: `pay-invoice`, `add-invoice`, `fiat-sent`, `release`,
     /// `cancel`, `dispute`, `rate`), used by unauthorized-action checks.

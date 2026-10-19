@@ -440,6 +440,32 @@ async fn cleanup_resolves_a_never_active_cancel_the_app_dropped_once_the_relay_c
     assert_eq!(*adapter.cancelled.lock().unwrap(), ["o1".to_owned()]);
 }
 
+/// Once the maker's loaded list no longer shows the trade there is no row
+/// to open: each try waits out the UI timeout on a device (live, 2026-10-19:
+/// `taker_cancel_at_taken` spent 137 s there). The relay decides at once.
+#[tokio::test]
+async fn cleanup_never_reopens_a_trade_the_maker_app_dropped() {
+    mortsom_scenarios::link();
+    let world = world(false);
+    let mut adapter = FakeAdapter::full();
+    adapter.fail_take = true;
+    adapter.drops_never_active = true;
+    let adapter = Arc::new(adapter);
+
+    let summary = run(
+        &world,
+        adapter.clone(),
+        opts_in(&world, &["happy_sell"]),
+        false,
+    )
+    .await
+    .unwrap();
+
+    assert!(summary.cleanup.unwrap().is_clean());
+    assert_eq!(*adapter.dropped.lock().unwrap(), ["o1".to_owned()]);
+    assert_eq!(*adapter.reopened_dropped.lock().unwrap(), 0);
+}
+
 /// The mirror: the app dropping the trade is not the daemon closing it.
 /// Without `canceled` on the relay the order stays unresolved.
 #[tokio::test]

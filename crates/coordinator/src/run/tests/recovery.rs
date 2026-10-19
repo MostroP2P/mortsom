@@ -200,6 +200,24 @@ async fn attempt_with_wallet_and_book(
     wallet: Option<(String, Arc<RecoveryWallet>)>,
     book_statuses: &[&'static str],
 ) -> (RunSummary, Vec<Arc<RetainedUi>>) {
+    attempt_with_wallets_and_book(
+        fixture,
+        adapter,
+        journal,
+        wallet.into_iter().collect(),
+        book_statuses,
+    )
+    .await
+}
+
+/// A recovery attempt with every wallet in `wallets` held by Mortsom.
+async fn attempt_with_wallets_and_book(
+    fixture: &World,
+    adapter: Arc<FakeAdapter>,
+    journal: Arc<FileJournal>,
+    wallets: Vec<(String, Arc<RecoveryWallet>)>,
+    book_statuses: &[&'static str],
+) -> (RunSummary, Vec<Arc<RetainedUi>>) {
     let env = |_: &str| None;
     let deps = RunDeps {
         desktop_factory: &RealDesktopFactory,
@@ -229,12 +247,16 @@ async fn attempt_with_wallet_and_book(
         options.desktop.bundle.clone(),
         book_statuses,
     );
-    if let Some((label, wallet)) = wallet {
-        world.wallets = Some(Arc::new(WalletObserver::new(vec![(
-            label.clone(),
-            wallet.clone(),
-        )])));
-        world.node_wallets.insert(label, wallet);
+    if !wallets.is_empty() {
+        world.wallets = Some(Arc::new(WalletObserver::new(
+            wallets
+                .iter()
+                .map(|(label, wallet)| (label.clone(), wallet.clone() as Arc<dyn WalletReader>))
+                .collect(),
+        )));
+        for (label, wallet) in wallets {
+            world.node_wallets.insert(label, wallet);
+        }
     }
     resume_identities(&world, &journal, &sessions, &mut summary).await;
     if summary.checks.is_healthy() {
@@ -383,6 +405,9 @@ async fn reopened_run_uses_original_identities_and_cancels_the_saved_order_throu
             "configure:alice",
             "existing:bob",
             "configure:bob",
+            // Discovery reads the list; after the cancel, cleanup asks it again
+            // before the screen, so a trade the app dropped is not reopened.
+            "owned:alice",
             "owned:alice"
         ]
     );
@@ -493,6 +518,8 @@ fn changed_stack_refuses_resume_before_environment_or_process_access() {
 
 struct RecoveryWallet {
     state: Mutex<PaymentState>,
+    /// The one payment hash this wallet answers for.
+    hash: String,
     amount: u64,
     fee: u64,
     count: usize,
@@ -500,8 +527,12 @@ struct RecoveryWallet {
 }
 impl RecoveryWallet {
     fn new(state: PaymentState, amount: u64, fee: u64, count: usize) -> Arc<Self> {
+        Self::for_hash(&"c".repeat(64), state, amount, fee, count)
+    }
+    fn for_hash(hash: &str, state: PaymentState, amount: u64, fee: u64, count: usize) -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(state),
+            hash: hash.to_owned(),
             amount,
             fee,
             count,
@@ -512,7 +543,7 @@ impl RecoveryWallet {
 #[async_trait]
 impl mortsom_observers::wallet::WalletReader for RecoveryWallet {
     async fn lookup(&self, hash: &str) -> Result<Option<(u64, u64, PaymentState)>, String> {
-        assert_eq!(hash, "c".repeat(64));
+        assert_eq!(hash, self.hash);
         self.calls.lock().unwrap().push("lookup".into());
         Ok(Some((self.amount, self.fee, *self.state.lock().unwrap())))
     }
@@ -523,7 +554,7 @@ impl NodeWallet for RecoveryWallet {
         10
     }
     async fn cancel_invoice(&self, hash: &str) -> Result<(), String> {
-        assert_eq!(hash, "c".repeat(64));
+        assert_eq!(hash, self.hash);
         self.calls.lock().unwrap().push("cancel invoice".into());
         let mut state = self.state.lock().unwrap();
         if *state == PaymentState::Settled {
@@ -533,7 +564,7 @@ impl NodeWallet for RecoveryWallet {
         Ok(())
     }
     async fn settled_record_count(&self, hash: &str, incoming: bool) -> Result<usize, String> {
-        assert_eq!(hash, "c".repeat(64));
+        assert_eq!(hash, self.hash);
         self.calls
             .lock()
             .unwrap()
