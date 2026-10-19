@@ -49,12 +49,14 @@ pub async fn wait_relay_state_since(
         .tag("s")
         .and_then(OrderState::from_protocol_status)
         .ok_or_else(|| ScenarioError::relay("matched relay event lost its status"))?;
+    // The parity report reads the relay path in this grammar
+    // (`coordinator::parity::relay_path`).
     ctx.timeline.push_at(
         event.received_at_ms,
         TimelineKind::RelayEvent,
         None,
         format!(
-            "relay: order {} published as {state} (event {})",
+            "relay: order {} is {state} (event {})",
             order.id,
             short(&event.id)
         ),
