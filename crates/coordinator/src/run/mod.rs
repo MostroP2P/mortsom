@@ -36,7 +36,7 @@ use std::time::Duration;
 
 use futures::future::BoxFuture;
 use mortsom_app_contract::{AppAdapter, TestEnvironment};
-use mortsom_common::check::CheckStatus;
+use mortsom_common::check::{CheckStatus, DoctorReport};
 use mortsom_common::logging::attach_run_log;
 use mortsom_common::{Redactor, RunId};
 use mortsom_environment::WalletConfig;
@@ -670,47 +670,13 @@ impl<'a> World<'a> {
 
         let farm = self.bring_up_farm(summary).await?;
         summary.app_version = farm.version();
-        let env = self.env();
-        for (actor, session) in farm.sessions() {
-            let ctx = mortsom_app_contract::DeviceContext {
-                actor,
-                ui: session.as_ref(),
-                ui_timeout: Duration::from_secs(self.config.ui_timeout_secs()),
-            };
-            let actor = if self.desktop.resume {
-                let result = recovery::resume_actor(
-                    self,
-                    &ctx,
-                    self.desktop
-                        .recovery
-                        .as_ref()
-                        .ok_or("resume journal missing")?,
-                )
-                .await;
-                match result {
-                    Ok(actor) => actor,
-                    Err(error) => {
-                        self.farm = Some(farm);
-                        return Err(record_fail(summary, "recovery-identity", error));
-                    }
-                }
-            } else {
-                bootstrap_session(
-                    self.config,
-                    self.deps.adapter.as_ref(),
-                    ctx,
-                    &env,
-                    crate::bootstrap::StepRecords {
-                        artifacts: self.artifacts,
-                        recorder: &self.recorder,
-                        timings: &self.timings,
-                    },
-                    &mut summary.checks,
-                )
-                .await
-            };
-            self.observe_actor(&actor).await;
-            summary.actors.push(actor);
+        if self.desktop.resume {
+            if let Err(error) = self.resume_actors(&farm, summary).await {
+                self.farm = Some(farm);
+                return Err(error);
+            }
+        } else {
+            self.bootstrap_actors(&farm, summary).await;
         }
         if let Some(journal) = self.desktop.recovery.as_ref() {
             let identities = summary
@@ -760,6 +726,70 @@ impl<'a> World<'a> {
             return Err("actor bootstrap failed (see checks)".into());
         }
         Ok(())
+    }
+
+    /// Bootstraps every actor at once: their sessions share nothing. Each
+    /// journey writes its own checks, reported in actor order whichever
+    /// finished first, so the report reads as it would one at a time.
+    async fn bootstrap_actors(&self, farm: &Farm, summary: &mut RunSummary) {
+        let env = self.env();
+        let sessions = farm.sessions();
+        let journeys = sessions.iter().map(|(actor, session)| {
+            let env = &env;
+            async move {
+                let mut checks = DoctorReport::default();
+                let setup = bootstrap_session(
+                    self.config,
+                    self.deps.adapter.as_ref(),
+                    self.device(*actor, session.as_ref()),
+                    env,
+                    crate::bootstrap::StepRecords {
+                        artifacts: self.artifacts,
+                        recorder: &self.recorder,
+                        timings: &self.timings,
+                    },
+                    &mut checks,
+                )
+                .await;
+                (setup, checks)
+            }
+        });
+        for (setup, checks) in futures::future::join_all(journeys).await {
+            summary.checks.checks.extend(checks.checks);
+            self.observe_actor(&setup).await;
+            summary.actors.push(setup);
+        }
+    }
+
+    /// Reopens each actor's retained identity, one at a time. The error is
+    /// the bring-up's.
+    async fn resume_actors(&self, farm: &Farm, summary: &mut RunSummary) -> Result<(), String> {
+        let journal = self
+            .desktop
+            .recovery
+            .as_ref()
+            .ok_or("resume journal missing")?;
+        for (actor, session) in farm.sessions() {
+            let ctx = self.device(actor, session.as_ref());
+            let setup = recovery::resume_actor(self, &ctx, journal)
+                .await
+                .map_err(|error| record_fail(summary, "recovery-identity", error))?;
+            self.observe_actor(&setup).await;
+            summary.actors.push(setup);
+        }
+        Ok(())
+    }
+
+    fn device<'ui>(
+        &self,
+        actor: mortsom_common::Actor,
+        ui: &'ui dyn mortsom_ui_driver::ui::UiSession,
+    ) -> mortsom_app_contract::DeviceContext<'ui> {
+        mortsom_app_contract::DeviceContext {
+            actor,
+            ui,
+            ui_timeout: Duration::from_secs(self.config.ui_timeout_secs()),
+        }
     }
 
     async fn bring_up_farm(&self, summary: &mut RunSummary) -> Result<Farm, String> {
