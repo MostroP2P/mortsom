@@ -543,7 +543,8 @@ sized from the market price at creation, which the run cannot predict.
 
 Each run starts with fresh app storage and new generated identities for Alice and Bob. The run observes both
 public identities through the UI, proves they differ, relaunches each app and proves each identity persists.
-Mnemonics and private keys are never exported.
+Both actors bootstrap at once, each on its own isolated session (section 6.1); the report lists Alice's steps,
+then Bob's, whichever finishes first. Mnemonics and private keys are never exported.
 
 Observers start before the actions they verify. A run refuses to create an order when the daemon identity
 does not match, the relay is not ready, the daemon advertises maintenance mode or actor bootstrap failed.

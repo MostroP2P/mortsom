@@ -423,6 +423,13 @@ struct FakeAdapter {
     reopened_dropped: Mutex<usize>,
     /// My Trades cannot be read at all: the list proves nothing either way.
     unreadable_list: bool,
+    /// Every actor must reach onboarding before any goes on: only a
+    /// bring-up that bootstraps them at once gets past it.
+    onboarding_meets: Option<Arc<tokio::sync::Barrier>>,
+    /// This actor's onboarding takes this long.
+    slow_onboarding: Option<(Actor, Duration)>,
+    /// This actor's onboarding fails.
+    failed_onboarding: Option<Actor>,
 }
 
 impl FakeAdapter {
@@ -454,6 +461,9 @@ impl FakeAdapter {
             dropped: Mutex::new(Vec::new()),
             reopened_dropped: Mutex::new(0),
             unreadable_list: false,
+            onboarding_meets: None,
+            slow_onboarding: None,
+            failed_onboarding: None,
         }
     }
     fn set(&self, id: &str, state: OrderState) {
@@ -483,6 +493,18 @@ impl AppAdapter for FakeAdapter {
             .lock()
             .unwrap()
             .push(format!("onboard:{}", device.actor));
+        if let Some(meet) = &self.onboarding_meets {
+            meet.wait().await;
+        }
+        if let Some((_, delay)) = self
+            .slow_onboarding
+            .filter(|(actor, _)| *actor == device.actor)
+        {
+            tokio::time::sleep(delay).await;
+        }
+        if self.failed_onboarding == Some(device.actor) {
+            return Err(AdapterError::contract("the walkthrough never finished"));
+        }
         Ok(Identity {
             public_key: format!("npub1{}", device.actor),
         })
@@ -999,6 +1021,17 @@ async fn run_on(
     result
 }
 
+/// The run's `timings.json`.
+fn timings_of(world: &World, summary: &RunSummary) -> serde_json::Value {
+    let path = world
+        .dir
+        .path()
+        .join("artifacts")
+        .join(summary.run_id.as_str())
+        .join(files::TIMINGS);
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
 fn opts_in(world: &World, names: &[&str]) -> RunOptions {
     RunOptions {
         recovery_isolation: None,
@@ -1012,6 +1045,7 @@ fn opts_in(world: &World, names: &[&str]) -> RunOptions {
 
 mod attribution;
 mod behavior;
+mod bring_up;
 mod chain_tip;
 mod desktop;
 mod evidence;

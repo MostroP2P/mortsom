@@ -605,10 +605,12 @@ async fn a_run_records_where_its_time_went() {
             .position(|(phase, who)| phase == name && who.as_deref() == actor)
             .unwrap_or_else(|| panic!("{name} {actor:?} missing from {phases:?}"))
     };
-    assert!(at("preflight", None) < at("bootstrap/launch", Some("alice")));
-    assert!(at("bootstrap/launch", Some("alice")) < at("bootstrap/restart", Some("alice")));
-    assert!(at("bootstrap/restart", Some("alice")) < at("bootstrap/launch", Some("bob")));
-    assert!(at("bootstrap/restart", Some("bob")) < at("bring-up", None));
+    // The actors bootstrap at once, so only each one's own steps are ordered.
+    for actor in ["alice", "bob"] {
+        assert!(at("preflight", None) < at("bootstrap/launch", Some(actor)));
+        assert!(at("bootstrap/launch", Some(actor)) < at("bootstrap/restart", Some(actor)));
+        assert!(at("bootstrap/restart", Some(actor)) < at("bring-up", None));
+    }
     assert!(at("bring-up", None) < at("scenario", None));
     assert!(at("scenario", None) < at("cleanup", None));
     // A scenario that passed asks the stack nothing about its failure.
@@ -667,15 +669,4 @@ async fn a_run_refused_after_its_preflight_still_records_its_timings() {
         .collect();
     assert_eq!(phases, ["preflight"]);
     assert_eq!(timings["ui"], serde_json::json!({}));
-}
-
-/// The run's `timings.json`.
-fn timings_of(world: &World, summary: &RunSummary) -> serde_json::Value {
-    let path = world
-        .dir
-        .path()
-        .join("artifacts")
-        .join(summary.run_id.as_str())
-        .join(files::TIMINGS);
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
