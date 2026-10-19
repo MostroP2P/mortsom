@@ -1,11 +1,12 @@
 //! Ownership of the run's actor sessions and their shared Web server.
+use super::timings::UiTimes;
 use super::{DesktopFactory, DesktopServer};
 use mortsom_common::Actor;
 use mortsom_desktop_driver::Platform;
-use mortsom_ui_driver::timed::{RequestTimes, TimedUi};
+use mortsom_ui_driver::timed::TimedUi;
 use mortsom_ui_driver::ui::UiSession;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 /// What happened to one client resource at teardown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,13 +136,11 @@ impl Farm {
         }
     }
 
-    /// Per actor, what each kind of UI request cost so far.
-    pub(super) fn ui_times(&self) -> BTreeMap<String, BTreeMap<String, RequestTimes>> {
+    /// Each actor's UI request clock. The clocks outlive the farm, so times
+    /// read after [`Self::tear_down`] include the sessions' own `end`.
+    pub(super) fn ui_clocks(&self) -> UiClocks {
         match self {
-            Self::Desktop { timers, .. } => timers
-                .iter()
-                .map(|(actor, timer)| (actor.as_str().to_owned(), timer.times()))
-                .collect(),
+            Self::Desktop { timers, .. } => UiClocks(timers.clone()),
         }
     }
 
@@ -179,6 +178,19 @@ impl Farm {
                 items
             }
         }
+    }
+}
+
+/// Each actor's UI request clock, kept past the farm's teardown.
+pub(super) struct UiClocks(Vec<(Actor, Arc<TimedUi>)>);
+
+impl UiClocks {
+    /// Per actor, what each kind of UI request cost so far.
+    pub(super) fn times(&self) -> UiTimes {
+        self.0
+            .iter()
+            .map(|(actor, timer)| (actor.as_str().to_owned(), timer.times()))
+            .collect()
     }
 }
 

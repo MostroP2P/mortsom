@@ -587,14 +587,7 @@ async fn a_run_records_where_its_time_went() {
     .await
     .unwrap();
 
-    let path = world
-        .dir
-        .path()
-        .join("artifacts")
-        .join(summary.run_id.as_str())
-        .join(files::TIMINGS);
-    let timings: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let timings = timings_of(&world, &summary);
     let phases: Vec<(String, Option<String>)> = timings["phases"]
         .as_array()
         .unwrap()
@@ -626,5 +619,58 @@ async fn a_run_records_where_its_time_went() {
             ui["activate_app"]["count"].as_u64().unwrap() >= 2,
             "{actor}: {ui}"
         );
+        // Read after teardown, so the session's own shutdown is counted.
+        assert!(ui["end"]["count"].as_u64() >= Some(1), "{actor}: {ui}");
     }
+}
+
+/// A run its recovery preparation refuses has passed its preflight, so it
+/// still says how long that took.
+#[tokio::test]
+async fn a_run_refused_after_its_preflight_still_records_its_timings() {
+    mortsom_scenarios::link();
+    let world = world(true);
+    let base =
+        crate::recovery_store::FileJournal::directory(&world.dir.path().join("home")).unwrap();
+    crate::recovery_store::FileJournal::create(&base, recovery::saved_run(&world).snapshot())
+        .unwrap();
+
+    let summary = run(
+        &world,
+        Arc::new(FakeAdapter::full()),
+        opts_in(&world, &["happy_sell"]),
+        true,
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        summary
+            .checks
+            .checks
+            .iter()
+            .any(|check| check.name == "protected-recovery" && check.status == CheckStatus::Fail),
+        "{:?}",
+        summary.checks
+    );
+    let timings = timings_of(&world, &summary);
+    let phases: Vec<&str> = timings["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|phase| phase["phase"].as_str().unwrap())
+        .collect();
+    assert_eq!(phases, ["preflight"]);
+    assert_eq!(timings["ui"], serde_json::json!({}));
+}
+
+/// The run's `timings.json`.
+fn timings_of(world: &World, summary: &RunSummary) -> serde_json::Value {
+    let path = world
+        .dir
+        .path()
+        .join("artifacts")
+        .join(summary.run_id.as_str())
+        .join(files::TIMINGS);
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }

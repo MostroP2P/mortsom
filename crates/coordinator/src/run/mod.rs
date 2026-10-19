@@ -241,6 +241,8 @@ pub async fn run_scenarios(
             .checks
             .push("protected-recovery", CheckStatus::Fail, error);
         preflight::reject(&runnable, &mut summary);
+        // Past its preflight, so it says how long that took; no actor ran.
+        timings.persist(&artifacts, timings::UiTimes::new());
         return finish(&artifacts, &mut summary)
             .map(|()| summary)
             .map_err(started);

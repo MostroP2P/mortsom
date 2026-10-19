@@ -10,6 +10,8 @@ use mortsom_ui_driver::timed::RequestTimes;
 use serde::Serialize;
 use tokio::time::Instant;
 
+use crate::artifacts::{RunArtifacts, files};
+
 /// One phase of a run, and how long it took.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PhaseTiming {
@@ -79,13 +81,30 @@ impl RunTimings {
     }
 }
 
+/// Per actor, what each kind of UI request cost.
+pub type UiTimes = BTreeMap<String, BTreeMap<String, RequestTimes>>;
+
 /// The `timings.json` artifact.
 #[derive(Debug, Serialize)]
 pub struct TimingsReport {
     /// The run's phases, in the order they finished.
     pub phases: Vec<PhaseTiming>,
     /// Per actor, what each kind of UI request cost.
-    pub ui: BTreeMap<String, BTreeMap<String, RequestTimes>>,
+    pub ui: UiTimes,
+}
+
+impl RunTimings {
+    /// Writes `timings.json` with the phases recorded so far and `ui`. A
+    /// failed write is logged and the run stands as it is.
+    pub fn persist(&self, artifacts: &RunArtifacts, ui: UiTimes) {
+        let report = TimingsReport {
+            phases: self.phases(),
+            ui,
+        };
+        if let Err(error) = artifacts.write_json(files::TIMINGS, &report) {
+            tracing::warn!(%error, "cannot persist the run's timings");
+        }
+    }
 }
 
 #[cfg(test)]

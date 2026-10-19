@@ -1,7 +1,5 @@
 //! Scenario context ownership, cleanup verification and resource teardown.
 use super::*;
-use mortsom_ui_driver::timed::RequestTimes;
-use timings::TimingsReport;
 impl World<'_> {
     /// Runs one scenario (with the retry policy) inside the live world.
     pub(super) async fn execute(
@@ -180,7 +178,7 @@ impl World<'_> {
             }
         }
         if let Some(farm) = self.farm.take() {
-            ui = farm.ui_times();
+            let clocks = farm.ui_clocks();
             // The clients' own logs go with their profiles; keep them first.
             for (actor, session) in farm.sessions() {
                 for (name, text) in session.diagnostics().await {
@@ -193,6 +191,8 @@ impl World<'_> {
                 }
             }
             summary.farm_teardown = farm.tear_down().await;
+            // Read once the sessions have ended, so their `end` is counted.
+            ui = clocks.times();
             let ok = summary.farm_teardown.iter().all(|i| i.ok);
             summary.checks.push(
                 "client-teardown",
@@ -221,19 +221,7 @@ impl World<'_> {
         }
         self.timings
             .record("teardown", None, started, tokio::time::Instant::now());
-        self.write_timings(ui);
-    }
-
-    /// `timings.json`: diagnostics, so a failed write is logged and the run
-    /// stands as it is (spec §12).
-    fn write_timings(&self, ui: BTreeMap<String, BTreeMap<String, RequestTimes>>) {
-        let report = TimingsReport {
-            phases: self.timings.phases(),
-            ui,
-        };
-        if let Err(error) = self.artifacts.write_json(files::TIMINGS, &report) {
-            warn!(%error, "cannot persist the run's timings");
-        }
+        self.timings.persist(self.artifacts, ui);
     }
 
     fn evidence_failed(&self, summary: &mut RunSummary, file: &str, error: std::io::Error) {
