@@ -307,9 +307,16 @@ async fn build_artifact(
 ) -> Result<(PathBuf, crate::provenance::BuildProvenance), String> {
     tracing::info!(%platform, "building v2 clients");
     for (command, timeout) in plan {
-        run_ok(runner, &command, timeout)
-            .await
-            .map_err(build_error)?;
+        let started = std::time::Instant::now();
+        let outcome = run_ok(runner, &command, timeout).await;
+        let (step, elapsed) = (build_step(&command), started.elapsed());
+        // Logged before a failure returns: a failed or timed-out step is
+        // the one whose time matters most.
+        match &outcome {
+            Ok(_) => tracing::info!(%step, ?elapsed, "build step finished"),
+            Err(_) => tracing::warn!(%step, ?elapsed, "build step failed"),
+        }
+        outcome.map_err(build_error)?;
     }
     provenance.commands = commands;
     provenance.finish(source, host).await?;
@@ -318,6 +325,20 @@ async fn build_artifact(
         Platform::Web => WEB_BUNDLE,
     });
     Ok((artifact_in(&bundle, platform), provenance))
+}
+
+/// What a build command runs, for the log: its words up to the first flag,
+/// never the checkout path or the build defines.
+fn build_step(command: &Command) -> String {
+    command
+        .args
+        .iter()
+        .skip_while(|arg| arg.starts_with("--chdir="))
+        .take_while(|arg| !arg.starts_with('-'))
+        .take(3)
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// A build command as provenance records it, with the checkout as `<source>`.
@@ -480,6 +501,29 @@ mod tests {
         assert!(
             cmd.args
                 .contains(&"--dart-define=MORTSOM_RELAYS=ws://127.0.0.1:7001".into())
+        );
+    }
+
+    #[test]
+    fn a_build_step_is_logged_by_its_words_never_its_defines() {
+        let linux = build_command(
+            Path::new("/app"),
+            Platform::Linux,
+            "public",
+            7001,
+            Some(600),
+        );
+        assert_eq!(build_step(&linux), "flutter build linux");
+        let plan = build_plan(Path::new("/app"), Platform::Linux, "public", 7001, None);
+        let steps: Vec<String> = plan
+            .iter()
+            .map(|(command, _)| build_step(command))
+            .collect();
+        assert_eq!(steps[..2], ["flutter pub get", "./scripts/frb-generate.sh"]);
+        assert!(
+            steps
+                .iter()
+                .all(|step| !step.contains("public") && !step.contains("/app"))
         );
     }
 

@@ -142,6 +142,71 @@ async fn binding_failure_stops_the_build_and_redacts_child_output() {
     assert!(runner.calls()[1].ends_with("./scripts/frb-generate.sh"));
 }
 
+/// What one test's subscriber logged.
+#[derive(Clone, Default)]
+struct Logged(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Logged {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A step that fails or times out is the one whose duration matters most.
+#[tokio::test]
+async fn a_failed_build_step_is_logged_with_its_duration() {
+    let root = tempfile::tempdir().unwrap();
+    let mut config = config(root.path());
+    config.mobile.source_dir = root.path().display().to_string();
+    let runner = FakeRunner::default();
+    runner.script_failure(
+        &format!(
+            "env --chdir={} ./scripts/frb-generate.sh",
+            root.path().display()
+        ),
+        "codegen failed",
+    );
+    // The process-wide subscriber first: with this test's the only one, a
+    // thread without it would set the process's level from its own default
+    // and silence this one.
+    let _sink = mortsom_common::logging::init_logging();
+    let logged = Logged::default();
+    let writer = logged.clone();
+    let _logging = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish(),
+    );
+
+    prepare(
+        &config,
+        Platform::Web,
+        None,
+        "Xvfb".into(),
+        crate::build_cache::Policy::Reuse,
+        &runner,
+        &BuildHost { missing: None },
+    )
+    .await
+    .unwrap_err();
+
+    let log = String::from_utf8(logged.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("build step finished step=flutter pub get elapsed="),
+        "{log}"
+    );
+    assert!(
+        log.contains("build step failed step=./scripts/frb-generate.sh elapsed="),
+        "{log}"
+    );
+}
+
 #[tokio::test]
 async fn successful_build_command_without_outputs_is_rejected() {
     let root = tempfile::tempdir().unwrap();

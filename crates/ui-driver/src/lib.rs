@@ -4,6 +4,7 @@
 
 pub mod error;
 pub mod process;
+pub mod timed;
 pub mod ui;
 pub mod webdriver;
 

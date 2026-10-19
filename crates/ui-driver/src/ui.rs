@@ -118,9 +118,15 @@ pub mod tests_support {
         /// probes; reading one that has left fails.
         vanishing: Mutex<BTreeMap<String, u32>>,
         end_failures: Mutex<u32>,
+        /// How long each screenshot takes.
+        screenshot_delay: Mutex<Duration>,
     }
 
     impl ScriptedUi {
+        /// Each screenshot takes `delay`, as a large window's does.
+        pub fn slow_screenshots(&self, delay: Duration) {
+            *self.screenshot_delay.lock().unwrap() = delay;
+        }
         /// The next `times` values typed into `id` are accepted and then lost,
         /// as when the app rebuilds a form on a message that arrives mid-entry.
         pub fn wipes_text(&self, id: &str, times: u32) {
@@ -486,6 +492,8 @@ pub mod tests_support {
                 .unwrap_or_default())
         }
         async fn screenshot_png(&self) -> Result<Vec<u8>, UiError> {
+            let delay = *self.screenshot_delay.lock().unwrap();
+            tokio::time::sleep(delay).await;
             Ok(vec![])
         }
         async fn page_source(&self) -> Result<String, UiError> {

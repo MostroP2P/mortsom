@@ -15,6 +15,7 @@ static WALLETS_DRAINED: AtomicBool = AtomicBool::new(false);
 static DAEMON_SILENT: AtomicBool = AtomicBool::new(false);
 static RELAY_BLIPS: AtomicBool = AtomicBool::new(false);
 static DAEMON_DRAINS: AtomicBool = AtomicBool::new(false);
+static PROBES_TIMED: AtomicBool = AtomicBool::new(false);
 
 /// What the scenario leaves behind.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -145,6 +146,9 @@ fn relay_blips(_ctx: &Context) -> ScenarioFuture<'_> {
 fn daemon_drains(_ctx: &Context) -> ScenarioFuture<'_> {
     change_then_fail(&DAEMON_DRAINS, NO_TRADE)
 }
+fn probes_timed(_ctx: &Context) -> ScenarioFuture<'_> {
+    change_then_fail(&PROBES_TIMED, NO_PAYOUT)
+}
 
 macro_rules! selftest {
     ($name:literal, $body:ident) => {
@@ -168,6 +172,7 @@ selftest!("zz_runner_wallets_drain", wallets_drain);
 selftest!("zz_runner_daemon_dies", daemon_dies);
 selftest!("zz_runner_relay_blips", relay_blips);
 selftest!("zz_runner_daemon_drains", daemon_drains);
+selftest!("zz_runner_probes_timed", probes_timed);
 
 /// How a scenario's failure was reported.
 struct Reported {
@@ -176,6 +181,8 @@ struct Reported {
     timeline: String,
     /// The run's `run.log`, empty when the run kept none.
     log: String,
+    /// The run's phases from `timings.json`, in the order they ended.
+    phases: Vec<String>,
 }
 
 /// Runs `scenario` against `net`, on a stack whose daemon declares it
@@ -204,12 +211,44 @@ async fn failure_of(scenario: &str, net: &StackAfter) -> Reported {
         .path()
         .join("artifacts")
         .join(summary.run_id.as_str());
+    let timings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(run_dir.join(files::TIMINGS)).unwrap())
+            .unwrap();
     Reported {
         category: *category,
         message: message.clone(),
         timeline: std::fs::read_to_string(run_dir.join(files::TIMELINE)).unwrap(),
         log: std::fs::read_to_string(run_dir.join("run.log")).unwrap_or_default(),
+        phases: timings["phases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|phase| phase["phase"].as_str().unwrap().to_owned())
+            .collect(),
     }
+}
+
+/// The probes a failure is attributed by can take longer than the failure
+/// did, so they are a phase of their own: after the scenario, before the
+/// cleanup sweep.
+#[tokio::test]
+async fn a_failures_probes_are_timed_as_a_phase_of_their_own() {
+    // Arrange
+    let net = StackAfter::new(&PROBES_TIMED, Change::Drained);
+
+    // Act
+    let reported = failure_of("zz_runner_probes_timed", &net).await;
+
+    // Assert
+    let phases = &reported.phases;
+    let at = |name: &str| {
+        phases
+            .iter()
+            .position(|phase| phase == name)
+            .unwrap_or_else(|| panic!("{name} missing from {phases:?}"))
+    };
+    assert!(at("scenario") < at("attribution"), "{phases:?}");
+    assert!(at("attribution") < at("cleanup"), "{phases:?}");
 }
 
 #[tokio::test]

@@ -80,31 +80,58 @@ impl World<'_> {
                 }
             }
         }
-        let result =
-            execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()).await;
+        let result = self
+            .timings
+            .time(
+                "scenario",
+                None,
+                execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()),
+            )
+            .await;
         // Before cleanup: the moment of interest is the failure, not after
         // the sweep has spent its own deadlines on a stack that is gone.
-        let result =
-            attribution::after_failure(config, self.deps.net, &self.timeline, result).await;
+        let result = attribution::after_failure(
+            config,
+            self.deps.net,
+            &self.timeline,
+            &self.timings,
+            result,
+        )
+        .await;
         if let Some(journal) = self.desktop.recovery.as_ref() {
-            let discovery = recovery::discover(&ctx, journal).await;
+            let discovery = self
+                .timings
+                .time("discovery", None, recovery::discover(&ctx, journal))
+                .await;
             // Audited only after discovery, so an order the app lists wins,
             // and across the quiet window, so a request the client sent
             // before it died has had its chance to be published.
             let audit = match self.desktop.relay_audit.as_ref() {
                 Some(source) if recovery::unresolved_submissions(journal) => Some(
-                    recovery::observe_relay_quiet(journal, ctx.recovery.quiet_window, || {
-                        source.fetch()
-                    })
-                    .await,
+                    self.timings
+                        .time(
+                            "relay-quiet",
+                            None,
+                            recovery::observe_relay_quiet(
+                                journal,
+                                ctx.recovery.quiet_window,
+                                || source.fetch(),
+                            ),
+                        )
+                        .await,
                 ),
                 _ => None,
             };
             recovery::settle_after_scenario(journal, discovery, audit, &mut summary.checks);
         }
-        execute::sweep_cleanup(&ctx).await;
+        self.timings
+            .time("cleanup", None, execute::sweep_cleanup(&ctx))
+            .await;
         if let Some(journal) = self.desktop.recovery.as_ref()
-            && let Err(error) = recovery::verify_payments(&ctx, journal).await
+            && let Err(error) = self
+                .timings
+                .time("payments", None, recovery::verify_payments(&ctx, journal))
+                .await
         {
             summary
                 .checks
@@ -115,6 +142,8 @@ impl World<'_> {
 
     /// Cleanup report, teardown of devices and relay, evidence flush.
     pub(super) async fn tear_down(&mut self, summary: &mut RunSummary) {
+        let started = tokio::time::Instant::now();
+        let mut ui = BTreeMap::new();
         summary.cleanup = Some(self.cleanup.report());
         summary.budget = Some(
             self.budget
@@ -155,6 +184,7 @@ impl World<'_> {
             }
         }
         if let Some(farm) = self.farm.take() {
+            let clocks = farm.ui_clocks();
             // The clients' own logs go with their profiles; keep them first.
             for (actor, session) in farm.sessions() {
                 for (name, text) in session.diagnostics().await {
@@ -167,6 +197,8 @@ impl World<'_> {
                 }
             }
             summary.farm_teardown = farm.tear_down().await;
+            // Read once the sessions have ended, so their `end` is counted.
+            ui = clocks.times();
             let ok = summary.farm_teardown.iter().all(|i| i.ok);
             summary.checks.push(
                 "client-teardown",
@@ -193,6 +225,9 @@ impl World<'_> {
         if let Some(journal) = self.desktop.recovery.as_ref() {
             recovery::finish(journal, summary, self.artifacts);
         }
+        self.timings
+            .record("teardown", None, started, tokio::time::Instant::now());
+        self.timings.persist(self.artifacts, ui);
     }
 
     fn evidence_failed(&self, summary: &mut RunSummary, file: &str, error: std::io::Error) {

@@ -352,8 +352,20 @@ async fn read_initial(
 ) -> Result<Identity> {
     let actor = ctx.actor;
     let mut checks = DoctorReport::default();
-    let setup =
-        bootstrap_session(config, adapter, ctx, env, artifacts, recorder, &mut checks).await;
+    let timings = mortsom_coordinator::run::timings::RunTimings::default();
+    let setup = bootstrap_session(
+        config,
+        adapter,
+        ctx,
+        env,
+        mortsom_coordinator::bootstrap::StepRecords {
+            artifacts,
+            recorder,
+            timings: &timings,
+        },
+        &mut checks,
+    )
+    .await;
     artifacts.write_json(&format!("{}-bootstrap.json", actor.as_str()), &checks)?;
     if !checks.is_healthy()
         || setup.identity.is_none()

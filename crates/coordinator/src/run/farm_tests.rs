@@ -12,6 +12,7 @@ async fn failed_actor_shutdown_is_retried_before_releasing_session_ownership() {
     let bob = Arc::new(ScriptedUi::default());
     let farm = Farm::Desktop {
         sessions: vec![(Actor::Alice, alice.clone()), (Actor::Bob, bob.clone())],
+        timers: Vec::new(),
         server: None,
         bundle,
         app_version: None,
