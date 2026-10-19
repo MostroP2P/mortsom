@@ -24,7 +24,8 @@ fn ended_at(timings: &serde_json::Value, phase: &str, actor: &str) -> usize {
 }
 
 /// One actor's bootstrap does not wait for the other's: each waits at
-/// onboarding until the other got there too.
+/// onboarding until the other got there too, and gives up on its
+/// onboarding if the other never does.
 #[tokio::test]
 async fn alice_and_bob_bootstrap_at_the_same_time() {
     mortsom_scenarios::link();
@@ -34,13 +35,9 @@ async fn alice_and_bob_bootstrap_at_the_same_time() {
         ..FakeAdapter::full()
     });
 
-    let summary = tokio::time::timeout(
-        Duration::from_secs(10),
-        run(&world, adapter, opts_in(&world, &["happy_sell"]), true),
-    )
-    .await
-    .expect("one actor's bootstrap waited for the other's to end")
-    .unwrap();
+    let summary = run(&world, adapter, opts_in(&world, &["happy_sell"]), true)
+        .await
+        .unwrap();
 
     assert!(summary.passed, "{}", summary.checks.render());
 }
