@@ -263,3 +263,94 @@ async fn finds_nothing_for_an_identifier_not_on_screen() {
 
     assert!(found.is_none());
 }
+
+/// A button as Flutter serves it: no action while it is disabled.
+struct Button {
+    /// Action-count reads still to answer with none; the button is enabled
+    /// after them.
+    disabled_reads: Arc<AtomicUsize>,
+    pressed: Arc<AtomicUsize>,
+    /// How long the app takes to answer a press it already received.
+    press_latency: Duration,
+}
+
+#[zbus::interface(name = "org.a11y.atspi.Action")]
+impl Button {
+    #[zbus(property)]
+    fn n_actions(&self) -> i32 {
+        let left = self.disabled_reads.load(Ordering::SeqCst);
+        if left == 0 {
+            return 1;
+        }
+        self.disabled_reads.fetch_sub(1, Ordering::SeqCst);
+        0
+    }
+    async fn do_action(&self, _index: i32) -> bool {
+        self.pressed.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.press_latency).await;
+        true
+    }
+}
+
+/// A screen whose only control, `order.take.confirm`, is `button`.
+async fn screen_with(button: Button) -> (Connection, Connection) {
+    let (client, server) = tokio::net::UnixStream::pair().unwrap();
+    let builder = zbus::connection::Builder::unix_stream(server)
+        .server(zbus::Guid::generate())
+        .unwrap()
+        .p2p()
+        .serve_at(ROOT, object("main", &["/take"], None))
+        .unwrap()
+        .serve_at(
+            "/take",
+            object("[mortsom:order.take.confirm]Take", &[], None),
+        )
+        .unwrap()
+        .serve_at("/take", button)
+        .unwrap();
+    let client = zbus::connection::Builder::unix_stream(client).p2p().build();
+    let (server, client) = tokio::try_join!(builder.build(), client).unwrap();
+    (server, client)
+}
+
+/// A control the app has not enabled yet exposes no action: the buyer's
+/// Take waits for the payout address (2026-10-19, run
+/// `20261019T201137Z-22b7ea1f2a59`). The tap waits for it, as a person
+/// would, and presses it once.
+#[tokio::test]
+async fn a_tap_waits_for_a_control_the_app_has_not_enabled_yet() {
+    let pressed = Arc::new(AtomicUsize::new(0));
+    let (_server, client) = screen_with(Button {
+        disabled_reads: Arc::new(AtomicUsize::new(3)),
+        pressed: Arc::clone(&pressed),
+        press_latency: Duration::ZERO,
+    })
+    .await;
+    let native = Native::from_connection(client);
+    let take = native.find("order.take.confirm").await.unwrap().unwrap();
+
+    native.click(&take).await.unwrap();
+
+    assert_eq!(pressed.load(Ordering::SeqCst), 1);
+}
+
+/// The deadline bounds the wait for a control that takes actions, never
+/// the press: one cut off after the app received it may still run there,
+/// and the run would report a failure for an order it created.
+#[tokio::test]
+async fn a_press_that_started_is_awaited_past_the_deadline() {
+    let pressed = Arc::new(AtomicUsize::new(0));
+    let (_server, client) = screen_with(Button {
+        disabled_reads: Arc::new(AtomicUsize::new(3)),
+        pressed: Arc::clone(&pressed),
+        press_latency: Duration::from_millis(600),
+    })
+    .await;
+    let native = Native::from_connection(client);
+    let take = native.find("order.take.confirm").await.unwrap().unwrap();
+
+    let pressed_once = native.click_within(&take, Duration::from_millis(400)).await;
+
+    assert_eq!(pressed.load(Ordering::SeqCst), 1);
+    assert!(pressed_once.is_ok(), "{pressed_once:?}");
+}
