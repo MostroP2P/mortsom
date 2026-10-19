@@ -32,7 +32,9 @@ max_order_amount = 1000000
 min_payment_amount = 100
 expiration_hours = 1
 # Taker-action window in seconds: waiting-payment and waiting-buyer-invoice.
-expiration_seconds = 120
+# Restarted at every trade step; the slowest one the catalogue takes inside
+# it is 33 s.
+expiration_seconds = 90
 user_rates_sent_interval_seconds = 30
 max_expiration_days = 1
 publish_relays_interval = 60

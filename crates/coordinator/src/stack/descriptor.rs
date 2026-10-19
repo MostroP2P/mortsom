@@ -139,14 +139,32 @@ impl Descriptor {
     }
 }
 
-/// Reads the committed limits declaration.
-pub fn load_limits(path: &Path) -> Result<DeclaredLimits, StackError> {
+/// `stack/limits.toml`: the limits every stack declares, and the
+/// untaken-order lifetime a bond stack declares in place of the plain one.
+#[derive(Deserialize)]
+struct LimitsFile {
+    #[serde(flatten)]
+    limits: DeclaredLimits,
+    bond_order_expiration_secs: u64,
+}
+
+/// Reads the committed limits declaration for a stack with or without the
+/// bond (`stack up --bond`).
+pub fn load_limits(path: &Path, bond: bool) -> Result<DeclaredLimits, StackError> {
     let raw = std::fs::read_to_string(path).map_err(|error| {
         StackError::Configuration(format!("cannot read {}: {error}", path.display()))
     })?;
-    let limits: DeclaredLimits = toml::from_str(&raw).map_err(|error| {
+    let file: LimitsFile = toml::from_str(&raw).map_err(|error| {
         StackError::Configuration(format!("{} is invalid: {error}", path.display()))
     })?;
+    let limits = if bond {
+        DeclaredLimits {
+            order_expiration_secs: file.bond_order_expiration_secs,
+            ..file.limits
+        }
+    } else {
+        file.limits
+    };
     limits.validate()?;
     Ok(limits)
 }

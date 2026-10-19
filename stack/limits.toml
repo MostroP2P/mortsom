@@ -5,12 +5,18 @@
 # Untaken order lifetime. The daemon's own default is [mostro].expiration_hours,
 # hour-granular; a Mortsom client build asks the daemon for this lifetime on
 # every order it creates (MORTSOM_ORDER_EXPIRY_SECS), and the reaper checks
-# expiries once a minute.
-order_expiration_secs = 600
+# expiries once a minute. A plain stack's longest-lived pending order needs
+# about 159 s (cancel_after_take_unpaid).
+order_expiration_secs = 360
+# The same lifetime on a `stack up --bond` stack. A timeout slash puts the
+# order back in pending with the expiry it had at creation, and the claim
+# that follows is paid before the maker cancels: 467 s in
+# bond_claim_fails_then_replaced.
+bond_order_expiration_secs = 600
 # [lightning].hold_invoice_expiration_window
 hold_invoice_expiry_secs = 120
 # [mostro].expiration_seconds
-buyer_invoice_deadline_secs = 120
+buyer_invoice_deadline_secs = 90
 # [lightning].invoice_expiration_window
 payout_invoice_min_expiry_secs = 300
 # [lightning].max_inflight_payouts_per_destination

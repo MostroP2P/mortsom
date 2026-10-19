@@ -170,8 +170,11 @@ only let a payment succeed by accident. Carol exists so the daemon never escrows
    prepared image ID. With `--bond` the settings also carry the committed `[anti_abuse_bond]` fragment
    (`stack/mostro-bond.tpl.toml`): the daemon then asks every maker for a bond before it publishes the order
    and every taker before the trade starts, and the descriptor declares that policy (side, share of the
-   order, floor, timeout slashing, the node's share of a slash, claim window) to every run on the stack. A
-   stack built without it declares no bond. The base template never carries the section itself, so no
+   order, floor, timeout slashing, the node's share of a slash, claim window) to every run on the stack. Such
+   a stack also declares a longer untaken-order lifetime (`bond_order_expiration_secs` in `stack/limits.toml`)
+   in place of `order_expiration_secs`: a timeout slash returns the order to `pending` with the expiry it had
+   at creation, and the claim that follows is paid before the maker cancels it. A stack built without it
+   declares no bond. The base template never carries the section itself, so no
    other family is ever run against a bonded daemon by accident.
 4. Wait until the daemon publishes its info event on the relay, then validate regtest networks, advertised
    relay endpoints, channel liquidity and declared limits. The info event's `bond_*` tags must advertise
