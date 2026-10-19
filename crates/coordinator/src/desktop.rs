@@ -308,10 +308,15 @@ async fn build_artifact(
     tracing::info!(%platform, "building v2 clients");
     for (command, timeout) in plan {
         let started = std::time::Instant::now();
-        run_ok(runner, &command, timeout)
-            .await
-            .map_err(build_error)?;
-        tracing::info!(step = %build_step(&command), elapsed = ?started.elapsed(), "build step finished");
+        let outcome = run_ok(runner, &command, timeout).await;
+        let (step, elapsed) = (build_step(&command), started.elapsed());
+        // Logged before a failure returns: a failed or timed-out step is
+        // the one whose time matters most.
+        match &outcome {
+            Ok(_) => tracing::info!(%step, ?elapsed, "build step finished"),
+            Err(_) => tracing::warn!(%step, ?elapsed, "build step failed"),
+        }
+        outcome.map_err(build_error)?;
     }
     provenance.commands = commands;
     provenance.finish(source, host).await?;
