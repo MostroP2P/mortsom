@@ -154,3 +154,119 @@ async fn up_with_bond_refuses_a_missing_fragment_before_touching_docker() {
     );
     assert!(docker.matching("pull").is_empty());
 }
+
+/// A timeout slash puts the order back in `pending` with the expiry it had
+/// at creation, and the claim that follows is paid before the maker cancels
+/// it (467 s in `bond_claim_fails_then_replaced`): a bond stack keeps its
+/// untaken orders alive longer than a plain one, whose longest-lived order
+/// needs about 159 s (#97).
+#[tokio::test]
+async fn a_bond_stack_keeps_untaken_orders_alive_longer_than_a_plain_one() {
+    // Arrange
+    let (_plain_dir, plain_layout) = scratch();
+    let (_bond_dir, bond_layout) = scratch();
+    let bonded = UpOptions {
+        bond: true,
+        ..quick()
+    };
+
+    // Act
+    let plain = up(
+        &ScriptedStack::fresh(&plain_layout),
+        &Publishes(true),
+        &plain_layout,
+        &quick(),
+    )
+    .await
+    .unwrap();
+    let bond = up(
+        &ScriptedStack::fresh(&bond_layout),
+        &Advertises(ADVERTISES_THE_FRAGMENT),
+        &bond_layout,
+        &bonded,
+    )
+    .await
+    .unwrap();
+
+    // Assert
+    assert_eq!(plain.declared_limits.order_expiration_secs, 360);
+    assert_eq!(bond.declared_limits.order_expiration_secs, 600);
+}
+
+/// `maker_bond_expires_unpaid` watches the maker's bond lapse, not the
+/// order: the bond's timeout, plus the minute the daemon's reaper may take
+/// to notice, ends before a bond stack's order would expire.
+#[test]
+fn a_makers_unpaid_bond_lapses_before_the_order_expires() {
+    // Arrange
+    const REAPER_TICK_SECS: i64 = 60;
+    let (_dir, layout) = scratch();
+    let fragment: toml::Table = include_str!("../../../../stack/mostro-bond.tpl.toml")
+        .parse()
+        .unwrap();
+
+    // Act
+    let limits = descriptor::load_limits(&layout.limits_file(), true).unwrap();
+    let timeout = fragment["anti_abuse_bond"]["maker_bond_payment_timeout_seconds"]
+        .as_integer()
+        .unwrap();
+
+    // Assert
+    assert!(
+        timeout + REAPER_TICK_SECS < i64::try_from(limits.order_expiration_secs).unwrap(),
+        "{timeout} s + reaper vs {} s",
+        limits.order_expiration_secs
+    );
+}
+
+/// The daemon's clocks are as short as the catalogue allows (#97): each one
+/// bounds a wait some scenario sits through, and is still well above the
+/// slowest step measured inside it.
+#[test]
+fn the_daemon_clocks_are_as_short_as_the_catalogue_allows() {
+    // Arrange
+    let settings: toml::Table = include_str!("../../../../stack/mostro-settings.tpl.toml")
+        .parse()
+        .unwrap();
+    let fragment: toml::Table = include_str!("../../../../stack/mostro-bond.tpl.toml")
+        .parse()
+        .unwrap();
+
+    // Assert
+    // Restarted at every trade step; the slowest one measured takes 33 s.
+    assert_eq!(
+        settings["mostro"]["expiration_seconds"].as_integer(),
+        Some(90)
+    );
+    // The maker pays the bond about 22 s after creating the order.
+    assert_eq!(
+        fragment["anti_abuse_bond"]["maker_bond_payment_timeout_seconds"].as_integer(),
+        Some(120)
+    );
+}
+
+/// Checkouts share one stack directory (`--stack-dir`), and one from before
+/// the bond stack had its own lifetime has a limits file without it: a
+/// plain stack still reads it, and a bond stack refuses it by name rather
+/// than give its orders the plain lifetime.
+#[test]
+fn a_limits_file_without_the_bond_lifetime_serves_only_a_plain_stack() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let committed = include_str!("../../../../stack/limits.toml");
+    let older: String = committed
+        .lines()
+        .filter(|line| !line.starts_with("bond_order_expiration_secs"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(layout.limits_file(), older).unwrap();
+
+    // Act
+    let plain = descriptor::load_limits(&layout.limits_file(), false);
+    let bond = descriptor::load_limits(&layout.limits_file(), true);
+
+    // Assert
+    assert_eq!(plain.unwrap().order_expiration_secs, 360);
+    let refused = bond.unwrap_err().to_string();
+    assert!(refused.contains("bond_order_expiration_secs"), "{refused}");
+}

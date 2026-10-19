@@ -81,7 +81,7 @@ pub async fn up(
             layout.template().display()
         )));
     }
-    let limits = load_limits(&layout.limits_file())?;
+    let limits = load_limits(&layout.limits_file(), options.bond)?;
     let (template, limits) = if options.bond {
         let fragment = read(&layout.bond_template())?;
         let bond = super::bond::parse_fragment(&fragment)?;

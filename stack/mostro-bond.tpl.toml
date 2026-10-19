@@ -34,4 +34,4 @@ payout_claim_window_days = 1
 # Seconds a maker has to pay the bond before the daemon drops the order it
 # never published. Long enough to create, prove the order unpublished for
 # the quiet window and pay; short enough to watch it lapse.
-maker_bond_payment_timeout_seconds = 180
+maker_bond_payment_timeout_seconds = 120
