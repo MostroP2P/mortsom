@@ -94,6 +94,36 @@ async fn a_state_before_the_baseline_does_not_satisfy_a_wait_since() {
     assert_eq!(state, OrderState::Pending);
 }
 
+/// The parity report reads a run's relay path from these lines
+/// (`relay: order <id> is <state>`, `coordinator::parity::relay_path`): in
+/// any other grammar the wait drops out of every comparison.
+#[tokio::test]
+async fn a_wait_since_records_the_relay_line_parity_reads() {
+    let (ctx, daemon) = daemon_context();
+    let order = OrderReference::new(ORDER);
+    let since = relay_cursor(&ctx);
+    daemon.order("pending");
+
+    wait_relay_state_since(
+        &ctx,
+        &order,
+        &[OrderState::Pending],
+        since,
+        Duration::from_millis(300),
+    )
+    .await
+    .unwrap();
+
+    assert!(
+        ctx.timeline
+            .entries()
+            .iter()
+            .any(|e| e.summary.starts_with("relay: order o1 is pending (event ")),
+        "{:?}",
+        ctx.timeline.entries()
+    );
+}
+
 /// The negative assertion spends its window and passes when the daemon
 /// stays quiet; a cancellation published inside it is the product failure
 /// it exists to catch.

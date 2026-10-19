@@ -260,10 +260,11 @@ pub async fn taker_bond_declined(ctx: &Context) -> Result<(), ScenarioError> {
 
 /// Alice creates a sell order. Bob takes it, is asked for a bond, and
 /// never pays it nor walks away; he is on the trade screen, not the pay
-/// screen, when the bond invoice expires on the daemon's node. The daemon
-/// puts the order back on the book: a pending revision later than the take,
-/// and never the take itself. Alice's app shows it pending. The daemon
-/// tells Bob nothing, but the revision comes with the invoice's expiry,
+/// screen, when the bond invoice expires on the daemon's node. The order
+/// never left `pending` on the book, the take was never published, and the
+/// daemon now republishes it: a new pending revision, later than the take.
+/// Alice's app shows it pending. The daemon tells Bob nothing, but the
+/// revision comes with the invoice's expiry,
 /// which his app knows: it no longer holds the order within a state wait of
 /// it, wherever he is. Bob paid nothing. Alice then cancels the order, and
 /// her bond comes back.

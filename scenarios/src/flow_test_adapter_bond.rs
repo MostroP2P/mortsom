@@ -105,7 +105,8 @@ impl Adapter {
 
     /// The deadline of the bond just asked for on `order`, when the fixture
     /// daemon lets unpaid bonds lapse: a maker's order it never published is
-    /// dropped without a word, a taker's take goes back on the book.
+    /// dropped without a word, a taker's take ends and the order, `pending`
+    /// all along, is republished.
     pub(crate) fn lapse_unpaid_bond(&self, order: &str, taker: bool) {
         if !self.state.lock().unwrap().expires_unpaid_bonds {
             return;

@@ -10,7 +10,7 @@ onboarding, identity probes, cancellation diagnostics and skipped cases never co
   - mostrod `main` at `f1f7a62` (v0.20.0), on a `stack up --bond` stack (daemon `ef1ca75a…`). The bond is 1% of the order, at least 1000 sats, asked of both sides, slashed on a waiting timeout, with half kept by the node.
   - Mortsom at this change.
 - **Result: 14 passed, 1 failed, every cleanup clean.** The failure is a product one: the taker's app keeps a take whose bond lapsed (MostroP2P/app#849).
-  - `taker_bond_expires_unpaid` against the fix branch (`fix/taker-bond-lapse` at `ac207d4e`): **passes**, `20261018T224436Z-0460d2323d34`. Bob's app closed the take one second after the daemon republished the order.
+  - `taker_bond_expires_unpaid` against the fix branch (`fix/taker-bond-lapse` at `ac207d4e`): **passes**, `20261018T224436Z-0460d2323d34`. Bob's app closed the take one second after the daemon republished the order, still `pending`. It passes again after the branch's review round (`fd087999`), which closes the take only on that republish: `20261018T233720Z-b37649a0935a`.
   - Against app `main` (`989735f7`): **fails**, `20261018T225415Z-49e74f4d48b3`.
 - `maker_bond_locked_before_publish` covers app #846's path: the maker pays the bond, and the order reaches the book and the app pending only then. The "order published" notification card itself cannot be read, because notification cards carry no automation identifiers.
 - **Web was not run:** this host has no Chromium.
@@ -20,7 +20,7 @@ onboarding, identity probes, cancellation diagnostics and skipped cases never co
 | `taker_bond_released_after_trade` | `20261018T214720Z-5f2ca00a94d9` |
 | `seller_taker_bond_then_escrow` | `20261018T213151Z-67799ec50991` |
 | `taker_bond_declined` | `20261018T213613Z-5336ded60a9a` |
-| `taker_bond_expires_unpaid` | **fails** on the app, `20261018T213917Z-b736767e53c0`: Bob's app still holds the order 90 s after the daemon put it back on the book (MostroP2P/app#849) |
+| `taker_bond_expires_unpaid` | **fails** on the app, `20261018T213917Z-b736767e53c0`: Bob's app still holds the order 90 s after the daemon republished it, still `pending`, when his bond lapsed (MostroP2P/app#849) |
 | `maker_bond_locked_before_publish` | `20261018T222108Z-894940572e6d` |
 | `maker_bond_abandoned` | `20261018T221404Z-7e6f088df221` |
 | `maker_bond_expires_unpaid` | `20261018T221549Z-2017e4b64030` |
