@@ -493,8 +493,17 @@ impl AppAdapter for FakeAdapter {
             .lock()
             .unwrap()
             .push(format!("onboard:{}", device.actor));
-        if let Some(meet) = &self.onboarding_meets {
-            meet.wait().await;
+        // Bounded here, not around the whole run: under load a run takes
+        // longer than the rendezvous ever should, and one actor at a time
+        // then fails its onboarding instead of hanging the test.
+        if let Some(meet) = &self.onboarding_meets
+            && tokio::time::timeout(Duration::from_secs(10), meet.wait())
+                .await
+                .is_err()
+        {
+            return Err(AdapterError::infrastructure(
+                "the other actor never reached onboarding",
+            ));
         }
         if let Some((_, delay)) = self
             .slow_onboarding
