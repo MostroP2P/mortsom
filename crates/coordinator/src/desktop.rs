@@ -81,7 +81,16 @@ pub async fn prepare(
         },
         None => {
             crate::doctor::require_build_prerequisites(&config, platform, &xvfb, host).await?;
-            obtain_build(&config, platform, cache.as_ref(), policy, runner, host).await?
+            obtain_build(
+                &config,
+                platform,
+                managed.is_some(),
+                cache.as_ref(),
+                policy,
+                runner,
+                host,
+            )
+            .await?
         }
     };
     record_selection(managed.as_ref(), &mut provenance)?;
@@ -130,6 +139,7 @@ struct Obtained {
 async fn obtain_build(
     config: &Config,
     platform: Platform,
+    managed: bool,
     cache: Option<&BuildCache>,
     policy: Policy,
     runner: &dyn CommandRunner,
@@ -142,6 +152,7 @@ async fn obtain_build(
     let plan = build_plan(
         &source,
         platform,
+        bindings_of(&source, managed, runner).await,
         &config.mobile.mostro_pubkey,
         config.relay.host_port,
         config.mobile.order_expiry_secs,
@@ -355,9 +366,31 @@ fn recorded(command: &Command, source: &Path) -> Vec<String> {
         .collect()
 }
 
+/// Where a build's Flutter Rust Bridge bindings come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Bindings {
+    /// The checkout commits them; the build uses them as committed.
+    Committed,
+    /// `scripts/frb-generate.sh` writes them before the build.
+    Generate,
+}
+
+/// A managed checkout that commits its bindings is built with them, as the
+/// app's own release is. Any other is generated: a local checkout may carry
+/// API edits its committed bindings do not.
+async fn bindings_of(source: &Path, managed: bool, runner: &dyn CommandRunner) -> Bindings {
+    if managed && crate::app_source::commits_bindings(source, runner).await {
+        tracing::info!("building with the bindings the revision commits");
+        Bindings::Committed
+    } else {
+        Bindings::Generate
+    }
+}
+
 fn build_plan(
     source: &Path,
     platform: Platform,
+    bindings: Bindings,
     pubkey: &str,
     relay_port: u16,
     order_expiry_secs: Option<u64>,
@@ -369,13 +402,13 @@ fn build_plan(
             .extend(args.iter().map(|arg| (*arg).to_owned()));
         command
     };
-    let mut commands = vec![
-        (script(&["flutter", "pub", "get"]), Duration::from_secs(600)),
-        (
+    let mut commands = vec![(script(&["flutter", "pub", "get"]), Duration::from_secs(600))];
+    if bindings == Bindings::Generate {
+        commands.push((
             script(&["./scripts/frb-generate.sh"]),
             Duration::from_secs(600),
-        ),
-    ];
+        ));
+    }
     if platform == Platform::Web {
         commands.push((
             script(&["./scripts/build-web.sh", "--release"]),
@@ -514,7 +547,14 @@ mod tests {
             Some(600),
         );
         assert_eq!(build_step(&linux), "flutter build linux");
-        let plan = build_plan(Path::new("/app"), Platform::Linux, "public", 7001, None);
+        let plan = build_plan(
+            Path::new("/app"),
+            Platform::Linux,
+            Bindings::Generate,
+            "public",
+            7001,
+            None,
+        );
         let steps: Vec<String> = plan
             .iter()
             .map(|(command, _)| build_step(command))
@@ -524,6 +564,36 @@ mod tests {
             steps
                 .iter()
                 .all(|step| !step.contains("public") && !step.contains("/app"))
+        );
+    }
+
+    #[test]
+    fn committed_bindings_leave_codegen_out_of_the_plan() {
+        let steps = |platform| {
+            build_plan(
+                Path::new("/app"),
+                platform,
+                Bindings::Committed,
+                "public",
+                7001,
+                None,
+            )
+            .iter()
+            .map(|(command, _)| build_step(command))
+            .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            steps(Platform::Linux),
+            ["flutter pub get", "flutter build linux"]
+        );
+        assert_eq!(
+            steps(Platform::Web),
+            [
+                "flutter pub get",
+                "./scripts/build-web.sh",
+                "flutter build web"
+            ]
         );
     }
 

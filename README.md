@@ -286,7 +286,9 @@ fingerprint. A moving branch cannot change a family's code halfway through. Reco
 captured bundle, without fetching again. Changing the daemon/stack still requires a new app build.
 
 Builds run `flutter pub get`, `scripts/frb-generate.sh`, the Web WASM script when applicable, and Flutter's
-build with the Mortsom entrypoint and isolated stack defines. Linux and Web builds must run sequentially.
+build with the Mortsom entrypoint and isolated stack defines. A fetched revision that commits its generated
+bindings skips `scripts/frb-generate.sh` and is built with them as committed; a local checkout always
+regenerates them. Linux and Web builds must run sequentially.
 The selected app code must provide `lib/main_mortsom.dart` and the automation contract needed by the
 selected scenarios; an older or incompatible PR reports the missing file/control or build failure.
 
