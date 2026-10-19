@@ -5,6 +5,10 @@ use std::{future::Future, time::Duration};
 
 pub(crate) enum AccessError {
     Stale,
+    /// The control is there but cannot take the request yet, such as a
+    /// button the app has not enabled: it is found again and retried until
+    /// the deadline, which then reports this cause.
+    NotYet(UiError),
     Permanent(UiError),
 }
 impl From<UiError> for AccessError {
@@ -44,7 +48,7 @@ where
             tick.tick().await;
             match operation().await {
                 Ok(value) => return Ok(value),
-                Err(AccessError::Stale) => continue,
+                Err(AccessError::Stale | AccessError::NotYet(_)) => continue,
                 Err(AccessError::Permanent(cause)) => return Err(cause),
             }
         }
@@ -68,7 +72,8 @@ where
     let (id, _) = crate::native::label(&node.name)
         .ok_or_else(|| crate::native::error("control has no contract identifier"))?;
     let mut current = Some(node.clone());
-    tokio::time::timeout(timeout, async {
+    let mut not_yet = None;
+    let outcome = tokio::time::timeout(timeout, async {
         let mut tick = tokio::time::interval(Duration::from_millis(50));
         loop {
             tick.tick().await;
@@ -82,12 +87,17 @@ where
             match read(node).await {
                 Ok(value) => return Ok(value),
                 Err(AccessError::Stale) => continue,
+                Err(AccessError::NotYet(cause)) => not_yet = Some(cause),
                 Err(AccessError::Permanent(cause)) => return Err(cause),
             }
         }
     })
-    .await
-    .map_err(|_| crate::native::error("accessibility control remained stale until deadline"))?
+    .await;
+    outcome.unwrap_or_else(|_| {
+        Err(not_yet.unwrap_or_else(|| {
+            crate::native::error("accessibility control remained stale until deadline")
+        }))
+    })
 }
 
 #[cfg(test)]
@@ -189,6 +199,36 @@ mod tests {
         .await;
         assert!(failure.is_err());
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// A control that never takes the request fails at the deadline with
+    /// its own cause, not as a stale tree.
+    #[tokio::test]
+    async fn a_control_that_never_takes_actions_fails_with_why_at_the_deadline() {
+        let node = crate::native::Node {
+            destination: ":1.1".into(),
+            path: "/submit".into(),
+            name: "[mortsom:submit]".into(),
+        };
+        let failure = with_fresh_node::<(), _, _, _, _>(
+            &node,
+            Duration::from_millis(200),
+            |_| {
+                let node = node.clone();
+                async move { Ok(Some(node)) }
+            },
+            |_| async {
+                Err(AccessError::NotYet(crate::native::error(
+                    "control exposes no default user action",
+                )))
+            },
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            failure.to_string().contains("no default user action"),
+            "{failure}"
+        );
     }
 
     #[tokio::test]

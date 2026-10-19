@@ -229,11 +229,15 @@ impl Native {
             .build()
             .await
             .map_err(classify)?;
-        // A read-only check may detect a rebuilt node before invocation. Once
-        // DoAction starts, every error is permanent to this attempt: replaying
-        // a business action after a lost acknowledgement could submit twice.
+        // A read-only check may detect a rebuilt node before invocation, or a
+        // control the app has not enabled yet, which exposes no action: both
+        // are found again. Once DoAction starts, every error is permanent to
+        // this attempt: replaying a business action after a lost
+        // acknowledgement could submit twice.
         if proxy.n_actions().await.map_err(classify)? <= 0 {
-            return Err(error("control exposes no default user action").into());
+            return Err(AccessError::NotYet(error(
+                "control exposes no default user action",
+            )));
         }
         if proxy.do_action(0).await.map_err(error)? {
             Ok(())
