@@ -211,39 +211,46 @@ impl Native {
 
     /// Invokes the accessible object's default user action.
     pub async fn click(&self, node: &Node) -> Result<(), UiError> {
-        with_fresh_node(
-            node,
-            Duration::from_secs(10),
-            |id| async move { self.find(&id).await },
-            |node| async move { self.click_once(&node).await },
-        )
-        .await
+        self.click_within(node, Duration::from_secs(10)).await
     }
 
-    async fn click_once(&self, node: &Node) -> Result<(), AccessError> {
+    /// `timeout` bounds the wait for a control that takes actions, never the
+    /// press: one cut off after the app received it may still run there.
+    /// Once DoAction starts, every error is final: replaying a business
+    /// action after a lost acknowledgement could submit twice.
+    async fn click_within(&self, node: &Node, timeout: Duration) -> Result<(), UiError> {
+        let proxy = with_fresh_node(
+            node,
+            timeout,
+            |id| async move { self.find(&id).await },
+            |node| async move { self.actionable(node).await },
+        )
+        .await?;
+        if proxy.do_action(0).await.map_err(error)? {
+            Ok(())
+        } else {
+            Err(error("action refused"))
+        }
+    }
+
+    /// The control's actions, once it takes one. A read-only check may
+    /// detect a rebuilt node, or a control the app has not enabled yet,
+    /// which exposes no action: both are found again.
+    async fn actionable(&self, node: Node) -> Result<ActionProxy<'static>, AccessError> {
         let proxy = ActionProxy::builder(&self.connection)
-            .destination(node.destination.as_str())
+            .destination(node.destination)
             .map_err(error)?
-            .path(node.path.as_str())
+            .path(node.path)
             .map_err(error)?
             .build()
             .await
             .map_err(classify)?;
-        // A read-only check may detect a rebuilt node before invocation, or a
-        // control the app has not enabled yet, which exposes no action: both
-        // are found again. Once DoAction starts, every error is permanent to
-        // this attempt: replaying a business action after a lost
-        // acknowledgement could submit twice.
         if proxy.n_actions().await.map_err(classify)? <= 0 {
             return Err(AccessError::NotYet(error(
                 "control exposes no default user action",
             )));
         }
-        if proxy.do_action(0).await.map_err(error)? {
-            Ok(())
-        } else {
-            Err(error("action refused").into())
-        }
+        Ok(proxy)
     }
 
     /// Focuses and verifies text through public accessibility state.

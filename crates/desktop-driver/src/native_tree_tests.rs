@@ -270,6 +270,8 @@ struct Button {
     /// after them.
     disabled_reads: Arc<AtomicUsize>,
     pressed: Arc<AtomicUsize>,
+    /// How long the app takes to answer a press it already received.
+    press_latency: Duration,
 }
 
 #[zbus::interface(name = "org.a11y.atspi.Action")]
@@ -283,8 +285,9 @@ impl Button {
         self.disabled_reads.fetch_sub(1, Ordering::SeqCst);
         0
     }
-    fn do_action(&self, _index: i32) -> bool {
+    async fn do_action(&self, _index: i32) -> bool {
         self.pressed.fetch_add(1, Ordering::SeqCst);
+        tokio::time::sleep(self.press_latency).await;
         true
     }
 }
@@ -320,6 +323,7 @@ async fn a_tap_waits_for_a_control_the_app_has_not_enabled_yet() {
     let (_server, client) = screen_with(Button {
         disabled_reads: Arc::new(AtomicUsize::new(3)),
         pressed: Arc::clone(&pressed),
+        press_latency: Duration::ZERO,
     })
     .await;
     let native = Native::from_connection(client);
@@ -328,4 +332,25 @@ async fn a_tap_waits_for_a_control_the_app_has_not_enabled_yet() {
     native.click(&take).await.unwrap();
 
     assert_eq!(pressed.load(Ordering::SeqCst), 1);
+}
+
+/// The deadline bounds the wait for a control that takes actions, never
+/// the press: one cut off after the app received it may still run there,
+/// and the run would report a failure for an order it created.
+#[tokio::test]
+async fn a_press_that_started_is_awaited_past_the_deadline() {
+    let pressed = Arc::new(AtomicUsize::new(0));
+    let (_server, client) = screen_with(Button {
+        disabled_reads: Arc::new(AtomicUsize::new(3)),
+        pressed: Arc::clone(&pressed),
+        press_latency: Duration::from_millis(600),
+    })
+    .await;
+    let native = Native::from_connection(client);
+    let take = native.find("order.take.confirm").await.unwrap().unwrap();
+
+    let pressed_once = native.click_within(&take, Duration::from_millis(400)).await;
+
+    assert_eq!(pressed.load(Ordering::SeqCst), 1);
+    assert!(pressed_once.is_ok(), "{pressed_once:?}");
 }
