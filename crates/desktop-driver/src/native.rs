@@ -5,6 +5,7 @@ use atspi::proxy::{
     text::TextProxy,
 };
 use atspi::zbus::{self, Connection};
+use futures::future::try_join_all;
 use mortsom_ui_driver::error::UiError;
 use mortsom_ui_driver::webdriver::WebDriverError;
 use std::time::Duration;
@@ -20,16 +21,54 @@ pub struct Node {
     pub name: String,
 }
 
-/// Reads children by count and index, as libatspi does. Flutter's view is an
+/// Most nodes a walk reads before it refuses the tree.
+const NODE_LIMIT: usize = 5000;
+
+/// A node's name and children, asked together. Flutter's view is an
 /// accessibility socket, and at-spi2-atk before its merge into at-spi2-core
-/// (2.38, Ubuntu 22.04) leaves the socket's embedded tree out of GetChildren.
-async fn children(proxy: &AccessibleProxy<'_>) -> Result<Vec<atspi::ObjectRefOwned>, AccessError> {
-    let count = proxy.child_count().await.map_err(classify)?;
-    let mut children = Vec::new();
-    for index in 0..count {
-        children.push(proxy.get_child_at_index(index).await.map_err(classify)?);
+/// (2.38, Ubuntu 22.04) leaves the socket's embedded tree out of
+/// GetChildren: a list shorter than the child count is read by index
+/// instead, as libatspi does.
+async fn read_node(proxy: &AccessibleProxy<'_>) -> Result<(String, Vec<Node>), AccessError> {
+    let (name, count, listed) =
+        tokio::join!(proxy.name(), proxy.child_count(), proxy.get_children());
+    let (name, count) = (name.map_err(classify)?, count.map_err(classify)?);
+    let mut children = listed.map_err(classify)?;
+    if usize::try_from(count).ok() != Some(children.len()) {
+        children = try_join_all((0..count).map(|index| proxy.get_child_at_index(index)))
+            .await
+            .map_err(classify)?;
     }
-    Ok(children)
+    let children = children
+        .iter()
+        .filter_map(|child| {
+            child.name_as_str().map(|destination| Node {
+                destination: destination.into(),
+                path: child.path_as_str().into(),
+                name: String::new(),
+            })
+        })
+        .collect();
+    Ok((name, children))
+}
+
+/// Puts the nodes read level by level, each with the indexes of its
+/// children, in the order of a depth-first walk that takes the last child
+/// first: the order `find` and the evidence have always read them in.
+fn depth_first(visited: Vec<(Node, Vec<usize>)>) -> Vec<Node> {
+    let mut order = Vec::with_capacity(visited.len());
+    let mut pending = vec![0];
+    while let Some(index) = pending.pop() {
+        if let Some((_, children)) = visited.get(index) {
+            order.push(index);
+            pending.extend(children);
+        }
+    }
+    let mut nodes: Vec<Option<Node>> = visited.into_iter().map(|(node, _)| Some(node)).collect();
+    order
+        .into_iter()
+        .filter_map(|index| nodes.get_mut(index).and_then(Option::take))
+        .collect()
 }
 
 /// Converts transport errors without exposing application data.
@@ -122,34 +161,42 @@ impl Native {
         retry(Duration::from_secs(10), || self.nodes_once()).await
     }
 
+    /// Reads a level of the tree at a time, all of its calls out at once. A
+    /// busy app answers one call per turn of its main loop, so a walk that
+    /// waited for each answer before the next call paid a turn per call.
     async fn nodes_once(&self) -> Result<Vec<Node>, AccessError> {
-        let mut pending = vec![Node {
-            destination: "org.a11y.atspi.Registry".into(),
-            path: "/org/a11y/atspi/accessible/root".into(),
-            name: String::new(),
-        }];
-        let mut nodes = Vec::new();
-        while let Some(mut node) = pending.pop() {
-            if nodes.len() >= 5000 {
+        let mut visited: Vec<(Node, Vec<usize>)> = Vec::new();
+        // Each node waits beside the index of the parent that listed it.
+        let mut level: Vec<(Option<usize>, Node)> = vec![(
+            None,
+            Node {
+                destination: "org.a11y.atspi.Registry".into(),
+                path: "/org/a11y/atspi/accessible/root".into(),
+                name: String::new(),
+            },
+        )];
+        while !level.is_empty() {
+            if visited.len() + level.len() > NODE_LIMIT {
                 return Err(error("accessibility tree exceeds limit").into());
             }
-            let proxy = self.proxy(&node).await?;
-            let name = proxy.name().await.map_err(classify)?;
-            let children = children(&proxy).await?;
-            drop(proxy);
-            node.name = name;
-            for child in children {
-                if let Some(destination) = child.name_as_str() {
-                    pending.push(Node {
-                        destination: destination.into(),
-                        path: child.path_as_str().into(),
-                        name: String::new(),
-                    });
+            let answers = try_join_all(
+                level
+                    .iter()
+                    .map(|(_, node)| async move { read_node(&self.proxy(node).await?).await }),
+            )
+            .await?;
+            let mut next = Vec::new();
+            for ((parent, node), (name, children)) in level.into_iter().zip(answers) {
+                let index = visited.len();
+                if let Some((_, of_parent)) = parent.and_then(|parent| visited.get_mut(parent)) {
+                    of_parent.push(index);
                 }
+                visited.push((Node { name, ..node }, Vec::new()));
+                next.extend(children.into_iter().map(|child| (Some(index), child)));
             }
-            nodes.push(node);
+            level = next;
         }
-        Ok(nodes)
+        Ok(depth_first(visited))
     }
 
     /// Finds an exact namespaced identifier, never localized copy.

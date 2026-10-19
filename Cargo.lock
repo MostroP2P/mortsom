@@ -1949,6 +1949,7 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "atspi",
+ "futures",
  "mortsom-common",
  "mortsom-ui-driver",
  "reqwest",
