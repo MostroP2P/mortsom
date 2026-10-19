@@ -404,6 +404,8 @@ fn managed(root: &Path) -> (Config, crate::build_cache::BuildCache) {
     (config, cache)
 }
 
+/// Builds `config`'s checkout as a managed one when there is a cache, which
+/// only a managed checkout opens.
 async fn obtain(
     config: &Config,
     cache: Option<&crate::build_cache::BuildCache>,
@@ -413,6 +415,7 @@ async fn obtain(
     obtain_build(
         config,
         Platform::Linux,
+        cache.is_some(),
         cache,
         policy,
         runner,
@@ -420,6 +423,80 @@ async fn obtain(
     )
     .await
     .unwrap()
+}
+
+/// What the build asks Git about `root`'s bindings, as the runner sees it.
+fn bindings_check(root: &Path) -> String {
+    let check = crate::app_source::bindings_check(&root.canonicalize().unwrap());
+    format!("env {}", check.args.join(" "))
+}
+
+fn ran_codegen(commands: &[Vec<String>]) -> bool {
+    commands
+        .iter()
+        .any(|command| command.iter().any(|arg| arg.ends_with("frb-generate.sh")))
+}
+
+/// The bindings a managed revision commits are the ones app CI checked and
+/// its release ships; generating them again only costs a cold compile.
+#[tokio::test]
+async fn a_managed_revision_is_built_with_the_bindings_it_commits() {
+    use crate::build_cache::Policy;
+    let root = tempfile::tempdir().unwrap();
+    let (config, cache) = managed(root.path());
+    let runner = FakeRunner::default();
+
+    let built = obtain(&config, Some(&cache), Policy::Reuse, &runner).await;
+
+    let calls = runner.calls();
+    assert_eq!(calls[0], bindings_check(root.path()));
+    assert!(calls[1].ends_with("flutter pub get"), "{calls:?}");
+    assert!(calls[2].contains("flutter build linux"), "{calls:?}");
+    assert_eq!(calls.len(), 3, "{calls:?}");
+    assert_eq!(built.provenance.commands.len(), 2);
+    assert!(!ran_codegen(&built.provenance.commands));
+}
+
+#[tokio::test]
+async fn a_managed_revision_without_its_bindings_generates_them() {
+    use crate::build_cache::Policy;
+    let root = tempfile::tempdir().unwrap();
+    let (config, cache) = managed(root.path());
+    let committed = obtain(&config, Some(&cache), Policy::Reuse, &FakeRunner::default()).await;
+    let runner = FakeRunner::default();
+    runner.script_failure(
+        &bindings_check(root.path()),
+        "error: pathspec 'lib/src/rust/frb_generated.dart' did not match any file(s) known to git",
+    );
+
+    let generated = obtain(&config, Some(&cache), Policy::Reuse, &runner).await;
+
+    let calls = runner.calls();
+    assert_eq!(calls[0], bindings_check(root.path()));
+    assert!(calls[2].ends_with("./scripts/frb-generate.sh"), "{calls:?}");
+    assert!(ran_codegen(&generated.provenance.commands));
+    assert_ne!(
+        generated.keep_as, committed.keep_as,
+        "a kept bundle is keyed by the commands that built it"
+    );
+}
+
+#[tokio::test]
+async fn a_local_checkout_always_generates_its_bindings() {
+    use crate::build_cache::Policy;
+    let root = tempfile::tempdir().unwrap();
+    let (config, _) = managed(root.path());
+    let runner = FakeRunner::default();
+
+    let built = obtain(&config, None, Policy::Reuse, &runner).await;
+
+    let calls = runner.calls();
+    assert!(calls[1].ends_with("./scripts/frb-generate.sh"), "{calls:?}");
+    assert!(
+        !calls.iter().any(|call| call.contains("ls-files")),
+        "{calls:?}"
+    );
+    assert!(ran_codegen(&built.provenance.commands));
 }
 
 #[tokio::test]
@@ -442,7 +519,8 @@ async fn a_kept_build_with_the_same_key_skips_every_build_command() {
         .unwrap();
     let runner = FakeRunner::default();
     let reused = obtain(&config, Some(&cache), Policy::Reuse, &runner).await;
-    assert!(runner.calls().is_empty(), "{:?}", runner.calls());
+    // Only the question the key depends on: whether the plan generates.
+    assert_eq!(runner.calls(), [bindings_check(root.path())]);
     assert_eq!(
         reused.provenance.origin,
         crate::provenance::ArtifactOrigin::Cached

@@ -408,6 +408,13 @@ fn git_command(directory: &Path, args: &[&str]) -> Command {
     command.env("GIT_TERMINAL_PROMPT", "0")
 }
 
+/// The Git command that fails unless `directory` tracks every one of `paths`.
+pub(crate) fn tracks_command(directory: &Path, paths: &[&str]) -> Command {
+    let mut args = vec!["ls-files", "--error-unmatch", "--"];
+    args.extend_from_slice(paths);
+    git_command(directory, &args)
+}
+
 async fn run_git<U: Upstream>(
     runner: &dyn CommandRunner,
     directory: &Path,

@@ -289,9 +289,12 @@ Mortsom builds app v2 from `lib/main_mortsom.dart` with a test-environment marke
 identity and the local relay seeds. Production relay fallback is disabled before any subscription starts.
 Advertised relay addresses are validated from the client's own network namespace.
 
-Builds resolve Dart packages with `flutter pub get` and follow the app's supported scripts. Flutter Rust Bridge bindings are regenerated with
-`scripts/frb-generate.sh` before a source build; generated bindings are never edited by hand. Linux and Web
-builds run sequentially because binding generation writes shared source files.
+Builds resolve Dart packages with `flutter pub get` and follow the app's supported scripts. A managed checkout
+whose revision tracks its Flutter Rust Bridge bindings (`lib/src/rust/frb_generated.dart` and
+`rust/src/frb_generated.rs`) is built with them as committed, as the app's own release is; a local checkout,
+or a revision that does not track them, has them regenerated with `scripts/frb-generate.sh` before the build.
+The build provenance lists the commands that ran. Generated bindings are never edited by hand. Linux and Web
+builds run sequentially because binding generation and the build write into the shared source tree.
 
 Mortsom records the source revision, dirty flag, build flags, tool versions and the bundle digest. Both actors
 use the same artifact. A prebuilt artifact or kept bundle must pass the same visible environment and identity
