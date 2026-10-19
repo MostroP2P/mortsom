@@ -667,11 +667,11 @@ failed, is never reported as cleaned up, never reaches parity, and is counted as
 
 Each run writes to ignored `artifacts/<run-id>/`: summary, timeline, per-actor screenshots and accessibility
 trees, relay events, wallet payments, cleanup and environment records. Each run that passes its preflight also writes
-`timings.json`: how long each phase took (preflight, bring-up, each actor's bootstrap steps, the scenario,
-the probes that attribute a failure, discovery, the relay quiet window, cleanup, payment verification,
+`timings.json`: how long each phase took (preflight, bring-up, each actor's bootstrap steps with their evidence, the
+scenario, the probes that attribute a failure, discovery, the relay quiet window, cleanup, payment verification,
 teardown) and, per actor, how many UI requests of each kind the session served, how long they took in total
-and at worst, and how many failed. A phase that did not run is absent: the probes follow only a failure, the
-quiet window only a submission left unresolved. Timings
+and at worst, how many failed, and how many the run gave up on before they ended. A phase that did not
+run is absent: the probes follow only a failure, the quiet window only a submission left unresolved. Timings
 are diagnostics: they decide nothing, and a run whose timings cannot be written is not failed for it. Client
 builds log each build command with its duration. Environment records include platform,
 app revision and artifact digest, Flutter, Rust, browser and driver versions, stack fingerprint, daemon image

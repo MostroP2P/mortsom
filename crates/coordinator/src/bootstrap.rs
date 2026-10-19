@@ -147,11 +147,9 @@ impl ActorStep<'_> {
         name: &str,
         action: impl std::future::Future<Output = Result<T, E>>,
     ) -> Result<T, ()> {
-        let result = self
-            .records
-            .timings
-            .time(&format!("bootstrap/{name}"), Some(self.actor), action)
-            .await;
+        // The step's evidence is part of the step, so it is timed with it.
+        let started = tokio::time::Instant::now();
+        let result = action.await;
         let suffix = if result.is_ok() { "" } else { "-failed" };
         self.records
             .recorder
@@ -162,6 +160,12 @@ impl ActorStep<'_> {
                 self.ctx.ui,
             )
             .await;
+        self.records.timings.record(
+            &format!("bootstrap/{name}"),
+            Some(self.actor),
+            started,
+            tokio::time::Instant::now(),
+        );
         match result {
             Ok(value) => {
                 self.checks
@@ -228,4 +232,51 @@ async fn relaunch_and_read(
         .displayed_identity(ctx)
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use std::time::Duration;
+
+    use mortsom_common::{Redactor, RunId};
+    use mortsom_ui_driver::ui::tests_support::ScriptedUi;
+
+    use super::*;
+
+    /// A step's evidence is part of the step: its screenshot and hierarchy
+    /// are timed with it, not left to the enclosing bring-up.
+    #[tokio::test(start_paused = true)]
+    async fn a_steps_time_includes_its_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let artifacts = RunArtifacts::create(dir.path(), RunId::new(), Redactor::new()).unwrap();
+        let recorder = StepRecorder::default();
+        let timings = RunTimings::default();
+        let ui = ScriptedUi::default();
+        ui.slow_screenshots(Duration::from_secs(3));
+        let ctx = DeviceContext {
+            actor: Actor::Alice,
+            ui: &ui,
+            ui_timeout: Duration::from_secs(30),
+        };
+        let mut checks = DoctorReport::default();
+        let mut step = ActorStep {
+            actor: "alice",
+            ctx: &ctx,
+            records: StepRecords {
+                artifacts: &artifacts,
+                recorder: &recorder,
+                timings: &timings,
+            },
+            checks: &mut checks,
+        };
+
+        step.run("launch", async { Ok::<(), String>(()) })
+            .await
+            .unwrap();
+
+        let phases = timings.phases();
+        assert_eq!(phases[0].phase, "bootstrap/launch");
+        assert!(phases[0].elapsed_ms >= 3000, "{phases:?}");
+    }
 }

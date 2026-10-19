@@ -1,7 +1,8 @@
 //! A UI session that times every request it forwards: how many of each kind
-//! an actor's session served, how long they took in total and at worst, and
-//! how many failed. Diagnostics only (spec §12): it changes neither what a
-//! request does nor what it answers.
+//! an actor's session served, how long they took in total and at worst, how
+//! many failed, and how many its caller gave up on before they ended.
+//! Diagnostics only (spec §12): it changes neither what a request does nor
+//! what it answers.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -22,19 +23,52 @@ pub struct RequestTimes {
     pub count: u64,
     /// Requests that failed.
     pub errors: u64,
+    /// Requests their caller gave up on before they ended: a deadline that
+    /// expired around them.
+    pub cancelled: u64,
     /// Time spent in them, in milliseconds.
     pub total_ms: u64,
     /// The longest one, in milliseconds.
     pub max_ms: u64,
 }
 
+/// How one request ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    Answered,
+    Failed,
+    /// Dropped before it ended.
+    Cancelled,
+}
+
 impl RequestTimes {
-    fn add(&mut self, elapsed: Duration, failed: bool) {
+    fn add(&mut self, elapsed: Duration, ended: Ended) {
         let ms = u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX);
         self.count += 1;
-        self.errors += u64::from(failed);
+        self.errors += u64::from(ended == Ended::Failed);
+        self.cancelled += u64::from(ended == Ended::Cancelled);
         self.total_ms = self.total_ms.saturating_add(ms);
         self.max_ms = self.max_ms.max(ms);
+    }
+}
+
+/// One request on its way, recorded when it is dropped: once it ended, or
+/// unfinished, when its caller gives up on it.
+struct InFlight<'a> {
+    times: &'a Mutex<BTreeMap<&'static str, RequestTimes>>,
+    kind: &'static str,
+    started: Instant,
+    ended: Ended,
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        self.times
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(self.kind)
+            .or_default()
+            .add(self.started.elapsed(), self.ended);
     }
 }
 
@@ -68,14 +102,18 @@ impl TimedUi {
         kind: &'static str,
         request: impl Future<Output = Result<T, UiError>>,
     ) -> Result<T, UiError> {
-        let started = Instant::now();
+        let mut flight = InFlight {
+            times: &self.times,
+            kind,
+            started: Instant::now(),
+            ended: Ended::Cancelled,
+        };
         let result = request.await;
-        self.times
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .entry(kind)
-            .or_default()
-            .add(started.elapsed(), result.is_err());
+        flight.ended = if result.is_ok() {
+            Ended::Answered
+        } else {
+            Ended::Failed
+        };
         result
     }
 }
@@ -195,19 +233,36 @@ mod tests {
         assert_eq!((times.count, times.errors), (1, 1));
     }
 
+    /// A deadline that expires around a request drops it unfinished; that
+    /// request is the one most likely to explain the deadline.
+    #[tokio::test]
+    async fn a_request_its_caller_gives_up_on_is_counted_with_its_time() {
+        let (scripted, ui) = timed(&[]);
+        scripted.slow_screenshots(Duration::from_secs(60));
+
+        let gave_up = tokio::time::timeout(Duration::from_millis(20), ui.screenshot_png()).await;
+
+        assert!(gave_up.is_err());
+        let times = ui.times()["screenshot_png"];
+        assert_eq!((times.count, times.errors, times.cancelled), (1, 0, 1));
+        assert!(times.total_ms >= 20, "{times:?}");
+    }
+
     #[test]
     fn the_total_adds_up_and_the_longest_request_is_kept() {
         let mut times = RequestTimes::default();
 
-        times.add(Duration::from_millis(30), false);
-        times.add(Duration::from_millis(10), true);
+        times.add(Duration::from_millis(30), Ended::Answered);
+        times.add(Duration::from_millis(10), Ended::Failed);
+        times.add(Duration::from_millis(5), Ended::Cancelled);
 
         assert_eq!(
             times,
             RequestTimes {
-                count: 2,
+                count: 3,
                 errors: 1,
-                total_ms: 40,
+                cancelled: 1,
+                total_ms: 45,
                 max_ms: 30,
             }
         );
