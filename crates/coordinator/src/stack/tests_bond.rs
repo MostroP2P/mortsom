@@ -244,3 +244,29 @@ fn the_daemon_clocks_are_as_short_as_the_catalogue_allows() {
         Some(120)
     );
 }
+
+/// Checkouts share one stack directory (`--stack-dir`), and one from before
+/// the bond stack had its own lifetime has a limits file without it: a
+/// plain stack still reads it, and a bond stack refuses it by name rather
+/// than give its orders the plain lifetime.
+#[test]
+fn a_limits_file_without_the_bond_lifetime_serves_only_a_plain_stack() {
+    // Arrange
+    let (_dir, layout) = scratch();
+    let committed = include_str!("../../../../stack/limits.toml");
+    let older: String = committed
+        .lines()
+        .filter(|line| !line.starts_with("bond_order_expiration_secs"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    std::fs::write(layout.limits_file(), older).unwrap();
+
+    // Act
+    let plain = descriptor::load_limits(&layout.limits_file(), false);
+    let bond = descriptor::load_limits(&layout.limits_file(), true);
+
+    // Assert
+    assert_eq!(plain.unwrap().order_expiration_secs, 360);
+    let refused = bond.unwrap_err().to_string();
+    assert!(refused.contains("bond_order_expiration_secs"), "{refused}");
+}

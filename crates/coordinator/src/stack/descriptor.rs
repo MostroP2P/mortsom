@@ -145,7 +145,9 @@ impl Descriptor {
 struct LimitsFile {
     #[serde(flatten)]
     limits: DeclaredLimits,
-    bond_order_expiration_secs: u64,
+    /// Absent from a shared stack directory (`--stack-dir`) of a checkout
+    /// older than it; only a bond stack needs it.
+    bond_order_expiration_secs: Option<u64>,
 }
 
 /// Reads the committed limits declaration for a stack with or without the
@@ -158,8 +160,15 @@ pub fn load_limits(path: &Path, bond: bool) -> Result<DeclaredLimits, StackError
         StackError::Configuration(format!("{} is invalid: {error}", path.display()))
     })?;
     let limits = if bond {
+        // Never the plain lifetime instead: a slashed order outlives it.
+        let order_expiration_secs = file.bond_order_expiration_secs.ok_or_else(|| {
+            StackError::Configuration(format!(
+                "{} declares no bond_order_expiration_secs, the untaken-order lifetime of a bond stack",
+                path.display()
+            ))
+        })?;
         DeclaredLimits {
-            order_expiration_secs: file.bond_order_expiration_secs,
+            order_expiration_secs,
             ..file.limits
         }
     } else {
