@@ -90,8 +90,14 @@ impl World<'_> {
             .await;
         // Before cleanup: the moment of interest is the failure, not after
         // the sweep has spent its own deadlines on a stack that is gone.
-        let result =
-            attribution::after_failure(config, self.deps.net, &self.timeline, result).await;
+        let result = attribution::after_failure(
+            config,
+            self.deps.net,
+            &self.timeline,
+            &self.timings,
+            result,
+        )
+        .await;
         if let Some(journal) = self.desktop.recovery.as_ref() {
             let discovery = self
                 .timings

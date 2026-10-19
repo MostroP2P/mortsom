@@ -611,6 +611,11 @@ async fn a_run_records_where_its_time_went() {
     assert!(at("bootstrap/restart", Some("bob")) < at("bring-up", None));
     assert!(at("bring-up", None) < at("scenario", None));
     assert!(at("scenario", None) < at("cleanup", None));
+    // A scenario that passed asks the stack nothing about its failure.
+    assert!(
+        !phases.iter().any(|(phase, _)| phase == "attribution"),
+        "{phases:?}"
+    );
     assert!(at("cleanup", None) < at("teardown", None));
     for actor in ["alice", "bob"] {
         let ui = &timings["ui"][actor];

@@ -29,6 +29,7 @@ use mortsom_scenario_kit::timeline::{Timeline, TimelineKind};
 use tracing::warn;
 
 use super::maintenance;
+use super::timings::RunTimings;
 use crate::config::Config;
 use crate::doctor::{NetProbes, PortState};
 
@@ -42,11 +43,13 @@ const SILENT_INTERVALS: u32 = 2;
 
 /// `result`, blamed on the stack when it is a failure and the stack stopped
 /// answering, or answered with the daemon in maintenance mode. Read-only:
-/// the probes create no order and pay nothing.
+/// the probes create no order and pay nothing. They are timed as the run's
+/// `attribution` phase, which only a probed failure has.
 pub(super) async fn after_failure(
     config: &Config,
     net: Option<&dyn NetProbes>,
     timeline: &Timeline,
+    timings: &RunTimings,
     result: ScenarioResult,
 ) -> ScenarioResult {
     let (Outcome::Failed { category, .. }, Some(net)) = (&result.outcome, net) else {
@@ -57,11 +60,16 @@ pub(super) async fn after_failure(
     }
     let reported = *category;
     let interval = info_interval(&config.mostro.settings_file);
-    let mut after = liveness(config, net, &interval).await;
-    if !after.report.is_healthy() {
-        // A second look, so one probe that timed out cannot overturn a verdict.
-        after = liveness(config, net, &interval).await;
-    }
+    let after = timings
+        .time("attribution", None, async {
+            let after = liveness(config, net, &interval).await;
+            if after.report.is_healthy() {
+                return after;
+            }
+            // A second look, so one probe that timed out cannot overturn a verdict.
+            liveness(config, net, &interval).await
+        })
+        .await;
     let outcome = attribute(result.outcome, &after);
     // A category other than the one reported is this attribution's verdict
     // and nothing else's.

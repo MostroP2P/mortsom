@@ -427,7 +427,7 @@ export MORTSOM_WEBDRIVER_VERBOSE=1   # keep ChromeDriver's full log (DevTools ev
 | `wallet-payments.json` | Payment observations and budget totals |
 | `cleanup.json`, `recovery.json` | Order resolution, client shutdown, retained storage |
 | `environment.json` | Stack and client identity |
-| `timings.json` | Where the run's time went: each phase (preflight, bring-up, each actor's bootstrap steps, scenario, discovery, cleanup, payments, teardown) and, per actor, the count, total and longest time of each kind of UI request. Diagnostics only |
+| `timings.json` | Where the run's time went: each phase (preflight, bring-up, each actor's bootstrap steps, scenario, failure attribution, discovery, relay quiet window, cleanup, payments, teardown) and, per actor, the count, total and longest time of each kind of UI request. Diagnostics only |
 | `run.log` | Redacted runtime diagnostics; `tail -f` it during a run |
 
 A failed check fails its run even when the scenario passed; the report names the check under the scenario.

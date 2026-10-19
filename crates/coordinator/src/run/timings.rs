@@ -16,7 +16,7 @@ use crate::artifacts::{RunArtifacts, files};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PhaseTiming {
     /// What ran: `preflight`, `bring-up`, `bootstrap/<step>`, `scenario`,
-    /// `discovery`, `relay-quiet`, `cleanup`, `payments`, `teardown`.
+    /// `attribution`, `discovery`, `relay-quiet`, `cleanup`, `payments`, `teardown`.
     pub phase: String,
     /// The actor it ran for, when it ran for one.
     #[serde(skip_serializing_if = "Option::is_none")]
