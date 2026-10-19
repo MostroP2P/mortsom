@@ -304,6 +304,7 @@ pub(super) fn attach_runtime_with_book(
             .zip(sessions.iter())
             .map(|(actor, session)| (actor, session.clone() as Arc<dyn UiSession>))
             .collect(),
+        timers: Vec::new(),
         server: None,
         bundle,
         app_version: None,

@@ -2,9 +2,10 @@
 use super::{DesktopFactory, DesktopServer};
 use mortsom_common::Actor;
 use mortsom_desktop_driver::Platform;
+use mortsom_ui_driver::timed::{RequestTimes, TimedUi};
 use mortsom_ui_driver::ui::UiSession;
 use serde::{Deserialize, Serialize};
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::BTreeMap, path::PathBuf, sync::Arc};
 
 /// What happened to one client resource at teardown.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -69,6 +70,8 @@ impl DesktopOptions {
 pub(super) enum Farm {
     Desktop {
         sessions: Vec<(Actor, Arc<dyn UiSession>)>,
+        /// What each actor's session spent on UI requests (spec §12).
+        timers: Vec<(Actor, Arc<TimedUi>)>,
         server: Option<Box<dyn DesktopServer>>,
         bundle: Arc<crate::fingerprint::CapturedBundle>,
         app_version: Option<String>,
@@ -87,9 +90,14 @@ impl Farm {
             None
         };
         let mut sessions = Vec::new();
+        let mut timers = Vec::new();
         for actor in Actor::ALL {
             match factory.session(actor, options, server.as_ref().map(|server| server.url())) {
-                Ok(session) => sessions.push((actor, session)),
+                Ok(session) => {
+                    let timed = Arc::new(TimedUi::new(session));
+                    sessions.push((actor, Arc::clone(&timed) as Arc<dyn UiSession>));
+                    timers.push((actor, timed));
+                }
                 Err(cause) => {
                     let mut failures = vec![cause];
                     for (actor, session) in &sessions {
@@ -108,6 +116,7 @@ impl Farm {
         }
         Ok(Self::Desktop {
             sessions,
+            timers,
             server,
             bundle: Arc::clone(&options.bundle),
             app_version: options.provenance.app_version.clone(),
@@ -123,6 +132,16 @@ impl Farm {
     pub(super) fn sessions(&self) -> Vec<(Actor, Arc<dyn UiSession>)> {
         match self {
             Self::Desktop { sessions, .. } => sessions.clone(),
+        }
+    }
+
+    /// Per actor, what each kind of UI request cost so far.
+    pub(super) fn ui_times(&self) -> BTreeMap<String, BTreeMap<String, RequestTimes>> {
+        match self {
+            Self::Desktop { timers, .. } => timers
+                .iter()
+                .map(|(actor, timer)| (actor.as_str().to_owned(), timer.times()))
+                .collect(),
         }
     }
 

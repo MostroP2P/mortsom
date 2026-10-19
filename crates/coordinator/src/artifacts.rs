@@ -34,6 +34,8 @@ pub mod files {
     pub const DEVICE_LOGCAT: &str = "device-logcat.txt";
     /// Cleanup result.
     pub const CLEANUP: &str = "cleanup.json";
+    /// Where the run's time went: its phases and each actor's UI requests.
+    pub const TIMINGS: &str = "timings.json";
     /// Redacted run log.
     pub const RUN_LOG: &str = mortsom_common::logging::RUN_LOG_FILE;
 }

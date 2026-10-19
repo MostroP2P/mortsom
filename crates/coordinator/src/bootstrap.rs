@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::artifacts::RunArtifacts;
 use crate::config::Config;
 use crate::evidence::StepRecorder;
+use crate::run::timings::RunTimings;
 
 /// Per-actor outcome.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,15 +39,27 @@ fn default_wallet_expected() -> bool {
     true
 }
 
+/// What each bootstrap step leaves behind besides its check: its evidence,
+/// and how long it took.
+#[derive(Clone, Copy)]
+pub struct StepRecords<'a> {
+    /// Where the step's screenshot and accessibility tree go.
+    pub artifacts: &'a RunArtifacts,
+    /// Numbers the steps' evidence.
+    pub recorder: &'a StepRecorder,
+    /// The run's phase clock.
+    pub timings: &'a RunTimings,
+}
+
 /// Runs the per-actor journey: launch, onboard, node and relay, NWC, restart.
-/// Each step records evidence and one check; a failed step ends the journey.
+/// Each step records evidence, one check and how long it took; a failed step
+/// ends the journey.
 pub async fn bootstrap_session(
     config: &Config,
     adapter: &dyn AppAdapter,
     ctx: DeviceContext<'_>,
     env: &TestEnvironment,
-    artifacts: &RunArtifacts,
-    recorder: &StepRecorder,
+    records: StepRecords<'_>,
     checks: &mut DoctorReport,
 ) -> ActorSetup {
     let actor = ctx.actor.as_str();
@@ -64,8 +77,7 @@ pub async fn bootstrap_session(
     let mut step = ActorStep {
         actor,
         ctx: &ctx,
-        artifacts,
-        recorder,
+        records,
         checks,
     };
     if step.run("launch", launch_app(&ctx)).await.is_err() {
@@ -125,8 +137,7 @@ pub async fn bootstrap_session(
 struct ActorStep<'a> {
     actor: &'a str,
     ctx: &'a DeviceContext<'a>,
-    artifacts: &'a RunArtifacts,
-    recorder: &'a StepRecorder,
+    records: StepRecords<'a>,
     checks: &'a mut DoctorReport,
 }
 
@@ -136,11 +147,16 @@ impl ActorStep<'_> {
         name: &str,
         action: impl std::future::Future<Output = Result<T, E>>,
     ) -> Result<T, ()> {
-        let result = action.await;
+        let result = self
+            .records
+            .timings
+            .time(&format!("bootstrap/{name}"), Some(self.actor), action)
+            .await;
         let suffix = if result.is_ok() { "" } else { "-failed" };
-        self.recorder
+        self.records
+            .recorder
             .checkpoint(
-                self.artifacts,
+                self.records.artifacts,
                 self.actor,
                 &format!("{name}{suffix}"),
                 self.ctx.ui,

@@ -570,3 +570,61 @@ async fn an_interruption_the_clients_cannot_cause_is_skipped_before_clearance() 
     }
     assert!(!summary.mainnet_cleared);
 }
+
+/// Where the run's time went (spec §12): each phase in the order it ended,
+/// each actor's bootstrap steps, and what each actor's UI requests cost.
+#[tokio::test]
+async fn a_run_records_where_its_time_went() {
+    mortsom_scenarios::link();
+    let world = world(true);
+
+    let summary = run(
+        &world,
+        Arc::new(FakeAdapter::full()),
+        opts_in(&world, &["happy_sell"]),
+        true,
+    )
+    .await
+    .unwrap();
+
+    let path = world
+        .dir
+        .path()
+        .join("artifacts")
+        .join(summary.run_id.as_str())
+        .join(files::TIMINGS);
+    let timings: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let phases: Vec<(String, Option<String>)> = timings["phases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|phase| {
+            (
+                phase["phase"].as_str().unwrap().to_owned(),
+                phase["actor"].as_str().map(str::to_owned),
+            )
+        })
+        .collect();
+    let at = |name: &str, actor: Option<&str>| {
+        phases
+            .iter()
+            .position(|(phase, who)| phase == name && who.as_deref() == actor)
+            .unwrap_or_else(|| panic!("{name} {actor:?} missing from {phases:?}"))
+    };
+    assert!(at("preflight", None) < at("bootstrap/launch", Some("alice")));
+    assert!(at("bootstrap/launch", Some("alice")) < at("bootstrap/restart", Some("alice")));
+    assert!(at("bootstrap/restart", Some("alice")) < at("bootstrap/launch", Some("bob")));
+    assert!(at("bootstrap/restart", Some("bob")) < at("bring-up", None));
+    assert!(at("bring-up", None) < at("scenario", None));
+    assert!(at("scenario", None) < at("cleanup", None));
+    assert!(at("cleanup", None) < at("teardown", None));
+    for actor in ["alice", "bob"] {
+        let ui = &timings["ui"][actor];
+        assert_eq!(ui["clear_app"]["count"], 1, "{actor}: {ui}");
+        assert!(
+            ui["activate_app"]["count"].as_u64().unwrap() >= 2,
+            "{actor}: {ui}"
+        );
+    }
+}

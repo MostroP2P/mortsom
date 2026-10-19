@@ -14,10 +14,12 @@ mod observer;
 mod preflight;
 pub(crate) mod recovery;
 mod report;
+pub mod timings;
 mod world_execution;
 pub use observer::{LiveObserver, ObserverFactory};
 pub use report::RunSummary;
 use report::finish;
+use timings::RunTimings;
 mod desktop_factory;
 mod error;
 pub use desktop_factory::{DesktopFactory, DesktopServer, RealDesktopFactory};
@@ -210,13 +212,22 @@ pub async fn run_scenarios(
             .map_err(started);
     }
 
+    let timings = Arc::new(RunTimings::default());
+    let preflight_started = tokio::time::Instant::now();
     if let Some(chain) = chain_tip::owned(options, deps) {
         let now = attribution::now_unix();
         let (status, detail) =
             chain_tip::refresh(config, chain, deps.net, now, chain_tip::PATIENCE).await;
         summary.checks.push(chain_tip::CHECK, status, detail);
     }
-    if !preflight::check(config, options, deps, &mut summary).await {
+    let ready = preflight::check(config, options, deps, &mut summary).await;
+    timings.record(
+        "preflight",
+        None,
+        preflight_started,
+        tokio::time::Instant::now(),
+    );
+    if !ready {
         preflight::reject(&runnable, &mut summary);
         return finish(&artifacts, &mut summary)
             .map(|()| summary)
@@ -256,7 +267,11 @@ pub async fn run_scenarios(
     world.needs_solver =
         runnable.iter().any(|def| def.needs_solver) || (resuming && options.stack.is_some());
     world.opens_actor_messages = options.stack.is_some();
-    if let Err(stage) = world.bring_up(&mut summary).await {
+    world.timings = Arc::clone(&timings);
+    if let Err(stage) = timings
+        .time("bring-up", None, world.bring_up(&mut summary))
+        .await
+    {
         for def in &runnable {
             summary.results.push(ScenarioResult {
                 name: def.name.into(),
@@ -435,6 +450,8 @@ struct World<'a> {
     opens_actor_messages: bool,
     /// The solver registered for this run, when one was needed.
     solver: Option<Arc<mortsom_solver::Solver>>,
+    /// Where the run's time goes, written to `timings.json` at teardown.
+    timings: Arc<RunTimings>,
 }
 
 impl<'a> World<'a> {
@@ -465,6 +482,7 @@ impl<'a> World<'a> {
             needs_solver: false,
             opens_actor_messages: false,
             solver: None,
+            timings: Arc::new(RunTimings::default()),
         }
     }
 
@@ -680,8 +698,11 @@ impl<'a> World<'a> {
                     self.deps.adapter.as_ref(),
                     ctx,
                     &env,
-                    self.artifacts,
-                    &self.recorder,
+                    crate::bootstrap::StepRecords {
+                        artifacts: self.artifacts,
+                        recorder: &self.recorder,
+                        timings: &self.timings,
+                    },
                     &mut summary.checks,
                 )
                 .await

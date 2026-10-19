@@ -1,5 +1,7 @@
 //! Scenario context ownership, cleanup verification and resource teardown.
 use super::*;
+use mortsom_ui_driver::timed::RequestTimes;
+use timings::TimingsReport;
 impl World<'_> {
     /// Runs one scenario (with the retry policy) inside the live world.
     pub(super) async fn execute(
@@ -80,31 +82,52 @@ impl World<'_> {
                 }
             }
         }
-        let result =
-            execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()).await;
+        let result = self
+            .timings
+            .time(
+                "scenario",
+                None,
+                execute_scenario(def, &ctx, &summary.app_profile, summary.app_version.clone()),
+            )
+            .await;
         // Before cleanup: the moment of interest is the failure, not after
         // the sweep has spent its own deadlines on a stack that is gone.
         let result =
             attribution::after_failure(config, self.deps.net, &self.timeline, result).await;
         if let Some(journal) = self.desktop.recovery.as_ref() {
-            let discovery = recovery::discover(&ctx, journal).await;
+            let discovery = self
+                .timings
+                .time("discovery", None, recovery::discover(&ctx, journal))
+                .await;
             // Audited only after discovery, so an order the app lists wins,
             // and across the quiet window, so a request the client sent
             // before it died has had its chance to be published.
             let audit = match self.desktop.relay_audit.as_ref() {
                 Some(source) if recovery::unresolved_submissions(journal) => Some(
-                    recovery::observe_relay_quiet(journal, ctx.recovery.quiet_window, || {
-                        source.fetch()
-                    })
-                    .await,
+                    self.timings
+                        .time(
+                            "relay-quiet",
+                            None,
+                            recovery::observe_relay_quiet(
+                                journal,
+                                ctx.recovery.quiet_window,
+                                || source.fetch(),
+                            ),
+                        )
+                        .await,
                 ),
                 _ => None,
             };
             recovery::settle_after_scenario(journal, discovery, audit, &mut summary.checks);
         }
-        execute::sweep_cleanup(&ctx).await;
+        self.timings
+            .time("cleanup", None, execute::sweep_cleanup(&ctx))
+            .await;
         if let Some(journal) = self.desktop.recovery.as_ref()
-            && let Err(error) = recovery::verify_payments(&ctx, journal).await
+            && let Err(error) = self
+                .timings
+                .time("payments", None, recovery::verify_payments(&ctx, journal))
+                .await
         {
             summary
                 .checks
@@ -115,6 +138,8 @@ impl World<'_> {
 
     /// Cleanup report, teardown of devices and relay, evidence flush.
     pub(super) async fn tear_down(&mut self, summary: &mut RunSummary) {
+        let started = tokio::time::Instant::now();
+        let mut ui = BTreeMap::new();
         summary.cleanup = Some(self.cleanup.report());
         summary.budget = Some(
             self.budget
@@ -155,6 +180,7 @@ impl World<'_> {
             }
         }
         if let Some(farm) = self.farm.take() {
+            ui = farm.ui_times();
             // The clients' own logs go with their profiles; keep them first.
             for (actor, session) in farm.sessions() {
                 for (name, text) in session.diagnostics().await {
@@ -192,6 +218,21 @@ impl World<'_> {
         }
         if let Some(journal) = self.desktop.recovery.as_ref() {
             recovery::finish(journal, summary, self.artifacts);
+        }
+        self.timings
+            .record("teardown", None, started, tokio::time::Instant::now());
+        self.write_timings(ui);
+    }
+
+    /// `timings.json`: diagnostics, so a failed write is logged and the run
+    /// stands as it is (spec §12).
+    fn write_timings(&self, ui: BTreeMap<String, BTreeMap<String, RequestTimes>>) {
+        let report = TimingsReport {
+            phases: self.timings.phases(),
+            ui,
+        };
+        if let Err(error) = self.artifacts.write_json(files::TIMINGS, &report) {
+            warn!(%error, "cannot persist the run's timings");
         }
     }
 
