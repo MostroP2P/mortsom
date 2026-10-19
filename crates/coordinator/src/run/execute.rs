@@ -201,11 +201,14 @@ async fn cleanup_order(ctx: &Context, maker: Actor, order: &OrderReference) -> C
         Err(message) => return CleanupResult::Failed { message },
     }
     match observed_state(ctx, maker, order).await {
-        Some(state) if state.is_terminal() => confirm_closed(ctx, order, state, outcome).await,
-        Some(state) => CleanupResult::Failed {
+        Shown::State(state) if state.is_terminal() => {
+            confirm_closed(ctx, order, state, outcome).await
+        }
+        Shown::State(state) => CleanupResult::Failed {
             message: format!("still {state} after both sides cancelled"),
         },
-        None => confirm_closed_on_relay(ctx, order, UNREADABLE).await,
+        Shown::Unlisted => confirm_closed_on_relay(ctx, order, UNLISTED).await,
+        Shown::Unreadable => confirm_closed_on_relay(ctx, order, UNREADABLE).await,
     }
 }
 
@@ -279,27 +282,25 @@ async fn settled_after_maker_cancel(
     outcome: CancelOutcome,
 ) -> Option<CleanupResult> {
     match observed_state(ctx, maker, order).await {
-        Some(state) if state.is_terminal() => {
+        Shown::State(state) if state.is_terminal() => {
             match confirm_closed(ctx, order, state, outcome).await {
                 CleanupResult::Failed { .. } if state == OrderState::Cancelled => None,
                 confirmed => Some(confirmed),
             }
         }
-        Some(OrderState::Active | OrderState::FiatSent) => None,
-        Some(state) => Some(CleanupResult::Failed {
+        Shown::State(OrderState::Active | OrderState::FiatSent) => None,
+        Shown::State(state) => Some(CleanupResult::Failed {
             message: format!("still {state} after the maker cancelled"),
         }),
         // App v2 drops a cancelled trade that never went active from My
         // Trades, and its state goes with it. Once the maker's loaded list
         // no longer shows it, only the relay can say the daemon closed it.
-        None if listed_by(ctx, maker, order).await == Some(false) => {
-            Some(confirm_closed_on_relay(ctx, order, UNLISTED).await)
-        }
+        Shown::Unlisted => Some(confirm_closed_on_relay(ctx, order, UNLISTED).await),
         // The maker's screen cannot be read (live, 2026-10-15: her trade
         // detail lost `order.id` once she asked to cancel). The relay still
         // says whether the daemon holds the order: closed is confirmed
         // there; open means the counterpart's agreement is still wanted.
-        None => match relay_state(ctx, order) {
+        Shown::Unreadable => match relay_state(ctx, order) {
             Some(state) if state.is_terminal() => {
                 Some(confirm_closed_on_relay(ctx, order, UNREADABLE).await)
             }
@@ -489,31 +490,42 @@ async fn cancel_as(
         .map_err(|e| e.to_string())
 }
 
-/// The state `actor`'s app shows once it stops changing, bounded by the
-/// state timeout; `None` when it cannot be read.
-async fn observed_state(ctx: &Context, actor: Actor, order: &OrderReference) -> Option<OrderState> {
-    let session = ctx.actor(actor).ok()?;
-    let device = session.device(ctx.ui_timeout);
-    wait_until(ctx.state_timeout, CLEANUP_POLL, || async {
-        match ctx.adapter.observe_order(&device, order).await {
-            Ok(state) if state.state.is_terminal() => Some(state.state),
-            _ => None,
-        }
-    })
-    .await
-    .or(ctx
-        .adapter
-        .observe_order(&device, order)
-        .await
-        .ok()
-        .map(|s| s.state))
+/// What an actor's app shows of an order.
+enum Shown {
+    /// The state on its screen.
+    State(OrderState),
+    /// The loaded My Trades no longer lists it (spec §8.3).
+    Unlisted,
+    /// Neither its state nor the list could be read.
+    Unreadable,
 }
 
-/// Whether `actor`'s app lists `order`, answered on a loaded My Trades;
-/// `None` when the list cannot be read.
-async fn listed_by(ctx: &Context, actor: Actor, order: &OrderReference) -> Option<bool> {
-    let session = ctx.actor(actor).ok()?;
+/// What `actor`'s app shows of `order` once it stops changing, bounded by
+/// the state timeout. A trade the loaded list no longer shows ends the wait
+/// at once: there is no row left to change, and reading through one that is
+/// gone only waits out the UI timeout (live, 2026-10-19, #93).
+async fn observed_state(ctx: &Context, actor: Actor, order: &OrderReference) -> Shown {
+    let Ok(session) = ctx.actor(actor) else {
+        return Shown::Unreadable;
+    };
     let device = session.device(ctx.ui_timeout);
-    let listed = ctx.adapter.owned_orders(&device).await.ok()?;
-    Some(listed.contains(&order.id))
+    let read = || async {
+        match ctx.adapter.observe_listed_order(&device, order).await {
+            Ok(Some(shown)) => Shown::State(shown.state),
+            Ok(None) => Shown::Unlisted,
+            Err(_) => Shown::Unreadable,
+        }
+    };
+    let settled = wait_until(ctx.state_timeout, CLEANUP_POLL, || async {
+        match read().await {
+            Shown::State(state) if !state.is_terminal() => None,
+            Shown::Unreadable => None,
+            settled => Some(settled),
+        }
+    })
+    .await;
+    match settled {
+        Some(settled) => settled,
+        None => read().await,
+    }
 }
