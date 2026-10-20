@@ -1,7 +1,13 @@
 //! Correlates terminal public UI states with exact run-owned Lightning records.
 use super::*;
-use mortsom_app_contract::{OrderReference, OrderState};
+use mortsom_app_contract::{AppOrderState, DeviceContext, OrderReference, OrderState};
+use mortsom_common::FailureCategory;
 use mortsom_observers::wallet::PaymentState;
+use mortsom_scenario_kit::waits::wait_until;
+use std::time::Duration;
+
+/// How soon a maker's screen that could not show the order is read again.
+const SCREEN_POLL: Duration = Duration::from_millis(500);
 
 pub(in crate::run) async fn verify_payments(
     ctx: &Context,
@@ -114,10 +120,9 @@ async fn terminal_order_state(
         .ok_or("payment recovery has no known order owner")?;
     let session = ctx.actor(maker).map_err(|e| e.to_string())?;
     let device = session.device(ctx.ui_timeout);
-    let state = match ctx.adapter.observe_listed_order(&device, &order).await {
-        Ok(Some(shown)) => shown.state,
-        Ok(None) => return closed_off_the_list(ctx, &order).await,
-        Err(unread) => return Err(unread.to_string()),
+    let state = match maker_screen(ctx, &device, &order).await? {
+        Some(shown) => shown.state,
+        None => return closed_off_the_list(ctx, &order).await,
     };
     if matches!(state, OrderState::Completed | OrderState::PayoutPending) {
         for actor in Actor::ALL {
@@ -158,6 +163,39 @@ async fn terminal_order_state(
     Err(format!(
         "order {order_id} has no verified terminal UI state"
     ))
+}
+
+/// What the maker's app shows of `order`, `None` once its loaded list no
+/// longer shows it. A screen that cannot show the order yet is read again,
+/// bounded by the state timeout: app v2 shows `loading` while it reloads a
+/// trade, which the adapter reports as an unresolved product state, and one
+/// read caught it there after a completed, settled trade (live, 2026-10-20,
+/// `full_trade_with_rating`). The last such read is the error at the
+/// deadline. Any other failure, and any state the screen does show, decides
+/// at once.
+async fn maker_screen(
+    ctx: &Context,
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<Option<AppOrderState>, String> {
+    let unresolved = std::sync::Mutex::new(None);
+    let read = wait_until(ctx.state_timeout, SCREEN_POLL, || async {
+        match ctx.adapter.observe_listed_order(device, order).await {
+            Err(e) if e.category == FailureCategory::Product => {
+                *unresolved.lock().unwrap_or_else(|p| p.into_inner()) = Some(e.to_string());
+                None
+            }
+            read => Some(read.map_err(|e| e.to_string())),
+        }
+    })
+    .await;
+    read.unwrap_or_else(|| {
+        // Only a first read still in flight at the deadline leaves nothing.
+        Err(unresolved
+            .into_inner()
+            .unwrap_or_else(|p| p.into_inner())
+            .unwrap_or_else(|| format!("the maker's screen never answered for order {}", order.id)))
+    })
 }
 
 /// The terminal state of an order the maker's loaded list no longer shows.
