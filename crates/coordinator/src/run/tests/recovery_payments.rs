@@ -211,6 +211,80 @@ async fn a_completed_orders_screens_are_read_once_however_many_payments_it_carri
     );
 }
 
+/// Cleanup reads Alice's screen twice before payment recovery does: the
+/// payout it settles, then the order's state.
+const CLEANUP_READS: usize = 2;
+
+/// Payment recovery then reads it twice for a completed order: its state,
+/// then the wait for it to show completed.
+const PAYMENT_READS: usize = 2;
+
+/// Alice's completed order, her payout to Bob settled, with her screen
+/// still loading the trade for `loading_reads` reads once payment recovery
+/// reads it.
+async fn completed_while_loading(
+    loading_reads: usize,
+) -> (RunSummary, Arc<FileJournal>, Arc<FakeAdapter>) {
+    let adapter = FakeAdapter {
+        maker_screen_loading: Some(CLEANUP_READS..CLEANUP_READS.saturating_add(loading_reads)),
+        ..FakeAdapter::full()
+    };
+    let paid_out = Paid {
+        wallet: "bob",
+        incoming: true,
+        holds: RecoveryWallet::new(PaymentState::Settled, 100, 0, 1),
+    };
+    attempt_with(
+        adapter,
+        OrderState::Completed,
+        false,
+        &["active", "success"],
+        vec![paid_out],
+    )
+    .await
+}
+
+/// How many times Alice's screen was read.
+fn maker_reads(adapter: &FakeAdapter) -> usize {
+    let observed = adapter.observed_actors.lock().unwrap();
+    observed
+        .iter()
+        .filter(|actor| **actor == Actor::Alice)
+        .count()
+}
+
+/// Live, 2026-10-20 (`20261020T183250Z-9a2e75e995d0`,
+/// `full_trade_with_rating`): the trade completed and both payments
+/// settled, but the one read of Alice's screen caught it still `loading`,
+/// so recovery stayed open and every later scenario was refused.
+#[tokio::test]
+async fn a_maker_screen_still_loading_the_trade_is_read_again() {
+    let (summary, journal, adapter) = completed_while_loading(1).await;
+
+    assert!(summary.checks.is_healthy(), "{:?}", summary.checks);
+    assert!(journal.snapshot().closed);
+    assert_eq!(
+        maker_reads(&adapter),
+        CLEANUP_READS + 1 + PAYMENT_READS,
+        "cleanup's reads moved: the loading read no longer lands on payment recovery"
+    );
+}
+
+/// The wait is bounded: a screen that never shows the order's state leaves
+/// recovery open, with what the screen showed as the reason.
+#[tokio::test]
+async fn a_maker_screen_that_never_loads_keeps_recovery_open() {
+    let (summary, journal, _) = completed_while_loading(usize::MAX).await;
+
+    assert!(payment_failed(&summary), "{:?}", summary.checks);
+    assert!(
+        format!("{:?}", summary.checks).contains("unresolved status `loading`"),
+        "{:?}",
+        summary.checks
+    );
+    assert!(!journal.snapshot().closed);
+}
+
 /// A list that cannot be read proves nothing either way: the order's state
 /// is read on its screen, as it was before the list was asked first.
 #[tokio::test]

@@ -597,7 +597,8 @@ On success, failure or interruption, in order:
    relay decides whether the daemon closed it (8.3).
 3. Verify terminal wallet outcomes; record outstanding hashes and escrow. An order's terminal state is read once,
    from its loaded list first, and holds for every payment on it; each payment is still judged by its own
-   hash. A payment is journaled with what it
+   hash. A screen that cannot show the order yet (app v2's `loading`) is read again within the state
+   timeout, never taken as the order's state. A payment is journaled with what it
    pays for. A bond is judged by its own end, whatever the order came to: returned (failed, nothing settled)
    or settled once for exactly the journaled amount, never in flight. A claim of a slashed bond's share is
    never cancelled by recovery, since it settles on an order that did not complete, and only a claim settled

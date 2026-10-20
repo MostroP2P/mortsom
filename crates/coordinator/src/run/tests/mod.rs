@@ -423,6 +423,10 @@ struct FakeAdapter {
     reopened_dropped: Mutex<usize>,
     /// My Trades cannot be read at all: the list proves nothing either way.
     unreadable_list: bool,
+    /// App v2 shows `loading` while it reloads a trade (live, 2026-10-20,
+    /// `full_trade_with_rating`): Alice's reads of her screen, numbered from
+    /// zero, that fall in this range show that instead of the order's state.
+    maker_screen_loading: Option<std::ops::Range<usize>>,
     /// Every actor must reach onboarding before any goes on: only a
     /// bring-up that bootstraps them at once gets past it.
     onboarding_meets: Option<Arc<tokio::sync::Barrier>>,
@@ -461,6 +465,7 @@ impl FakeAdapter {
             dropped: Mutex::new(Vec::new()),
             reopened_dropped: Mutex::new(0),
             unreadable_list: false,
+            maker_screen_loading: None,
             onboarding_meets: None,
             slow_onboarding: None,
             failed_onboarding: None,
@@ -775,6 +780,24 @@ impl AppAdapter for FakeAdapter {
             .get(&order.id)
             .copied()
             .ok_or_else(|| AdapterError::contract("unknown order"))?;
+        if device.actor == Actor::Alice
+            && self.maker_screen_loading.as_ref().is_some_and(|reads| {
+                let read = self
+                    .observed_actors
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|a| **a == Actor::Alice)
+                    .count()
+                    - 1;
+                reads.contains(&read)
+            })
+        {
+            return Err(AdapterError::product(format!(
+                "order {} shows unresolved status `loading`",
+                order.id
+            )));
+        }
         if device.actor == Actor::Alice
             && self.maker_screen_unreadable
             && self.coop_pending.lock().unwrap().contains(&order.id)
