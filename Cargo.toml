@@ -1,7 +1,8 @@
 [workspace]
 resolver = "3"
-# Managed app checkouts keep their own Rust workspace and dependency graph.
-exclude = [".mortsom/app"]
+# Managed checkouts (the app, mostro-cli, mostro) keep their own Rust
+# workspace and dependency graph.
+exclude = [".mortsom"]
 members = [
     "crates/common",
     "crates/coordinator",

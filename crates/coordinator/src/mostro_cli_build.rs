@@ -178,4 +178,39 @@ mod tests {
         assert_eq!(&command.args[1..], RECORDED);
         assert_eq!(command.env["CARGO_TARGET_DIR"], "/t");
     }
+
+    /// A managed checkout lives under Mortsom's own repository; Cargo must
+    /// not take it for an undeclared member of Mortsom's workspace, or every
+    /// `--ref` build fails before it starts.
+    #[test]
+    fn a_managed_checkout_is_not_part_of_mortsoms_workspace() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let managed = repository.join(WORK_DIR);
+        std::fs::create_dir_all(&managed).unwrap();
+        let checkout = tempfile::Builder::new()
+            .prefix("build-test-")
+            .tempdir_in(&managed)
+            .unwrap();
+        let source = checkout.path().join("source");
+        std::fs::create_dir_all(source.join("src")).unwrap();
+        std::fs::write(
+            source.join("Cargo.toml"),
+            "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(source.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+
+        let output = std::process::Command::new(cargo)
+            .current_dir(&source)
+            .args(["metadata", "--no-deps", "--format-version=1", "--offline"])
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
