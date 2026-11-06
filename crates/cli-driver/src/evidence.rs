@@ -12,7 +12,7 @@ use serde_json::Value;
 use crate::call::Call;
 use crate::envelope::{Envelope, ErrorInfo, Status};
 use crate::error::CliError;
-use crate::process::{ProcessFailed, ProcessOutput};
+use crate::process::{ProcessFailed, ProcessFailure, ProcessOutput};
 use crate::transcript::{Recorded, Transcript, scrub};
 
 /// How much of the CLI's standard error is kept per actor.
@@ -42,17 +42,15 @@ impl Evidence {
             Err(ProcessFailed { failure, stderr }) => {
                 // A child that hung or was killed may have said why.
                 self.keep_stderr(&stderr, &secrets);
-                let what = Recorded::Failure(failure.to_string(), None);
+                let cause = scrubbed_failure(failure, &secrets);
+                let what = Recorded::Failure(cause.to_string(), None);
                 self.record(&command, argv, elapsed_ms, what);
-                return Err(CliError::Process {
-                    command,
-                    cause: failure,
-                });
+                return Err(CliError::Process { command, cause });
             }
         };
         self.keep_stderr(&output.stderr, &secrets);
         if let Some(error) = without_document(&command, &output) {
-            let what = Recorded::Failure(error.to_string(), output.code);
+            let what = Recorded::Failure(scrub(&error.to_string(), &secrets), output.code);
             self.record(&command, argv, elapsed_ms, what);
             return Err(error);
         }
@@ -138,6 +136,16 @@ fn without_document(command: &str, output: &ProcessOutput) -> Option<CliError> {
             command: command.to_owned(),
             exit,
         }),
+    }
+}
+
+/// The failure with its free text (a spawn or pipe error) scrubbed of the
+/// invocation's secrets: it reaches the transcript and the run's report.
+fn scrubbed_failure(failure: ProcessFailure, secrets: &[&Secret]) -> ProcessFailure {
+    match failure {
+        ProcessFailure::Spawn(text) => ProcessFailure::Spawn(scrub(&text, secrets)),
+        ProcessFailure::Io(text) => ProcessFailure::Io(scrub(&text, secrets)),
+        other => other,
     }
 }
 
@@ -256,6 +264,40 @@ mod tests {
             !scrubbed.to_string().contains("someone@example.com"),
             "{scrubbed}"
         );
+    }
+
+    /// A process failure's text is free text too: a Lightning address on
+    /// standard input matches no invoice pattern, so only the invocation's
+    /// own secrets keep it out of the transcript and the error.
+    #[test]
+    fn a_process_failure_loses_the_invocation_s_secret() {
+        let address = Secret::new("someone@example.com");
+        let call = Call::node(&["order", "add-invoice"]).invoice(&address);
+        let argv = call.argv(&crate::call::NodeTarget {
+            mostro_pubkey: "ab".repeat(32),
+            relays: vec!["ws://127.0.0.1:7500".into()],
+            reply_timeout_secs: None,
+        });
+        let evidence = Evidence::default();
+        let failure = ProcessFailure::Io("cannot write Someone@Example.com: broken pipe".into());
+
+        let error = evidence
+            .interpret(&call, &argv, 1, Err(failure.into()))
+            .unwrap_err();
+
+        let read = evidence.take_transcript();
+        let (_, kept) = evidence
+            .diagnostics()
+            .into_iter()
+            .find(|(name, _)| name == "cli-transcript.jsonl")
+            .unwrap();
+        for text in [&read, &kept, &error.to_string()] {
+            assert!(text.contains("broken pipe"), "{text}");
+            assert!(
+                !text.to_lowercase().contains("someone@example.com"),
+                "{text}"
+            );
+        }
     }
 
     fn kept_stderr(evidence: &Evidence) -> String {
