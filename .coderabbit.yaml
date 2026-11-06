@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# Changes land as stacks of small pull requests, each based on the one below it.
+# CodeRabbit only auto-reviews pull requests against the default branch unless
+# told otherwise, so review every base branch.
+reviews:
+  auto_review:
+    enabled: true
+    base_branches:
+      - ".*"
