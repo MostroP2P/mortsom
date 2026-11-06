@@ -23,6 +23,8 @@ mortsom-observers = { workspace = true }
 mortsom-scenario-kit = { workspace = true }
 mortsom-solver = { workspace = true }
 mortsom-adapter-mobile-v2 = { workspace = true }
+mortsom-adapter-cli = { workspace = true }
+mortsom-cli-driver = { workspace = true }
 mortsom-scenarios = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }

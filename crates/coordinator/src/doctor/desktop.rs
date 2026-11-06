@@ -9,8 +9,12 @@ use crate::{Config, stack::StackContext};
 
 /// Requirements of one platform-aware diagnostic invocation.
 pub struct DesktopDoctorOptions {
-    /// Linux or Web client target.
-    pub platform: Platform,
+    /// Linux or Web client target; the profile decides when absent.
+    pub platform: Option<Platform>,
+    /// `--profile`, overriding `mobile.profile`.
+    pub profile: Option<String>,
+    /// The mostro-cli to check with profile `cli`.
+    pub cli: crate::mostro_cli_build::CliSelection,
     /// Existing native executable or Web bundle, avoiding source/build checks.
     pub artifact: Option<PathBuf>,
     /// CLI overrides of the configured source mode.
@@ -29,14 +33,29 @@ pub async fn run_desktop_doctor(
     runner: &dyn CommandRunner,
 ) -> DoctorReport {
     let mut report = DoctorReport::default();
-    check_tools(
+    // The configured profile counts as much as `--profile`: read it before
+    // the tools are checked, since they differ per client.
+    let configured = configured_profile(config_path);
+    let cli_requested = crate::mostro_cli::resolve_client(
+        configured
+            .as_deref()
+            .unwrap_or(mortsom_app_contract::config::DEFAULT_PROFILE),
+        options.profile.as_deref(),
         options.platform,
-        options.artifact.is_none(),
-        Path::new("Xvfb"),
-        host,
-        &mut report,
     )
-    .await;
+    .is_ok_and(|(_, platform)| platform == Platform::Cli);
+    if cli_requested {
+        super::cli::check_tools(&options.cli, host, &mut report);
+    } else {
+        check_tools(
+            options.platform.unwrap_or_default(),
+            options.artifact.is_none(),
+            Path::new("Xvfb"),
+            host,
+            &mut report,
+        )
+        .await;
+    }
     let stack = if options.no_network {
         None
     } else {
@@ -74,22 +93,32 @@ pub async fn run_desktop_doctor(
     }
     report_config(config_path, &diagnosis, &mut report);
     if let Some(config) = &diagnosis.config {
-        check_app(
-            config,
+        match crate::mostro_cli::resolve_client(
+            &config.mobile.profile,
+            options.profile.as_deref(),
             options.platform,
-            options.artifact.as_deref(),
-            host,
-            &mut report,
-        );
-        if options.artifact.is_none() {
-            super::desktop_build::check(
-                (!config.mobile.source_dir.is_empty())
-                    .then(|| Path::new(&config.mobile.source_dir)),
-                options.platform,
-                host,
-                &mut report,
-            )
-            .await;
+        ) {
+            Err(error) => report.push("client", CheckStatus::Fail, error),
+            Ok((_, Platform::Cli)) => super::cli::check(&options.cli, &mut report).await,
+            Ok((_, platform)) => {
+                check_app(
+                    config,
+                    platform,
+                    options.artifact.as_deref(),
+                    host,
+                    &mut report,
+                );
+                if options.artifact.is_none() {
+                    super::desktop_build::check(
+                        (!config.mobile.source_dir.is_empty())
+                            .then(|| Path::new(&config.mobile.source_dir)),
+                        platform,
+                        host,
+                        &mut report,
+                    )
+                    .await;
+                }
+            }
         }
     }
     if options.no_network {
@@ -110,6 +139,18 @@ pub async fn run_desktop_doctor(
         check.detail = redactor.redact(&check.detail);
     }
     report
+}
+
+/// `mobile.profile` as the configuration file names it, read without
+/// resolving anything else; `None` when the file or the key is absent.
+fn configured_profile(config_path: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(config_path).ok()?;
+    let value: toml::Value = toml::from_str(&text).ok()?;
+    value
+        .get("mobile")?
+        .get("profile")?
+        .as_str()
+        .map(str::to_owned)
 }
 
 async fn check_tools(
@@ -192,6 +233,8 @@ fn check_tool(tool: &str, variable: Option<&str>, host: &dyn HostProbe, report: 
     }
 }
 
+/// The app checks; reached only once the profile resolved to the app, so
+/// the configured profile is no longer consulted here.
 fn check_app(
     config: &Config,
     platform: Platform,
@@ -199,13 +242,6 @@ fn check_app(
     host: &dyn HostProbe,
     report: &mut DoctorReport,
 ) {
-    if config.mobile.profile != "mobile-v2" {
-        report.push(
-            "app-profile",
-            CheckStatus::Fail,
-            "Linux and Web require mobile-v2",
-        );
-    }
     if let Some(path) = artifact {
         match crate::desktop::validate_artifact(platform, path, host) {
             Ok(()) => report.push(

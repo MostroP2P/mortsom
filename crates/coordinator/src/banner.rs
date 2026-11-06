@@ -49,11 +49,25 @@ pub fn render(detail: &str, style: Style) -> String {
 /// Pure and total: no config is loaded and no registry consulted, so the
 /// banner is printed before anything can fail. A command that dies on a
 /// missing environment variable has still said which config it read.
+/// The client an invocation names: the CLI profile, or the app platform
+/// (Linux unless another is given).
+fn client_label(
+    platform: Option<mortsom_desktop_driver::Platform>,
+    profile: Option<&str>,
+) -> String {
+    match profile {
+        Some(crate::mostro_cli::PROFILE) => crate::mostro_cli::PROFILE.to_owned(),
+        _ => platform.unwrap_or_default().to_string(),
+    }
+}
+
+/// The one-line caption of an invocation under the banner.
 pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
     let config = config.display();
     match command {
         Command::Run {
             platform,
+            profile,
             scenarios,
             tag,
             ..
@@ -65,11 +79,17 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
             } else {
                 "every scenario".to_owned()
             };
-            format!("run · {selection} · {platform} · {config}")
+            let client = client_label(*platform, profile.as_deref());
+            format!("run · {selection} · {client} · {config}")
         }
         // The one command that reads no config at all.
         Command::List { .. } => "list · every scenario in the registry".to_owned(),
-        Command::Doctor { platform, .. } => format!("doctor · {platform} · {config}"),
+        Command::Doctor {
+            platform, profile, ..
+        } => format!(
+            "doctor · {} · {config}",
+            client_label(*platform, profile.as_deref())
+        ),
         // The run id alone would not say which artifact tree was searched:
         // it is a directory under the config's `artifacts_dir`.
         Command::Cleanup { run, .. } => format!("cleanup · run {run} · {config}"),
@@ -114,7 +134,9 @@ mod tests {
     fn a_run(scenarios: &[&str], tag: Option<&str>) -> Command {
         Command::Run {
             preserve_legacy_recovery: Vec::new(),
-            platform: mortsom_desktop_driver::Platform::Linux,
+            platform: None,
+            profile: None,
+            cli: Default::default(),
             app_artifact: None,
             rebuild: false,
             source: Default::default(),
@@ -225,7 +247,9 @@ mod tests {
         let commands = [
             a_run(&[], None),
             Command::Doctor {
-                platform: mortsom_desktop_driver::Platform::Web,
+                platform: Some(mortsom_desktop_driver::Platform::Web),
+                profile: None,
+                cli: Default::default(),
                 app_artifact: None,
                 source: Default::default(),
                 no_network: false,
@@ -273,7 +297,9 @@ mod tests {
         // Arrange / Act
         let web = caption(
             &Command::Doctor {
-                platform: mortsom_desktop_driver::Platform::Web,
+                platform: Some(mortsom_desktop_driver::Platform::Web),
+                profile: None,
+                cli: Default::default(),
                 app_artifact: None,
                 source: Default::default(),
                 no_network: false,

@@ -13,6 +13,8 @@ pub mod doctor;
 pub mod evidence;
 pub mod git_source;
 pub mod lock;
+pub mod mostro_cli;
+pub mod mostro_cli_build;
 pub mod mostro_source;
 pub mod parity;
 pub mod publish;

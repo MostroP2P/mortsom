@@ -8,8 +8,10 @@ use serde::{Deserialize, Serialize};
 
 /// Default application profile (spec §12.2).
 pub const DEFAULT_PROFILE: &str = "mobile-v2";
+/// The mostro-cli profile (spec §6.3).
+pub const CLI_PROFILE: &str = "cli";
 /// Profiles Mortsom knows how to drive.
-pub const KNOWN_PROFILES: &[&str] = &["mobile-v2"];
+pub const KNOWN_PROFILES: &[&str] = &[DEFAULT_PROFILE, CLI_PROFILE];
 
 /// `[mobile]` section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

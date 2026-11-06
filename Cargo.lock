@@ -1855,6 +1855,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "mortsom-adapter-cli"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "lightning-invoice",
+ "mortsom-app-contract",
+ "mortsom-cli-driver",
+ "mortsom-common",
+ "mortsom-ui-driver",
+ "nostr",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "mortsom-adapter-mobile-v2"
 version = "0.1.1"
 dependencies = [
@@ -1882,6 +1898,24 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "toml 1.1.4+spec-1.1.0",
+]
+
+[[package]]
+name = "mortsom-cli-driver"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "mortsom-common",
+ "mortsom-desktop-driver",
+ "mortsom-ui-driver",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -1916,8 +1950,10 @@ dependencies = [
  "futures",
  "inventory",
  "lightning-invoice",
+ "mortsom-adapter-cli",
  "mortsom-adapter-mobile-v2",
  "mortsom-app-contract",
+ "mortsom-cli-driver",
  "mortsom-common",
  "mortsom-desktop-driver",
  "mortsom-environment",

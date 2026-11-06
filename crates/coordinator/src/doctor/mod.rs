@@ -1,6 +1,7 @@
 //! `mortsom doctor`: prerequisites, secrets, stack, daemon, relay port and
 //! wallets. It performs no payment and creates no order (spec Phase 0.3).
 
+mod cli;
 pub(crate) mod desktop;
 mod desktop_build;
 mod host;

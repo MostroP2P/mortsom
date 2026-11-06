@@ -50,6 +50,22 @@ pub struct Intentional {
     pub aspect: Aspect,
     /// The product decision behind it.
     pub reason: String,
+    /// Profiles the difference is accepted between: it applies only when
+    /// both compared profiles are listed. Empty applies to any pair.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<String>,
+}
+
+impl Intentional {
+    /// Whether this entry accepts `aspect` of `scenario` between `profiles`.
+    pub fn accepts(&self, scenario: &str, aspect: Aspect, profiles: (&str, &str)) -> bool {
+        self.scenario == scenario
+            && self.aspect == aspect
+            && (self.profiles.is_empty()
+                || [profiles.0, profiles.1]
+                    .iter()
+                    .all(|p| self.profiles.iter().any(|listed| listed == p)))
+    }
 }
 
 /// File listing intentional differences.
@@ -210,23 +226,24 @@ pub fn compare_runs(
     }
     let names_a: BTreeSet<String> = a.summary.results.iter().map(|r| r.name.clone()).collect();
     let names_b: BTreeSet<String> = b.summary.results.iter().map(|r| r.name.clone()).collect();
+    let pair = (
+        a.summary.app_profile.as_str(),
+        b.summary.app_profile.as_str(),
+    );
     let mut scenarios = Vec::new();
     for name in names_a.intersection(&names_b) {
         let side_a = side_of(&a, name);
         let side_b = side_of(&b, name);
         let differing = differing_aspects(&side_a, &side_b);
-        let (accepted, findings): (Vec<Aspect>, Vec<Aspect>) =
-            differing.into_iter().partition(|aspect| {
-                intentional
-                    .iter()
-                    .any(|i| i.scenario == *name && i.aspect == *aspect)
-            });
+        let (accepted, findings): (Vec<Aspect>, Vec<Aspect>) = differing
+            .into_iter()
+            .partition(|aspect| intentional.iter().any(|i| i.accepts(name, *aspect, pair)));
         let intentional = accepted
             .into_iter()
             .filter_map(|aspect| {
                 intentional
                     .iter()
-                    .find(|i| i.scenario == *name && i.aspect == aspect)
+                    .find(|i| i.accepts(name, aspect, pair))
                     .cloned()
             })
             .collect();
@@ -551,6 +568,7 @@ mod tests {
             scenario: "happy_sell".into(),
             aspect: Aspect::Cleanup,
             reason: "accepting it changes nothing".into(),
+            profiles: Vec::new(),
         }];
         let report = compare_runs(dir.path(), "a", "b", &accepted).unwrap();
         assert!(!report.parity);
@@ -578,6 +596,7 @@ mod tests {
             scenario: "happy_sell".into(),
             aspect: Aspect::Cleanup,
             reason: "accepted".into(),
+            profiles: Vec::new(),
         }];
 
         let only_abandonment = compare_runs(dir.path(), "a", "b", &accepted)
@@ -689,11 +708,13 @@ mod tests {
                 scenario: "other".into(),
                 aspect: Aspect::Outcome,
                 reason: "v2 lacks the id on purpose".into(),
+                profiles: Vec::new(),
             },
             Intentional {
                 scenario: "other".into(),
                 aspect: Aspect::Contract,
                 reason: "same".into(),
+                profiles: Vec::new(),
             },
         ];
         let report = compare_runs(dir.path(), "a", "b", &intentional).unwrap();
@@ -739,5 +760,40 @@ mod tests {
         .unwrap();
         let list = load_intentional(&path).unwrap();
         assert_eq!(list[0].aspect, Aspect::StatePath);
+        assert!(list[0].profiles.is_empty());
+    }
+
+    #[test]
+    fn an_entry_scoped_to_profiles_applies_only_between_them() {
+        let entry: Intentional = toml::from_str(
+            "scenario = \"cancel_before_taken\"\naspect = \"state-path\"\nreason = \"the CLI reads the daemon's canceled\"\nprofiles = [\"mobile-v2\", \"cli\"]\n",
+        )
+        .unwrap();
+        let open = Intentional {
+            profiles: Vec::new(),
+            ..entry.clone()
+        };
+
+        assert!(entry.accepts(
+            "cancel_before_taken",
+            Aspect::StatePath,
+            ("mobile-v2", "cli")
+        ));
+        assert!(entry.accepts(
+            "cancel_before_taken",
+            Aspect::StatePath,
+            ("cli", "mobile-v2")
+        ));
+        assert!(!entry.accepts(
+            "cancel_before_taken",
+            Aspect::StatePath,
+            ("mobile-v2", "mobile-v3")
+        ));
+        assert!(!entry.accepts("cancel_before_taken", Aspect::Outcome, ("mobile-v2", "cli")));
+        assert!(open.accepts(
+            "cancel_before_taken",
+            Aspect::StatePath,
+            ("mobile-v2", "mobile-v3")
+        ));
     }
 }

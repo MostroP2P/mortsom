@@ -130,9 +130,17 @@ pub enum Command {
         /// verified Mortsom regtest stack. Repeat for every pending legacy run.
         #[arg(long, value_name = "RUN_ID")]
         preserve_legacy_recovery: Vec<mortsom_common::RunId>,
-        /// Client target for Alice and Bob.
-        #[arg(long, default_value = "linux")]
-        platform: mortsom_desktop_driver::Platform,
+        /// App platform for Alice and Bob (`linux` by default). Not with
+        /// profile `cli`, which drives mostro-cli.
+        #[arg(long)]
+        platform: Option<mortsom_desktop_driver::Platform>,
+        /// Client profile, overriding `mobile.profile`: `mobile-v2` (the
+        /// app) or `cli` (mostro-cli).
+        #[arg(long, value_name = "PROFILE")]
+        profile: Option<String>,
+        /// The mostro-cli to drive with profile `cli`.
+        #[command(flatten)]
+        cli: crate::mostro_cli_build::CliSelection,
         /// Prebuilt native executable or Web bundle; otherwise builds the source.
         #[arg(long)]
         app_artifact: Option<PathBuf>,
@@ -163,9 +171,16 @@ pub enum Command {
     /// Check prerequisites, secrets, daemon, relay port and wallets. Performs
     /// no payment and creates no order.
     Doctor {
-        /// Client target whose prerequisites are checked.
-        #[arg(long, default_value = "linux")]
-        platform: mortsom_desktop_driver::Platform,
+        /// App platform whose prerequisites are checked (`linux` by
+        /// default). Not with profile `cli`.
+        #[arg(long)]
+        platform: Option<mortsom_desktop_driver::Platform>,
+        /// Client profile, overriding `mobile.profile`: `mobile-v2` or `cli`.
+        #[arg(long, value_name = "PROFILE")]
+        profile: Option<String>,
+        /// The mostro-cli to check with profile `cli`.
+        #[command(flatten)]
+        cli: crate::mostro_cli_build::CliSelection,
         /// Validate an existing artifact instead of source/build prerequisites.
         #[arg(long)]
         app_artifact: Option<PathBuf>,
@@ -476,6 +491,8 @@ pub async fn run(cli: Cli) -> ExitCode {
             scenarios,
             tag,
             platform,
+            profile,
+            cli: cli_selection,
             app_artifact,
             rebuild,
             source,
@@ -489,6 +506,8 @@ pub async fn run(cli: Cli) -> ExitCode {
                     scenarios,
                     tag,
                     platform,
+                    profile,
+                    cli: cli_selection,
                     artifact: app_artifact,
                     policy: if rebuild {
                         crate::build_cache::Policy::Rebuild
@@ -506,6 +525,8 @@ pub async fn run(cli: Cli) -> ExitCode {
             no_network,
             json,
             platform,
+            profile,
+            cli: cli_selection,
             app_artifact,
             source,
         } => {
@@ -528,6 +549,8 @@ pub async fn run(cli: Cli) -> ExitCode {
                 &cli.stack_dir,
                 &crate::doctor::DesktopDoctorOptions {
                     platform,
+                    profile,
+                    cli: cli_selection,
                     artifact: app_artifact,
                     source,
                     no_network,
@@ -557,9 +580,23 @@ pub async fn run(cli: Cli) -> ExitCode {
     }
 }
 
-/// The adapter of the one profile the config loader accepts, `mobile-v2`.
+/// The adapter of the app profile, `mobile-v2`.
 pub fn select_adapter() -> Arc<dyn mortsom_app_contract::AppAdapter> {
     Arc::new(MobileV2Adapter::new())
+}
+
+/// The adapter for the client `desktop` prepared: the CLI's, with what its
+/// discovery offers, or the app's.
+pub async fn adapter_for(
+    desktop: &crate::run::DesktopOptions,
+    config: &Config,
+) -> Result<Arc<dyn mortsom_app_contract::AppAdapter>, String> {
+    match desktop.platform {
+        mortsom_desktop_driver::Platform::Cli => {
+            crate::mostro_cli::adapter_for(desktop, config).await
+        }
+        _ => Ok(select_adapter()),
+    }
 }
 
 async fn run_relay(config_path: &std::path::Path, command: RelayCommand) -> ExitCode {
@@ -684,7 +721,8 @@ mod tests {
         assert!(matches!(
             cli.command,
             super::Command::Run {
-                platform: Platform::Linux,
+                platform: None,
+                profile: None,
                 ..
             }
         ));
@@ -704,10 +742,11 @@ mod tests {
             ])
             .unwrap();
             assert!(
-                matches!(cli.command, super::Command::Run { platform, .. } if platform == expected)
+                matches!(cli.command, super::Command::Run { platform, .. } if platform == Some(expected))
             );
             assert_eq!(cli.config, std::path::Path::new("explicit.local.toml"));
         }
+        assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "cli"]).is_err());
         assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "unknown"]).is_err());
         assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "android"]).is_err());
         assert!(super::Cli::try_parse_from(["mortsom", "device", "smoke"]).is_err());
