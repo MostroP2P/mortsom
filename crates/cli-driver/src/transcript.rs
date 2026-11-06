@@ -2,6 +2,7 @@
 //! capture is for an app, the transcript is for the CLI (spec §12). Invoices
 //! and payment requests never enter it; the standard input never does.
 
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use serde::Serialize;
@@ -146,13 +147,14 @@ fn sanitize_arg(arg: &str, secret_next: bool) -> String {
 pub fn redact_value(value: &mut Value) {
     match value {
         Value::Object(map) => {
+            let mut taken: BTreeSet<String> = map.keys().cloned().collect();
             for (index, (key, mut inner)) in std::mem::take(map).into_iter().enumerate() {
                 if is_secret_key(&key) {
                     redact_strings(&mut inner);
                 } else {
                     redact_value(&mut inner);
                 }
-                map.insert(redact_key(key, index), inner);
+                map.insert(redact_key(key, index, &mut taken), inner);
             }
         }
         Value::Array(items) => items.iter_mut().for_each(redact_value),
@@ -174,14 +176,19 @@ fn redact_strings(value: &mut Value) {
     }
 }
 
-/// An object key, replaced when it holds a Lightning invoice; `index`, its
-/// position in the object, keeps replaced keys distinct.
-fn redact_key(key: String, index: usize) -> String {
-    if lightning().is_some_and(|re| re.is_match(&key)) {
-        format!("{REDACTED}{index}")
-    } else {
-        key
+/// An object key, replaced when it holds a Lightning invoice by
+/// `[redacted]<n>`, `n` counting up from its position until the name is in
+/// `taken` neither as a key the CLI wrote nor as one already given out.
+fn redact_key(key: String, index: usize, taken: &mut BTreeSet<String>) -> String {
+    if !lightning().is_some_and(|re| re.is_match(&key)) {
+        return key;
     }
+    let name = (index..)
+        .map(|n| format!("{REDACTED}{n}"))
+        .find(|name| !taken.contains(name))
+        .unwrap_or_else(|| REDACTED.to_owned());
+    taken.insert(name.clone());
+    name
 }
 
 /// Whether `key` names a payment secret, whatever its ASCII case or style
@@ -434,6 +441,19 @@ mod tests {
         assert!(!text.contains("lnbcrt10n1p"), "{text}");
         assert_eq!(value["orders"].as_object().map(|m| m.len()), Some(3));
         assert_eq!(value["orders"]["o1"], "active");
+    }
+
+    #[test]
+    fn a_redacted_key_never_replaces_a_key_the_cli_wrote() {
+        let invoice = format!("lnbcrt10n1p{}", "q".repeat(40));
+        let mut value: Value =
+            serde_json::from_str(&format!(r#"{{"{REDACTED}1":"kept","{invoice}":"x"}}"#)).unwrap();
+
+        redact_value(&mut value);
+
+        assert_eq!(value.as_object().map(|m| m.len()), Some(2), "{value}");
+        assert_eq!(value[format!("{REDACTED}1")], "kept");
+        assert!(!value.to_string().contains("lnbcrt10n1p"), "{value}");
     }
 
     #[test]
