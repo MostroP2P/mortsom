@@ -36,6 +36,11 @@ messages, error strings, and artifacts. No exceptions.
   environment orchestration and reports. A change to a semantic identifier,
   a visible business state, or an external-wallet callback is a contract
   change and requires coordinated review.
+- mostro-cli (`../mostro-cli`, upstream `MostroP2P/mostro-cli`) is also a
+  system under test: the `cli` profile drives it as a subprocess through
+  its JSON machine interface, never as a linked library, so what is tested
+  is the executable it ships. The commands, fields and codes Mortsom relies
+  on are in `docs/cli-contract.md`; changing them is a contract change.
 - Reference implementations (`../mostro-cli`, `../mostrix`, `../ortsom`) are
   guidance, not a source. Do not copy code from them.
 
