@@ -21,6 +21,9 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::time::{Instant, MissedTickBehavior};
 use zeroize::Zeroizing;
 
+/// The CLI executable's file name: every CLI bundle and prebuilt artifact
+/// names its executable this way.
+pub const EXECUTABLE: &str = "mostro-cli";
 /// How much of each output stream is kept; the rest is drained unread so a
 /// runaway child can neither block on a full pipe nor exhaust memory.
 const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;

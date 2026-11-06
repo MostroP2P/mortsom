@@ -13,6 +13,7 @@ use mortsom_ui_driver::process::ProcessError;
 
 use crate::client::CliClient;
 use crate::error::CliError;
+use crate::process::EXECUTABLE;
 
 /// One actor's CLI as a session.
 pub struct CliSession {
@@ -105,7 +106,7 @@ impl UiSession for CliSession {
 
 fn ui_error(error: CliError) -> UiError {
     UiError::Process(ProcessError::Failed {
-        command: "mostro-cli".into(),
+        command: EXECUTABLE.into(),
         stderr: error.to_string(),
     })
 }

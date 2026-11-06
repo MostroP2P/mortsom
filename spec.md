@@ -693,9 +693,13 @@ closed manifest is authoritative.
 
 The CLI runtime (section 6.3) marks each invocation, not a session: the marker is set before the child
 starts and cleared once it is gone, by a task that outlives a caller that gives up. A marker left by a killed
-coordinator is reconciled by the CLI runtime itself, and only after it verifies, through `/proc`, that no
-process of the operator's user runs with the actor's `MCLI_DIR`; while one does, or when `/proc` cannot be
-read, the storage stays refused.
+coordinator is reconciled by the CLI runtime itself, and only after it checks, through `/proc`, that no
+process of the operator's user runs with the actor's `MCLI_DIR`. `/proc` proves that only for a process whose
+environment it shows, and it hides the environment of a non-dumpable process even from that process's user.
+For such a process of the operator's user it can go only by the command line: the process counts as running
+with the actor's `MCLI_DIR` when its command line starts with an executable named `mostro-cli`, or when its
+command line cannot be read either. A process that disappears during the check does not count. While a
+process counts, or when `/proc` cannot be read, the storage stays refused.
 
 A killed run leaves active-runtime markers and later invocations fail closed. Markers are never removed just
 to bypass that refusal.
