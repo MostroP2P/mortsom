@@ -6,12 +6,14 @@ use std::ops::Range;
 
 use serde::Serialize;
 use serde_json::Value;
+use zeroize::Zeroizing;
 
 use crate::envelope::{Envelope, ErrorInfo};
 
 /// Keys whose whole value is a payment secret: every string and object in
-/// it, at any depth, is replaced.
-const SECRET_KEYS: [&str; 4] = ["invoice", "payment_request", "bolt11", "lnurl"];
+/// it, at any depth, is replaced. Written as [`is_secret_key`] normalizes
+/// a key: lowercase ASCII, without `_` or `-`.
+const SECRET_KEYS: [&str; 4] = ["invoice", "paymentrequest", "bolt11", "lnurl"];
 /// What a replaced value reads.
 pub const REDACTED: &str = "[redacted]";
 
@@ -182,8 +184,15 @@ fn redact_key(key: String, index: usize) -> String {
     }
 }
 
+/// Whether `key` names a payment secret, whatever its ASCII case or style
+/// (`payment_request`, `paymentRequest`, `payment-request`).
 fn is_secret_key(key: &str) -> bool {
-    SECRET_KEYS.contains(&key) || key.contains("invoice")
+    let key: String = key
+        .chars()
+        .filter(|c| !matches!(c, '_' | '-'))
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    SECRET_KEYS.contains(&key.as_str()) || key.contains("invoice")
 }
 
 /// Lightning invoices and LNURLs, whatever the network, wherever they start.
@@ -199,7 +208,7 @@ fn lightning() -> Option<&'static regex::Regex> {
 }
 
 /// Scrubs free text (standard error, a parser's complaint): every Lightning
-/// invoice, and every given secret, is replaced.
+/// invoice, and every given secret whatever its ASCII case, is replaced.
 ///
 /// Every match is found in the original text first and overlapping matches
 /// are merged, so no replacement can split another match and leave part of
@@ -208,10 +217,27 @@ pub fn scrub(text: &str, secrets: &[&mortsom_common::Secret]) -> String {
     let mut ranges: Vec<Range<usize>> = lightning()
         .map(|re| re.find_iter(text).map(|m| m.range()).collect())
         .unwrap_or_default();
-    for value in secrets.iter().map(|s| s.expose()).filter(|v| !v.is_empty()) {
-        ranges.extend(occurrences(text, value));
-    }
+    ranges.extend(secret_ranges(text, secrets));
     replace_ranges(text, merge(ranges))
+}
+
+/// Where the given secrets occur in `text`, ignoring ASCII case. Lowering
+/// ASCII keeps every byte offset, so the ranges hold for `text`; the
+/// lowered copies are wiped when dropped.
+fn secret_ranges(text: &str, secrets: &[&mortsom_common::Secret]) -> Vec<Range<usize>> {
+    let needles: Vec<Zeroizing<String>> = secrets
+        .iter()
+        .map(|secret| Zeroizing::new(secret.expose().to_ascii_lowercase()))
+        .filter(|needle| !needle.is_empty())
+        .collect();
+    if needles.is_empty() {
+        return Vec::new();
+    }
+    let folded = Zeroizing::new(text.to_ascii_lowercase());
+    needles
+        .iter()
+        .flat_map(|needle| occurrences(&folded, needle))
+        .collect()
 }
 
 /// Every occurrence of `needle` in `text`, overlapping ones included.
@@ -367,6 +393,32 @@ mod tests {
     }
 
     #[test]
+    fn secret_keys_are_recognized_whatever_their_case_or_style() {
+        let keys = [
+            "paymentRequest",
+            "payment-request",
+            "PAYMENT_REQUEST",
+            "buyerInvoice",
+            "Invoice",
+            "Bolt11",
+            "LNURL",
+        ];
+        let mut value = Value::Object(
+            keys.iter()
+                .map(|key| ((*key).to_owned(), Value::from("user@example.com")))
+                .chain([("order_id".to_owned(), Value::from("o1"))])
+                .collect(),
+        );
+
+        redact_value(&mut value);
+
+        for key in keys {
+            assert_eq!(value[key], REDACTED, "{key}");
+        }
+        assert_eq!(value["order_id"], "o1");
+    }
+
+    #[test]
     fn an_invoice_used_as_an_object_key_is_redacted() {
         let first = format!("lnbcrt10n1p{}", "q".repeat(40));
         let second = format!("lnbcrt10n1p{}", "p".repeat(40));
@@ -446,6 +498,15 @@ mod tests {
         }
         let argv = vec!["--note".to_owned(), format!("x_{invoice}")];
         assert_eq!(sanitize_argv(&argv), ["--note", "x_[redacted]"]);
+    }
+
+    #[test]
+    fn a_secret_is_scrubbed_whatever_its_ascii_case() {
+        let secret = mortsom_common::Secret::new("alice@example.com");
+
+        let scrubbed = scrub("日本 err: ALICE@Example.COM!", &[&secret]);
+
+        assert_eq!(scrubbed, "日本 err: [redacted]!");
     }
 
     #[test]
