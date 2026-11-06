@@ -8,8 +8,8 @@ fn busy_host_blocks_mutations_before_loading_config_or_starting_processes() {
     let home = tempfile::tempdir().unwrap();
     let _held = RunLock::acquire_host(home.path()).unwrap();
     for args in [
-        vec!["run", "happy_sell", "--app-artifact", "/first/artifact"],
-        vec!["run", "happy_sell", "--app-artifact", "/second/artifact"],
+        vec!["run", "happy_sell", "--artifact", "/first/artifact"],
+        vec!["run", "happy_sell", "--artifact", "/second/artifact"],
         vec!["stack", "up"],
         vec!["stack", "down"],
         vec!["cleanup", "missing-run"],

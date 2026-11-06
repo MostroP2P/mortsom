@@ -116,10 +116,10 @@ ls $HOME/.local/state/mortsom/recovery/            # a journal not closed blocks
 ./target/debug/mortsom run happy_sell --platform linux
 ./target/debug/mortsom run --tag payment-failure --platform web
 ./target/debug/mortsom run                        # every scenario, one run each
-./target/debug/mortsom run --tag smoke --app-ref https://github.com/MostroP2P/app/pull/<n>
+./target/debug/mortsom run --tag smoke --ref https://github.com/MostroP2P/app/pull/<n>
 ```
 
-Without `--app-source` or `--app-artifact`, `run` fetches the app's `main` (or `--app-ref`), builds it for the
+Without `--source` or `--artifact`, `run` fetches the app's `main` (or `--ref`), builds it for the
 stack's daemon identity and captures the bundle; no prebuilt client is needed. Use `stack status`, not `stack
 up`: every `stack up` mints a new daemon identity. With no option `stack up` builds Mostro's `main` at its
 current head (several minutes the first time); `--mostro-ref <branch-or-pr-url>` builds another head, and
@@ -190,7 +190,7 @@ on Web with the CDN-free build (`20260925T151914Z-5214b0d3eac9`).
 
 - **Managed app preparation (2026-09-15).** The default source is managed `MostroP2P/app` main; git objects
   are cached in ignored `.mortsom/app/repository.git` and each build checkout is removed after capture.
-  `--app-source <path>` keeps an explicit checkout, `--app-artifact <path>` skips the build (spec section 7).
+  `--source <path>` keeps an explicit checkout, `--artifact <path>` skips the build (spec section 7).
 - **Recovery abandonment (2026-09-16, #45).** `mortsom recovery abandon <run-id> --reason stack-destroyed
   --confirm-run <run-id>` is the only terminal path for a journal whose Mortsom-owned regtest stack is
   provably destroyed; `stack up`/`stack down` refuse while a pending journal's stack exists (spec section
