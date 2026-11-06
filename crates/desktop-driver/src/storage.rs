@@ -22,13 +22,29 @@ pub fn ensure_stopped(root: &Path) -> io::Result<()> {
     }
 }
 
+/// Clears the marker of a runtime whose owner verified, by its own means,
+/// that no process of it is alive (the CLI runtime checks that no process
+/// uses the actor's store). Never a way past a runtime that may still run.
+pub fn clear_verified_stop(root: &Path) -> io::Result<()> {
+    validate_path(root)?;
+    validate_directory(root)?;
+    match fs::remove_file(root.join(ACTIVE)) {
+        Ok(()) => {}
+        Err(cause) if cause.kind() == io::ErrorKind::NotFound => {}
+        Err(cause) => return Err(cause),
+    }
+    File::open(root)?.sync_all()
+}
+
 /// Deliberately has no automatic cleanup: coordinator death is not proof that
 /// its child processes stopped. Only the runtime's verified stop clears it.
-pub(crate) struct ActiveRuntime {
+pub struct ActiveRuntime {
     root: PathBuf,
 }
 impl ActiveRuntime {
-    pub(crate) fn begin(root: &Path) -> io::Result<Self> {
+    /// Records that a runtime is about to use `root`; refuses storage whose
+    /// previous runtime never recorded its stop.
+    pub fn begin(root: &Path) -> io::Result<Self> {
         ensure_stopped(root)?;
         let mut marker = OpenOptions::new()
             .write(true)
@@ -43,7 +59,8 @@ impl ActiveRuntime {
         })
     }
 
-    pub(crate) fn stopped(&self) -> io::Result<()> {
+    /// Records the verified stop of the runtime.
+    pub fn stopped(&self) -> io::Result<()> {
         match fs::remove_file(self.root.join(ACTIVE)) {
             Ok(()) => {}
             Err(cause) if cause.kind() == io::ErrorKind::NotFound => {}
@@ -66,17 +83,21 @@ pub enum ActorStorage {
 }
 
 impl ActorStorage {
-    pub(crate) fn is_resume(&self) -> bool {
+    /// Whether this reopens retained storage instead of starting fresh.
+    pub fn is_resume(&self) -> bool {
         matches!(self, Self::Resume(_))
     }
 
-    pub(crate) fn prepare(&self, platform: Platform) -> io::Result<PathBuf> {
+    /// Initializes fresh storage, or validates retained storage, with the
+    /// layout of `platform`, and returns its root.
+    pub fn prepare(&self, platform: Platform) -> io::Result<PathBuf> {
         let path = match self {
             Self::Fresh(path) | Self::Resume(path) => path,
         };
         let layout = match platform {
             Platform::Linux => &["data", "config"][..],
             Platform::Web => &["profile"][..],
+            Platform::Cli => &["mcli", "home"][..],
         };
         let marker = format!("mortsom-actor-storage-v1\n{platform}\n");
         validate_path(path)?;

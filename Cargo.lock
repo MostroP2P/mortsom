@@ -1890,6 +1890,8 @@ version = "0.1.1"
 dependencies = [
  "async-trait",
  "mortsom-common",
+ "mortsom-desktop-driver",
+ "mortsom-ui-driver",
  "regex",
  "rustix",
  "serde",

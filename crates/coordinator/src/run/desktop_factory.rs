@@ -67,6 +67,7 @@ impl DesktopFactory for RealDesktopFactory {
             }
         });
         match options.platform {
+            Platform::Cli => Err("the cli profile is not available yet".into()),
             Platform::Web => {
                 let session = WebSession::new(
                     Arc::new(TokioRunner),

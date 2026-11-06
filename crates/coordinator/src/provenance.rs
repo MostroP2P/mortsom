@@ -78,6 +78,7 @@ impl BuildProvenance {
         let selected: &[&str] = match platform {
             Platform::Linux => &["clang", "cmake", "ninja", "pkg-config"],
             Platform::Web => &["wasm-pack", "python3"],
+            Platform::Cli => &[],
         };
         for tool in selected {
             tools.insert(
