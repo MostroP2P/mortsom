@@ -24,9 +24,13 @@ automation identifier does. mostro-cli publishes its own source of truth: the ge
 | Codes | Category |
 |---|---|
 | `invalid_arguments`, `output_not_supported`, `protocol_unsupported` | automation-contract |
-| `relay_connection_failed`, `relay_read_failed`, `read_timeout`, `read_limit_exceeded`, `reply_timeout`, `request_rejected`, `pow_required`; any `uncertain` | relay |
-| `configuration_missing`, `configuration_invalid`, `identity_missing`, `identity_unreadable`, `identity_exists`, `store_unwritable`, `store_unreadable` | environment-misconfiguration |
+| `relay_connection_failed`, `relay_read_failed`, `read_timeout`, `read_limit_exceeded`, `reply_timeout`, `request_rejected`, `pow_required`; any other `uncertain` | relay |
+| `configuration_missing`, `configuration_invalid`, `identity_missing`, `identity_unreadable`, `identity_exists`, `store_unwritable`, `store_unreadable`, `order_not_saved` | environment-misconfiguration |
 | everything else (`node_refused`, `order_declined`, `order_unknown`, `reply_malformed`, `internal_error`, ...) | product |
+
+`order_not_saved` (from `order new`, `order take-sell`, `order take-buy` and `order sync`) is `uncertain`
+because the node acted, but its cause is the actor's store, which could not record it: it is classified
+like `store_unwritable`, not as a relay failure, and like every `uncertain` it is never retried.
 
 A process that cannot start, outlives its deadline (90 s, longer than the CLI's own connection, reply and
 cleanup deadlines put together, after which it is killed and reaped) or is ended by a signal is
@@ -50,7 +54,7 @@ An `invalid_arguments` from `order add-invoice` counts as the CLI refusing the i
 | create | `order new --side --currency --fiat-amount [--fiat-amount-max] --payment-method --sats [--premium] [--expires-in] --yes` | `data.order.id`, `data.order.status`, `data.next_step`, `data.payment_request` (bond) |
 | take | `order take-sell` / `order take-buy --order [--amount] --yes` | `data.next_step` (`add_invoice`, `pay_hold_invoice`, `pay_bond_invoice`), `data.payment_request`, `data.order.sats_amount` (payout to invoice) |
 | state | `order info --order` | `data.orders[]` with `id` and `status` (mostro-core status names) |
-| node requests | `message list --order --since 1440` | `data.messages[]`: `action`, `next_step` (`pay_hold_invoice`, `add_invoice`, `pay_bond_invoice`, `add_bond_invoice`), `created_at_unix`, `payload.invoice`, `payload.amount`, `payload.order.sats_amount` |
+| node requests | `message list --order --since <minutes>` | `data.messages[]`: `action`, `next_step` (`pay_hold_invoice`, `add_invoice`, `pay_bond_invoice`, `add_bond_invoice`), `created_at_unix`, `payload.invoice`, `payload.amount`, `payload.order.sats_amount`; `data.truncated` |
 | buyer invoice | `order add-invoice --order --invoice - --yes` | refusals: `node_refused` + `reason`, `invalid_arguments` |
 | fiat sent / release | `order fiat-sent` / `order release --order --yes` | status only |
 | cancel | `order cancel --order --yes` | `data.result`; refusals `node_refused` + `reason` (`order_already_canceled`, `not_allowed_by_status`, `is_not_your_order`), `order_unknown` |
@@ -62,6 +66,17 @@ An `invalid_arguments` from `order add-invoice` counts as the CLI refusing the i
 Actions read from `message list`: `bond-slashed` (cause `dispute` when the order shows
 `dispute-initiated-by-you`, `dispute-initiated-by-peer`, `admin-took-dispute`, `admin-settled` or
 `admin-canceled`, else `timeout`), `bond-payout-completed`.
+
+The `message list` window is `--since 1440` during a run. Recovery reads from the run's start, recorded
+in the journal, to now, capped at 10080 minutes (the CLI's maximum). The daemon asks for a payout
+replacement once, after its retries are spent, so a request older than that window cannot be read: an
+order whose `order info` still waits on the actor (a payout or a bond-claim invoice) is left unresolved
+with that reason, never reported as cleaned up.
+
+With `data.truncated` true the list may be incomplete (the relay returned its per-relay limit, or more
+than the record cap matched), so an absent action is inconclusive: a request, `bond-slashed` or
+`bond-payout-completed` missing from it proves nothing. A wait keeps polling within its deadline; a check
+that needs the absence fails as a relay failure instead of passing.
 
 ## Required and optional commands
 

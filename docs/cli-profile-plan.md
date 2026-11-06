@@ -98,9 +98,10 @@ gets its own adapter.
 
 - `Upstream` for `MostroP2P/mostro-cli` (`--ref <branch|PR URL>`,
   `--source <dir>`), `cargo build --release --locked`, kept builds.
-- `doctor --profile cli`: `mostro-cli schema --output json` must expose
-  schema version 1 and the commands the profile requires
-  (`docs/cli-contract.md`).
+- `doctor --profile cli`: for a prebuilt executable, `mostro-cli schema
+  --output json` must expose schema version 1 and the commands the profile
+  requires (`docs/cli-contract.md`). For a source selection it checks Git
+  and Cargo and defers the discovery to the build (spec §7).
 - CI: a Mortsom workflow (manual with a `cli_ref` input, plus nightly).
   mostro-cli has no `pull_request` workflow that runs Mortsom yet, so
   mostro-cli pull requests are run from Mortsom by `cli_ref`.
@@ -114,8 +115,14 @@ and anti-abuse bonds.
 
 ### Phase 4 — parity
 
-`mortsom parity <mobile-v2 run> <cli run>` on the `parity` tag, with
-intentional differences scoped to profiles.
+`mortsom parity <mobile-v2 run> <cli run>` for each scenario of the `parity`
+tag, with intentional differences scoped to profiles. Every run holds one
+scenario (spec §8.1), so a tagged batch yields one run ID per scenario and
+profile, and the command compares exactly two runs: each scenario's
+mobile-v2 run is paired with its cli run, and the pair counts only when both
+reports carry that scenario. Two runs that share no scenario compare nothing;
+`compare_runs` reports that as parity today, and this phase makes it a
+failure.
 
 ## Requests to mostro-cli
 
