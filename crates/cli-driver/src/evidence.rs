@@ -3,6 +3,7 @@
 //! and records the outcome itself, so a caller that gives up (a scenario
 //! deadline) still leaves the command and its result in the evidence.
 
+use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use mortsom_common::{Redactor, Secret};
@@ -174,27 +175,36 @@ fn scrub_value(value: &Value, secrets: &[&Secret]) -> Value {
                 .map(|item| scrub_value(item, secrets))
                 .collect(),
         ),
-        Value::Object(map) => Value::Object(
-            map.iter()
-                .enumerate()
-                .map(|(index, (key, inner))| {
-                    (scrub_key(key, index, secrets), scrub_value(inner, secrets))
-                })
-                .collect(),
-        ),
+        Value::Object(map) => {
+            let mut taken: BTreeSet<String> = map.keys().cloned().collect();
+            Value::Object(
+                map.iter()
+                    .enumerate()
+                    .map(|(index, (key, inner))| {
+                        let key = scrub_key(key, index, secrets, &mut taken);
+                        (key, scrub_value(inner, secrets))
+                    })
+                    .collect(),
+            )
+        }
         other => other.clone(),
     }
 }
 
-/// An object key, scrubbed; a key that changed also carries `index`, its
-/// position in the object, so two scrubbed keys never become one.
-fn scrub_key(key: &str, index: usize, secrets: &[&Secret]) -> String {
+/// An object key, scrubbed. A key that changed also carries a number,
+/// counting up from `index`, its position in the object, until the name is
+/// in `taken` neither as a key the CLI wrote nor as one already given out.
+fn scrub_key(key: &str, index: usize, secrets: &[&Secret], taken: &mut BTreeSet<String>) -> String {
     let scrubbed = scrub(key, secrets);
     if scrubbed == key {
-        scrubbed
-    } else {
-        format!("{scrubbed}{index}")
+        return scrubbed;
     }
+    let name = (index..)
+        .map(|n| format!("{scrubbed}{n}"))
+        .find(|name| !taken.contains(name))
+        .unwrap_or(scrubbed);
+    taken.insert(name.clone());
+    name
 }
 
 /// The `ok` outcome, or the failure the CLI reported. Its message and
@@ -232,6 +242,21 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_scrubbed_key_never_replaces_a_key_the_cli_wrote() {
+        let secret = Secret::new("someone@example.com");
+        let value = serde_json::json!({"[redacted]1": "kept", "someone@example.com": "x"});
+
+        let scrubbed = scrub_value(&value, &[&secret]);
+
+        assert_eq!(scrubbed.as_object().map(|m| m.len()), Some(2), "{scrubbed}");
+        assert_eq!(scrubbed["[redacted]1"], "kept");
+        assert!(
+            !scrubbed.to_string().contains("someone@example.com"),
+            "{scrubbed}"
+        );
+    }
 
     fn kept_stderr(evidence: &Evidence) -> String {
         evidence
