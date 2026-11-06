@@ -258,6 +258,46 @@ async fn a_temporary_root_is_released_when_the_session_ends() {
     assert!(closed.to_string().contains("already closed"), "{closed}");
 }
 
+/// Retained storage outlives the session for its owner, but the client
+/// runs nothing on it once closed, until it is opened again.
+#[tokio::test]
+async fn a_closed_client_runs_nothing_on_its_retained_storage() {
+    let cli = Arc::new(ScriptedCli::default());
+    cli.ok("identity.show", serde_json::json!({"identity_pubkey": "a"}));
+    let (_parent, root, client) = retained(cli.clone());
+
+    client.close().await.unwrap();
+    let closed = client
+        .invoke(Call::local(&["identity", "show"]))
+        .await
+        .unwrap_err();
+
+    assert!(closed.to_string().contains("already closed"), "{closed}");
+    assert!(client.root().is_none());
+    assert!(cli.seen().is_empty(), "{:?}", cli.seen());
+    assert!(root.join("mcli").is_dir());
+    client.ensure_open().unwrap();
+    assert_eq!(client.root(), Some(root));
+    client
+        .invoke(Call::local(&["identity", "show"]))
+        .await
+        .unwrap();
+}
+
+/// A relaunch right after a step gave up on an invocation: the store is
+/// already open, so reopening it has nothing to wait for.
+#[tokio::test]
+async fn reopening_an_open_store_does_not_wait_for_a_running_invocation() {
+    let (_parent, _root, client) = retained(Arc::new(SlowCli {
+        delay: Duration::from_millis(150),
+    }));
+    give_up_on_one(&client).await;
+
+    let reopened = client.ensure_open();
+
+    assert!(reopened.is_ok(), "{reopened:?}");
+}
+
 fn retained(process: Arc<dyn CliProcess>) -> (tempfile::TempDir, PathBuf, Arc<CliClient>) {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().canonicalize().unwrap().join("alice");

@@ -39,12 +39,28 @@ pub struct CliClient {
     config: CliConfig,
     process: Arc<dyn CliProcess>,
     storage: Option<ActorStorage>,
-    root: Mutex<Option<Root>>,
+    store: Mutex<Store>,
     /// Transcript and standard error, shared with running invocations.
     evidence: Evidence,
     /// Held for the whole life of an invocation, by the task that runs it:
     /// a caller that gives up never releases it while a child still runs.
     serial: Arc<tokio::sync::Mutex<()>>,
+}
+
+/// The actor's storage as the client holds it.
+#[derive(Default)]
+struct Store {
+    root: Option<Root>,
+    /// Set by `close`: retained storage stays on disk for its owner, but
+    /// nothing runs on it until the client is opened again.
+    closed: bool,
+}
+
+impl Store {
+    /// The root invocations run in: open, and not closed since.
+    fn open_root(&self) -> Option<&Root> {
+        self.root.as_ref().filter(|_| !self.closed)
+    }
 }
 
 /// Where the actor's `MCLI_DIR` and `HOME` live.
@@ -71,7 +87,7 @@ impl CliClient {
             config,
             process,
             storage: None,
-            root: Mutex::new(None),
+            store: Mutex::new(Store::default()),
             evidence: Evidence::default(),
             serial: Arc::new(tokio::sync::Mutex::new(())),
         }
@@ -99,31 +115,35 @@ impl CliClient {
             ));
         }
         let _idle = self.idle()?;
-        let mut root = lock(&self.root);
-        match root.as_ref() {
-            Some(existing) => wipe(existing),
-            None => {
-                *root = Some(self.open()?);
-                Ok(())
-            }
+        let mut store = lock(&self.store);
+        match store.root.as_ref() {
+            Some(existing) => wipe(existing)?,
+            None => store.root = Some(self.open()?),
         }
-    }
-
-    /// Opens the storage unless it is open: a relaunch, or a recovery that
-    /// reopens retained storage.
-    pub fn ensure_open(&self) -> Result<(), CliError> {
-        let _idle = self.idle()?;
-        let mut root = lock(&self.root);
-        if root.is_none() {
-            *root = Some(self.open()?);
-        }
+        store.closed = false;
         Ok(())
     }
 
-    /// The storage root, once open.
+    /// Opens the storage unless it is open: a relaunch, or a recovery that
+    /// reopens retained storage. An open store is left as it is, even while
+    /// an invocation a caller gave up on still runs in it.
+    pub fn ensure_open(&self) -> Result<(), CliError> {
+        let mut store = lock(&self.store);
+        if store.open_root().is_some() {
+            return Ok(());
+        }
+        let _idle = self.idle()?;
+        if store.root.is_none() {
+            store.root = Some(self.open()?);
+        }
+        store.closed = false;
+        Ok(())
+    }
+
+    /// The storage root, while the client is open.
     pub fn root(&self) -> Option<PathBuf> {
-        lock(&self.root)
-            .as_ref()
+        lock(&self.store)
+            .open_root()
             .map(|root| root.path().to_path_buf())
     }
 
@@ -138,15 +158,23 @@ impl CliClient {
             })
     }
 
-    /// Ends the client once no invocation runs, then releases a temporary
-    /// root; retained storage stays for its owner. An invocation that
-    /// outlives its deadline is a failed shutdown, and its root is kept.
+    /// Waits until no invocation runs, so nothing of the CLI is alive; one
+    /// that outlives its deadline (plus a grace) is a failed stop.
+    pub async fn settle(&self) -> Result<(), CliError> {
+        self.settled().await.map(drop)
+    }
+
+    /// Ends the client once no invocation runs: nothing runs until it is
+    /// opened again. A temporary root is released; retained storage stays
+    /// on disk for its owner. An invocation that outlives its deadline is a
+    /// failed shutdown, and the client stays open.
     pub async fn close(&self) -> Result<(), CliError> {
         let _settled = self.settled().await?;
-        let mut root = lock(&self.root);
-        if matches!(root.as_ref(), Some(Root::Temporary(_))) {
-            *root = None;
+        let mut store = lock(&self.store);
+        if matches!(store.root, Some(Root::Temporary(_))) {
+            store.root = None;
         }
+        store.closed = true;
         Ok(())
     }
 

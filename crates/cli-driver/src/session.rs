@@ -69,9 +69,11 @@ impl UiSession for CliSession {
     async fn background(&self, _: u64) -> Result<(), UiError> {
         Err(UiError::Unsupported("backgrounding"))
     }
-    /// Every invocation is its own process; nothing keeps running.
+    /// Every invocation is its own process: terminating waits for one a
+    /// caller gave up on, up to its deadline plus a grace, and fails while
+    /// it outlives that instead of reporting a stop. The store stays open.
     async fn terminate_app(&self) -> Result<(), UiError> {
-        Ok(())
+        self.client.settle().await.map_err(ui_error)
     }
     async fn activate_app(&self) -> Result<(), UiError> {
         self.client.ensure_open().map_err(ui_error)
@@ -153,6 +155,48 @@ mod tests {
         let ended = session.end().await;
 
         assert!(ended.is_err(), "{ended:?}");
+    }
+
+    /// Gives up on one `identity show` that `session` is still running.
+    async fn give_up_on_one(session: &CliSession) {
+        session.clear_app().await.unwrap();
+        let gave_up = tokio::time::timeout(
+            Duration::from_millis(20),
+            session.client().invoke(Call::local(&["identity", "show"])),
+        )
+        .await;
+        assert!(gave_up.is_err(), "the caller should have timed out");
+    }
+
+    /// A relaunch after a step that timed out: terminating reports a stop
+    /// only once the abandoned invocation has ended, and the store then
+    /// opens again at once.
+    #[tokio::test]
+    async fn terminating_waits_for_an_invocation_whose_caller_gave_up() {
+        let slow = Arc::new(SlowCli {
+            delay: Duration::from_millis(150),
+        });
+        let session = CliSession::new(Arc::new(CliClient::new(config(), slow)));
+        give_up_on_one(&session).await;
+
+        session.terminate_app().await.unwrap();
+        let recorded = session.page_source().await.unwrap();
+        session.activate_app().await.unwrap();
+
+        assert_eq!(recorded.lines().count(), 1, "{recorded}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn terminating_fails_while_an_invocation_outlives_its_deadline() {
+        let slow = Arc::new(SlowCli {
+            delay: Duration::from_secs(3600),
+        });
+        let session = CliSession::new(Arc::new(CliClient::new(config(), slow)));
+        give_up_on_one(&session).await;
+
+        let terminated = session.terminate_app().await;
+
+        assert!(terminated.is_err(), "{terminated:?}");
     }
 
     #[tokio::test]
