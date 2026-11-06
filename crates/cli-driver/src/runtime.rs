@@ -11,8 +11,9 @@ use mortsom_desktop_driver::storage::{clear_verified_stop, ensure_stopped};
 use crate::error::CliError;
 
 /// Clears a marker left by an interrupted invocation once no process uses
-/// the actor's store; refuses while one still does.
-pub(crate) fn reconcile(root: &Path) -> Result<(), CliError> {
+/// the actor's store; refuses while one still does. Recovery calls it too,
+/// before it proves a retained CLI actor inactive.
+pub fn reconcile(root: &Path) -> Result<(), CliError> {
     if ensure_stopped(root).is_ok() {
         return Ok(());
     }

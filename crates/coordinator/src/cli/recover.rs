@@ -155,6 +155,20 @@ fn fail(error: String) -> ExitCode {
     eprintln!("{error}");
     ExitCode::from(1)
 }
+/// Proves an actor's retained storage inactive before it is removed. A CLI
+/// actor's marker, left by an invocation a killed coordinator never saw end
+/// (an interrupted `identity init`), is cleared first once no mostro-cli
+/// process uses its store (spec §11); an app actor's marker always refuses.
+fn ensure_inactive(
+    platform: mortsom_desktop_driver::Platform,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    if platform == mortsom_desktop_driver::Platform::Cli {
+        mortsom_cli_driver::runtime::reconcile(path).map_err(|e| e.to_string())?;
+    }
+    mortsom_desktop_driver::storage::ensure_stopped(path).map_err(|e| e.to_string())
+}
+
 async fn recover(
     config_path: &std::path::Path,
     stack_dir: &std::path::Path,
@@ -183,8 +197,7 @@ async fn recover(
         for actor in mortsom_common::Actor::ALL {
             let path = root.join("actors").join(actor.as_str());
             if path.exists() {
-                mortsom_desktop_driver::storage::ensure_stopped(&path)
-                    .map_err(|e| e.to_string())?;
+                ensure_inactive(manifest.platform, &path)?;
             }
         }
         crate::run::recovery::remove_storage(&journal)?;
@@ -324,6 +337,40 @@ mod tests {
     use crate::run::recovery::relay_ruled_out;
     use mortsom_common::Actor;
     use mortsom_scenario_kit::journal::{RecoveryEvent, RecoveryJournal};
+
+    fn retained_storage(
+        platform: mortsom_desktop_driver::Platform,
+    ) -> (tempfile::TempDir, std::path::PathBuf) {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().canonicalize().unwrap().join("alice");
+        mortsom_desktop_driver::storage::ActorStorage::Fresh(root.clone())
+            .prepare(platform)
+            .unwrap();
+        (parent, root)
+    }
+
+    /// A coordinator killed during a CLI actor's `identity init` leaves a
+    /// marker and a journal without events: once no mostro-cli process uses
+    /// the store, cleanup proves it inactive instead of refusing forever.
+    #[test]
+    fn an_interrupted_cli_bootstrap_is_proved_inactive_once_its_process_is_gone() {
+        let (_parent, root) = retained_storage(mortsom_desktop_driver::Platform::Cli);
+        let _left_behind = mortsom_desktop_driver::storage::ActiveRuntime::begin(&root).unwrap();
+
+        ensure_inactive(mortsom_desktop_driver::Platform::Cli, &root).unwrap();
+
+        mortsom_desktop_driver::storage::ensure_stopped(&root).unwrap();
+    }
+
+    /// An app actor's marker may stand for a client that still runs: it is
+    /// never cleared on this path.
+    #[test]
+    fn an_app_actor_marker_still_refuses() {
+        let (_parent, root) = retained_storage(mortsom_desktop_driver::Platform::Linux);
+        let _left_behind = mortsom_desktop_driver::storage::ActiveRuntime::begin(&root).unwrap();
+
+        assert!(ensure_inactive(mortsom_desktop_driver::Platform::Linux, &root).is_err());
+    }
 
     fn stack_snapshot() -> crate::stack::StackSnapshot {
         serde_json::from_value(serde_json::json!({

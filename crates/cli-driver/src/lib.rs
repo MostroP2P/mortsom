@@ -14,7 +14,7 @@ pub mod envelope;
 pub mod error;
 mod evidence;
 pub mod process;
-mod runtime;
+pub mod runtime;
 pub mod session;
 pub mod transcript;
 
