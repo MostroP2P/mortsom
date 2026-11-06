@@ -9,7 +9,7 @@ use mortsom_common::Secret;
 pub struct NodeTarget {
     /// Daemon public key (hex or npub).
     pub mostro_pubkey: String,
-    /// Relays, comma-joined for `-r`.
+    /// Relays, comma-joined for `--relays`.
     pub relays: Vec<String>,
     /// How long the CLI waits for the node's reply (`--reply-timeout`),
     /// when the built CLI offers the option.

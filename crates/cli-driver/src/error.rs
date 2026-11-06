@@ -69,12 +69,16 @@ impl CliError {
             // The CLI is the system under test: its crash is a product failure.
             CliError::Crashed { .. } => FailureCategory::Product,
             CliError::Refused { code, .. } => category_of_code(code),
-            // The node acted, but the actor's store could not record it:
-            // the cause is the environment, as with `store_unwritable`.
-            CliError::Uncertain { code, .. } if code == "order_not_saved" => {
-                FailureCategory::EnvironmentMisconfiguration
-            }
-            CliError::Uncertain { .. } => FailureCategory::Relay,
+            // The node may have acted. When the code names the environment
+            // (`order_not_saved`: the actor's store could not record it, as
+            // with `store_unwritable`), so does the failure; any other
+            // uncertainty is the relay's.
+            CliError::Uncertain { code, .. } => match category_of_code(code) {
+                FailureCategory::EnvironmentMisconfiguration => {
+                    FailureCategory::EnvironmentMisconfiguration
+                }
+                _ => FailureCategory::Relay,
+            },
         }
     }
 
@@ -176,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn process_contract_and_uncertain_failures_have_fixed_categories() {
+    fn process_contract_crash_storage_and_relay_uncertain_failures_have_fixed_categories() {
         let process = CliError::Process {
             command: "order.new".into(),
             cause: ProcessFailure::Timeout(Duration::from_secs(1)),
@@ -195,6 +199,15 @@ mod tests {
         assert_eq!(uncertain.category(), FailureCategory::Relay);
         assert_eq!(uncertain.code(), Some("reply_timeout"));
         assert_eq!(process.code(), None);
+        let crashed = CliError::Crashed {
+            command: "order.new".into(),
+            exit: 101,
+        };
+        assert_eq!(crashed.category(), FailureCategory::Product);
+        assert_eq!(
+            CliError::Storage("x".into()).category(),
+            FailureCategory::TestInfrastructure
+        );
     }
 
     #[test]
@@ -212,6 +225,12 @@ mod tests {
         assert_eq!(
             category_of_code("order_not_saved"),
             FailureCategory::EnvironmentMisconfiguration
+        );
+        // Every other uncertainty stays the relay's, even a code that is a
+        // product failure when the CLI is sure of it.
+        assert_eq!(
+            uncertain("reply_malformed").category(),
+            FailureCategory::Relay
         );
         assert_eq!(uncertain("unknown_code").category(), FailureCategory::Relay);
     }

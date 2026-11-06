@@ -265,7 +265,11 @@ async fn write_secret(
     stdin: &mut tokio::process::ChildStdin,
     secret: &Secret,
 ) -> Result<(), ProcessFailure> {
-    let mut line = Zeroizing::new(secret.expose().as_bytes().to_vec());
+    // Sized for the newline up front: growing the buffer would free a copy
+    // of the secret without wiping it.
+    let bytes = secret.expose().as_bytes();
+    let mut line = Zeroizing::new(Vec::with_capacity(bytes.len() + 1));
+    line.extend_from_slice(bytes);
     line.push(b'\n');
     match stdin.write_all(&line).await {
         Ok(()) => stdin
