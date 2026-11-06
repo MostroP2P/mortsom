@@ -9,7 +9,8 @@ use serde_json::Value;
 
 use crate::envelope::{Envelope, ErrorInfo};
 
-/// Keys whose string values are payment secrets and are replaced.
+/// Keys whose whole value is a payment secret: every string and object in
+/// it, at any depth, is replaced.
 const SECRET_KEYS: [&str; 4] = ["invoice", "payment_request", "bolt11", "lnurl"];
 /// What a replaced value reads.
 pub const REDACTED: &str = "[redacted]";
@@ -136,18 +137,20 @@ fn sanitize_arg(arg: &str, secret_next: bool) -> String {
     }
 }
 
-/// Replaces every string at any depth under a secret key (any key naming
-/// an invoice included) and every string that is a Lightning invoice, at
-/// any depth. Nulls, numbers and booleans stay, so the shape stays readable.
+/// Replaces everything under a secret key (any key naming an invoice
+/// included, see [`redact_strings`]) and every string or object key that
+/// is a Lightning invoice, at any depth. Elsewhere nulls, numbers and
+/// booleans stay, so the shape stays readable.
 pub fn redact_value(value: &mut Value) {
     match value {
         Value::Object(map) => {
-            for (key, inner) in map.iter_mut() {
-                if is_secret_key(key) {
-                    redact_strings(inner);
+            for (index, (key, mut inner)) in std::mem::take(map).into_iter().enumerate() {
+                if is_secret_key(&key) {
+                    redact_strings(&mut inner);
                 } else {
-                    redact_value(inner);
+                    redact_value(&mut inner);
                 }
+                map.insert(redact_key(key, index), inner);
             }
         }
         Value::Array(items) => items.iter_mut().for_each(redact_value),
@@ -158,13 +161,24 @@ pub fn redact_value(value: &mut Value) {
     }
 }
 
-/// Replaces every string at any depth: the whole value of a secret key.
+/// The whole value of a secret key: every string at any depth is replaced,
+/// and so is every object, whose keys may be secrets too. Nulls, numbers
+/// and booleans stay.
 fn redact_strings(value: &mut Value) {
     match value {
-        Value::String(text) => *text = REDACTED.into(),
+        Value::String(_) | Value::Object(_) => *value = Value::String(REDACTED.into()),
         Value::Array(items) => items.iter_mut().for_each(redact_strings),
-        Value::Object(map) => map.values_mut().for_each(redact_strings),
         _ => {}
+    }
+}
+
+/// An object key, replaced when it holds a Lightning invoice; `index`, its
+/// position in the object, keeps replaced keys distinct.
+fn redact_key(key: String, index: usize) -> String {
+    if lightning().is_some_and(|re| re.is_match(&key)) {
+        format!("{REDACTED}{index}")
+    } else {
+        key
     }
 }
 
@@ -335,7 +349,7 @@ mod tests {
     fn strings_nested_under_a_secret_key_are_redacted() {
         let mut value = serde_json::json!({
             "payment_request": [null, "user@example.com", 150],
-            "buyer_invoice": {"address": "someone@example.com", "paid": false},
+            "buyer_invoice": [["someone@example.com", false]],
             "order_id": "o1",
         });
 
@@ -345,9 +359,42 @@ mod tests {
             value["payment_request"],
             serde_json::json!([null, REDACTED, 150])
         );
-        assert_eq!(value["buyer_invoice"]["address"], REDACTED);
-        assert_eq!(value["buyer_invoice"]["paid"], false);
+        assert_eq!(
+            value["buyer_invoice"],
+            serde_json::json!([[REDACTED, false]])
+        );
         assert_eq!(value["order_id"], "o1");
+    }
+
+    #[test]
+    fn an_invoice_used_as_an_object_key_is_redacted() {
+        let first = format!("lnbcrt10n1p{}", "q".repeat(40));
+        let second = format!("lnbcrt10n1p{}", "p".repeat(40));
+        let mut value: Value = serde_json::from_str(&format!(
+            r#"{{"orders":{{"{first}":"paid","{second}":"open","o1":"active"}},
+            "invoice":{{"{first}":1}}}}"#
+        ))
+        .unwrap();
+
+        redact_value(&mut value);
+
+        let text = value.to_string();
+        assert!(!text.contains("lnbcrt10n1p"), "{text}");
+        assert_eq!(value["orders"].as_object().map(|m| m.len()), Some(3));
+        assert_eq!(value["orders"]["o1"], "active");
+    }
+
+    #[test]
+    fn an_object_under_a_secret_key_is_redacted_whole() {
+        let mut value = serde_json::json!({
+            "payment_request": {"user@example.com": null},
+            "buyer_invoice": [null, {"address": "someone@example.com", "paid": false}],
+        });
+
+        redact_value(&mut value);
+
+        assert_eq!(value["payment_request"], REDACTED);
+        assert_eq!(value["buyer_invoice"], serde_json::json!([null, REDACTED]));
     }
 
     #[test]
