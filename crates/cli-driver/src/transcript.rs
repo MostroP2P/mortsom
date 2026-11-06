@@ -112,19 +112,28 @@ fn scrub_error(error: &ErrorInfo) -> ErrorInfo {
     }
 }
 
-/// Replaces the value following `--invoice` unless it is `-` (stdin).
+/// Replaces the value of `--invoice`, given as `--invoice <value>` or
+/// `--invoice=<value>`, unless it is `-` (stdin), and every Lightning
+/// invoice in any argument.
 pub fn sanitize_argv(argv: &[String]) -> Vec<String> {
     let mut out = Vec::with_capacity(argv.len());
     let mut secret_next = false;
     for arg in argv {
-        if secret_next && arg != "-" {
-            out.push(REDACTED.to_owned());
-        } else {
-            out.push(arg.clone());
-        }
+        out.push(sanitize_arg(arg, secret_next));
         secret_next = arg == "--invoice";
     }
     out
+}
+
+/// One argument, sanitized; `secret_next` says it follows `--invoice`.
+fn sanitize_arg(arg: &str, secret_next: bool) -> String {
+    if secret_next && arg != "-" {
+        return REDACTED.to_owned();
+    }
+    match arg.strip_prefix("--invoice=") {
+        Some(value) if value != "-" => format!("--invoice={REDACTED}"),
+        _ => scrub(arg, &[]),
+    }
 }
 
 /// Replaces every string under a secret key (any key naming an invoice
@@ -363,6 +372,32 @@ mod tests {
             sanitize_argv(&argv),
             ["--invoice", REDACTED, "--invoice", "-"]
         );
+    }
+
+    #[test]
+    fn an_equals_form_invoice_is_masked_but_its_stdin_value_is_named() {
+        let argv: Vec<String> = ["--invoice=someone@example.com", "--invoice=-"]
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect();
+
+        assert_eq!(
+            sanitize_argv(&argv),
+            [format!("--invoice={REDACTED}"), "--invoice=-".to_owned()]
+        );
+    }
+
+    #[test]
+    fn an_invoice_under_any_flag_is_masked() {
+        let invoice = format!("lnbcrt1{}", "q".repeat(24));
+        let argv = vec![
+            "--note".to_owned(),
+            invoice,
+            "--order".to_owned(),
+            "o1".to_owned(),
+        ];
+
+        assert_eq!(sanitize_argv(&argv), ["--note", REDACTED, "--order", "o1"]);
     }
 
     #[test]
