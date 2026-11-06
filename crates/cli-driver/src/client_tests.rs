@@ -2,8 +2,9 @@
 
 use super::*;
 use crate::process::{ProcessFailed, ProcessFailure, ProcessOutput};
-use crate::testing::{ScriptedCli, SlowCli, document};
+use crate::testing::{ScriptedCli, SlowCli, command_of, document};
 use mortsom_common::Secret;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn config() -> CliConfig {
     CliConfig {
@@ -177,6 +178,68 @@ fn protected_recovery_storage_is_never_cleared() {
     assert!(matches!(error, CliError::Storage(_)), "{error}");
 }
 
+/// Retained storage of `platform` at `<tempdir>/bob`, with the marker of a
+/// runtime that never recorded its stop.
+fn interrupted(platform: Platform) -> (tempfile::TempDir, PathBuf) {
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().canonicalize().unwrap().join("bob");
+    ActorStorage::Fresh(root.clone()).prepare(platform).unwrap();
+    let _left_behind = ActiveRuntime::begin(&root).unwrap();
+    (parent, root)
+}
+
+#[tokio::test]
+async fn recovery_reopens_interrupted_storage_once_no_process_uses_it() {
+    let (_parent, root) = interrupted(Platform::Cli);
+    std::fs::write(root.join("mcli").join("mcli.db"), b"identity").unwrap();
+    let cli = Arc::new(ScriptedCli::default());
+    cli.ok("identity.show", serde_json::json!({"identity_pubkey": "a"}));
+    let client =
+        CliClient::new(config(), cli.clone()).with_storage(ActorStorage::Resume(root.clone()));
+
+    client.ensure_open().unwrap();
+    client
+        .invoke(Call::local(&["identity", "show"]))
+        .await
+        .unwrap();
+
+    assert_eq!(client.root(), Some(root.clone()));
+    assert!(root.join("mcli").join("mcli.db").exists());
+    mortsom_desktop_driver::storage::ensure_stopped(&root).unwrap();
+}
+
+#[test]
+fn recovery_refuses_another_platform_s_storage_and_keeps_its_marker() {
+    let (_parent, root) = interrupted(Platform::Linux);
+    let cli = Arc::new(ScriptedCli::default());
+    let client = CliClient::new(config(), cli).with_storage(ActorStorage::Resume(root.clone()));
+
+    let error = client.ensure_open().unwrap_err();
+
+    assert!(matches!(error, CliError::Storage(_)), "{error}");
+    assert!(client.root().is_none());
+    assert!(mortsom_desktop_driver::storage::ensure_stopped(&root).is_err());
+}
+
+#[test]
+fn recovery_refuses_storage_a_live_process_still_uses() {
+    let (_parent, root) = interrupted(Platform::Cli);
+    let mut live = std::process::Command::new("/bin/sh")
+        .args(["-c", "sleep 5"])
+        .env("MCLI_DIR", root.join("mcli"))
+        .spawn()
+        .unwrap();
+    let cli = Arc::new(ScriptedCli::default());
+    let client = CliClient::new(config(), cli).with_storage(ActorStorage::Resume(root.clone()));
+
+    let opened = client.ensure_open();
+    live.kill().unwrap();
+    live.wait().unwrap();
+
+    assert!(matches!(opened, Err(CliError::Storage(_))), "{opened:?}");
+    assert!(mortsom_desktop_driver::storage::ensure_stopped(&root).is_err());
+}
+
 #[tokio::test]
 async fn a_temporary_root_is_released_when_the_session_ends() {
     let (_, client) = launched();
@@ -196,11 +259,38 @@ fn retained(process: Arc<dyn CliProcess>) -> (tempfile::TempDir, PathBuf, Arc<Cl
     (parent, root, Arc::new(client))
 }
 
+/// A CLI that takes `delay` to answer with an empty `ok` and records the
+/// most invocations it ever ran at once.
+#[derive(Debug, Default)]
+struct CountingCli {
+    delay: Duration,
+    running: AtomicUsize,
+    most: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl CliProcess for CountingCli {
+    async fn run(
+        &self,
+        request: &ProcessRequest,
+        _timeout: Duration,
+    ) -> Result<ProcessOutput, ProcessFailed> {
+        let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+        self.most.fetch_max(now, Ordering::SeqCst);
+        tokio::time::sleep(self.delay).await;
+        self.running.fetch_sub(1, Ordering::SeqCst);
+        let command = command_of(&request.args);
+        Ok(document(&command, "ok", &serde_json::json!({}), None, 0))
+    }
+}
+
 #[tokio::test]
 async fn a_caller_that_gives_up_leaves_no_marker_and_no_overlap() {
-    let (_parent, root, client) = retained(Arc::new(SlowCli {
+    let cli = Arc::new(CountingCli {
         delay: Duration::from_millis(300),
-    }));
+        ..CountingCli::default()
+    });
+    let (_parent, root, client) = retained(cli.clone());
 
     let gave_up = tokio::time::timeout(
         Duration::from_millis(50),
@@ -208,11 +298,16 @@ async fn a_caller_that_gives_up_leaves_no_marker_and_no_overlap() {
     )
     .await;
     let busy = client.start_fresh();
-    let next = client.invoke(Call::local(&["identity", "show"])).await;
+    let (next, other) = tokio::join!(
+        client.invoke(Call::local(&["identity", "show"])),
+        client.invoke(Call::local(&["identity", "show"])),
+    );
 
     assert!(gave_up.is_err(), "the caller should have timed out");
     assert!(matches!(busy, Err(CliError::Storage(_))), "{busy:?}");
     assert!(next.is_ok(), "{next:?}");
+    assert!(other.is_ok(), "{other:?}");
+    assert_eq!(cli.most.load(Ordering::SeqCst), 1, "invocations overlapped");
     mortsom_desktop_driver::storage::ensure_stopped(&root).unwrap();
 }
 

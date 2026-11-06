@@ -132,3 +132,32 @@ fn resume_rejects_replaced_or_public_marker_and_symlinked_data() {
     symlink(path.join("config/marker"), &marker).unwrap();
     assert!(ActorStorage::Resume(path).prepare(Platform::Linux).is_err());
 }
+
+#[test]
+fn a_verified_stop_clears_only_the_marker_of_its_own_platform() {
+    let parent = tempfile::tempdir().unwrap();
+    let path = parent.path().join("alice");
+    ActorStorage::Fresh(path.clone())
+        .prepare(Platform::Linux)
+        .unwrap();
+    let _left_behind = ActiveRuntime::begin(&path).unwrap();
+
+    assert!(clear_verified_stop(&path, Platform::Cli).is_err());
+    assert!(ensure_stopped(&path).is_err(), "another runtime's marker");
+    clear_verified_stop(&path, Platform::Linux).unwrap();
+    ensure_stopped(&path).unwrap();
+    clear_verified_stop(&path, Platform::Linux).unwrap();
+}
+
+#[test]
+fn a_verified_stop_needs_initialized_storage_at_an_absolute_path() {
+    let parent = tempfile::tempdir().unwrap();
+    let unclaimed = parent.path().join("bob");
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&unclaimed)
+        .unwrap();
+
+    assert!(clear_verified_stop(Path::new("relative/alice"), Platform::Cli).is_err());
+    assert!(clear_verified_stop(&unclaimed, Platform::Cli).is_err());
+}

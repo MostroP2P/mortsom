@@ -24,10 +24,13 @@ pub fn ensure_stopped(root: &Path) -> io::Result<()> {
 
 /// Clears the marker of a runtime whose owner verified, by its own means,
 /// that no process of it is alive (the CLI runtime checks that no process
-/// uses the actor's store). Never a way past a runtime that may still run.
-pub fn clear_verified_stop(root: &Path) -> io::Result<()> {
+/// uses the actor's store). Never a way past a runtime that may still run:
+/// storage laid out for another platform keeps its marker, because the
+/// owner's check proves nothing about that platform's processes.
+pub fn clear_verified_stop(root: &Path, platform: Platform) -> io::Result<()> {
     validate_path(root)?;
     validate_directory(root)?;
+    validate_marker(root, &marker(platform))?;
     match fs::remove_file(root.join(ACTIVE)) {
         Ok(()) => {}
         Err(cause) if cause.kind() == io::ErrorKind::NotFound => {}
@@ -99,7 +102,7 @@ impl ActorStorage {
             Platform::Web => &["profile"][..],
             Platform::Cli => &["mcli", "home"][..],
         };
-        let marker = format!("mortsom-actor-storage-v1\n{platform}\n");
+        let marker = marker(platform);
         validate_path(path)?;
         if self.is_resume() {
             ensure_stopped(path)?;
@@ -112,6 +115,10 @@ impl ActorStorage {
         }
         Ok(path.clone())
     }
+}
+
+fn marker(platform: Platform) -> String {
+    format!("mortsom-actor-storage-v1\n{platform}\n")
 }
 
 fn invalid(message: &str) -> io::Error {

@@ -6,13 +6,15 @@
 
 use std::path::Path;
 
+use mortsom_desktop_driver::Platform;
 use mortsom_desktop_driver::storage::{clear_verified_stop, ensure_stopped};
 
 use crate::error::CliError;
 
 /// Clears a marker left by an interrupted invocation once no process uses
-/// the actor's store; refuses while one still does. Recovery calls it too,
-/// before it proves a retained CLI actor inactive.
+/// the actor's store; refuses while one still does, and refuses storage
+/// that is not a CLI actor's. Recovery calls it too, before it proves a
+/// retained CLI actor inactive.
 pub fn reconcile(root: &Path) -> Result<(), CliError> {
     if ensure_stopped(root).is_ok() {
         return Ok(());
@@ -24,7 +26,7 @@ pub fn reconcile(root: &Path) -> Result<(), CliError> {
         ));
     }
     tracing::info!(root = %root.display(), "no CLI process uses the actor's store; clearing its runtime marker");
-    clear_verified_stop(root).map_err(|e| CliError::Storage(e.to_string()))
+    clear_verified_stop(root, Platform::Cli).map_err(|e| CliError::Storage(e.to_string()))
 }
 
 /// Whether any process this user can see runs with `MCLI_DIR=<mcli>`.
@@ -52,7 +54,6 @@ pub(crate) fn store_in_use(mcli: &Path) -> bool {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use mortsom_desktop_driver::Platform;
     use mortsom_desktop_driver::storage::{ActiveRuntime, ActorStorage};
 
     fn storage() -> (tempfile::TempDir, std::path::PathBuf) {
@@ -93,6 +94,21 @@ mod tests {
 
         assert!(matches!(refused, Err(CliError::Storage(_))), "{refused:?}");
         assert!(in_use);
+        assert!(ensure_stopped(&root).is_err());
+    }
+
+    #[test]
+    fn a_marker_on_another_platform_s_storage_is_never_cleared() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().canonicalize().unwrap().join("bob");
+        ActorStorage::Fresh(root.clone())
+            .prepare(Platform::Linux)
+            .unwrap();
+        let _live_app = ActiveRuntime::begin(&root).unwrap();
+
+        let refused = reconcile(&root);
+
+        assert!(matches!(refused, Err(CliError::Storage(_))), "{refused:?}");
         assert!(ensure_stopped(&root).is_err());
     }
 
