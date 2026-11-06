@@ -246,9 +246,14 @@ async fn a_temporary_root_is_released_when_the_session_ends() {
     let root = client.root().unwrap();
 
     client.close().await.unwrap();
+    let closed = client
+        .invoke(Call::local(&["identity", "show"]))
+        .await
+        .unwrap_err();
 
     assert!(client.root().is_none());
     assert!(!root.exists());
+    assert!(closed.to_string().contains("already closed"), "{closed}");
 }
 
 fn retained(process: Arc<dyn CliProcess>) -> (tempfile::TempDir, PathBuf, Arc<CliClient>) {

@@ -7,6 +7,10 @@ use std::path::{Path, PathBuf};
 
 const MARKER: &str = ".mortsom-storage";
 const ACTIVE: &str = ".mortsom-active-runtime";
+/// A CLI actor's `MCLI_DIR`, under its storage root.
+pub const CLI_STORE: &str = "mcli";
+/// A CLI actor's `HOME` (and working directory), under its storage root.
+pub const CLI_HOME: &str = "home";
 
 /// Refuses storage whose previous runtime did not record a verified shutdown.
 /// Absence proves only the driver's recorded lifecycle, never an app identity.
@@ -97,11 +101,7 @@ impl ActorStorage {
         let path = match self {
             Self::Fresh(path) | Self::Resume(path) => path,
         };
-        let layout = match platform {
-            Platform::Linux => &["data", "config"][..],
-            Platform::Web => &["profile"][..],
-            Platform::Cli => &["mcli", "home"][..],
-        };
+        let layout = layout(platform);
         let marker = marker(platform);
         validate_path(path)?;
         if self.is_resume() {
@@ -114,6 +114,15 @@ impl ActorStorage {
             initialize(path, layout, &marker)?;
         }
         Ok(path.clone())
+    }
+}
+
+/// The private subdirectories of an actor's storage on `platform`.
+pub fn layout(platform: Platform) -> &'static [&'static str] {
+    match platform {
+        Platform::Linux => &["data", "config"],
+        Platform::Web => &["profile"],
+        Platform::Cli => &[CLI_STORE, CLI_HOME],
     }
 }
 

@@ -27,7 +27,6 @@ zeroize = { workspace = true }
 testing = []
 
 [dev-dependencies]
-tempfile = { workspace = true }
 # Paused time, for deadlines a test must not wait out.
 tokio = { workspace = true, features = ["test-util"] }
 

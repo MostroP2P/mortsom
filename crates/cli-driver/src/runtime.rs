@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use mortsom_desktop_driver::Platform;
-use mortsom_desktop_driver::storage::{clear_verified_stop, ensure_stopped};
+use mortsom_desktop_driver::storage::{CLI_STORE, clear_verified_stop, ensure_stopped};
 
 use crate::error::CliError;
 
@@ -19,7 +19,7 @@ pub fn reconcile(root: &Path) -> Result<(), CliError> {
     if ensure_stopped(root).is_ok() {
         return Ok(());
     }
-    let mcli = root.join("mcli");
+    let mcli = root.join(CLI_STORE);
     if store_in_use(&mcli) {
         return Err(CliError::Storage(
             "a mostro-cli process still uses this actor's store; it must exit first".into(),

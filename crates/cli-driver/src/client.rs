@@ -7,15 +7,13 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use mortsom_desktop_driver::Platform;
-use mortsom_desktop_driver::storage::{ActiveRuntime, ActorStorage};
+use mortsom_desktop_driver::storage::{self, ActiveRuntime, ActorStorage};
 
 use crate::call::{Call, NodeTarget};
 use crate::envelope::Envelope;
 use crate::error::CliError;
 use crate::evidence::Evidence;
 use crate::process::{CliProcess, ProcessRequest};
-/// The private subdirectories of an actor's CLI storage.
-const LAYOUT: [&str; 2] = ["mcli", "home"];
 /// Beyond an invocation's own deadline, how long ending it may take: the
 /// child is killed and reaped, its standard error read and its stop
 /// recorded.
@@ -30,7 +28,9 @@ pub struct CliConfig {
     pub node: NodeTarget,
     /// Deadline of one invocation; longer than the CLI's own deadlines.
     pub timeout: Duration,
-    /// `PATH` handed to the child, if any.
+    /// `PATH` handed to the child, if any. Only for a stand-in executable
+    /// that needs one (a test script): the contract gives mostro-cli only
+    /// `MCLI_DIR` and `HOME`, so a real run leaves it `None`.
     pub path_env: Option<String>,
 }
 
@@ -169,15 +169,15 @@ impl CliClient {
     /// never overlap: the CLI locks its store for a write.
     pub async fn invoke(&self, call: Call) -> Result<Envelope, CliError> {
         let serial = Arc::clone(&self.serial).lock_owned().await;
-        let root = self
-            .root()
-            .ok_or_else(|| CliError::Storage("the CLI was never launched".into()))?;
+        let root = self.root().ok_or_else(|| {
+            CliError::Storage("the CLI is not open: never launched, or already closed".into())
+        })?;
         let argv = call.argv(&self.config.node);
         let request = ProcessRequest {
             program: self.config.binary.clone(),
             args: argv.clone(),
             env: self.env(&root),
-            current_dir: root.join("home"),
+            current_dir: root.join(storage::CLI_HOME),
             stdin: call.stdin().cloned(),
         };
         let process = Arc::clone(&self.process);
@@ -219,8 +219,9 @@ impl CliClient {
 
     fn env(&self, root: &Path) -> BTreeMap<String, String> {
         let mut env = BTreeMap::new();
-        env.insert("MCLI_DIR".into(), root.join("mcli").display().to_string());
-        env.insert("HOME".into(), root.join("home").display().to_string());
+        let dir = |child| root.join(child).display().to_string();
+        env.insert("MCLI_DIR".into(), dir(storage::CLI_STORE));
+        env.insert("HOME".into(), dir(storage::CLI_HOME));
         if let Some(path) = &self.config.path_env {
             env.insert("PATH".into(), path.clone());
         }
@@ -248,10 +249,10 @@ impl CliClient {
 /// whose previous runtime never recorded its stop is left alone.
 fn wipe(root: &Root) -> Result<(), CliError> {
     if let Root::Retained(path) = root {
-        mortsom_desktop_driver::storage::ensure_stopped(path).map_err(storage_error)?;
+        storage::ensure_stopped(path).map_err(storage_error)?;
     }
     let root = root.path();
-    for child in LAYOUT {
+    for child in storage::layout(Platform::Cli) {
         let path = root.join(child);
         match std::fs::remove_dir_all(&path) {
             Ok(()) => {}
@@ -268,7 +269,7 @@ fn temporary() -> Result<Root, CliError> {
         .prefix("mortsom-cli-")
         .tempdir()
         .map_err(storage_error)?;
-    for child in LAYOUT {
+    for child in storage::layout(Platform::Cli) {
         private_dir(&dir.path().join(child))?;
     }
     Ok(Root::Temporary(dir))
