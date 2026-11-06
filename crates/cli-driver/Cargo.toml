@@ -1,0 +1,25 @@
+[package]
+name = "mortsom-cli-driver"
+description = "Mortsom driver for the mostro-cli command-line client: the process boundary, the JSON envelope, the sanitized transcript and the CLI session."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mortsom-common = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+regex = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
