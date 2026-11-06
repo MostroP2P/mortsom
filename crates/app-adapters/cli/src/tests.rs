@@ -25,6 +25,7 @@ fn adapter() -> CliAdapter {
         order_expiry_secs: Some(90),
         commands: every_command(),
         order_expiry_in_seconds: true,
+        message_window: MessageWindow::Run,
     })
     .with_poll(Duration::from_millis(1))
 }

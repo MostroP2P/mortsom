@@ -2,6 +2,8 @@
 //! `order take-buy`), reading its state (`order info`), listing the actor's
 //! own (`order mine`) and cancelling (`order cancel`).
 
+use std::time::Duration;
+
 use mortsom_app_contract::{
     AdapterError, AppOrderState, CancelOutcome, DeviceContext, FiatAmount, OrderDraft, OrderKind,
     OrderPrice, OrderReference, OrderState, VisibleOrder,
@@ -12,7 +14,7 @@ use serde_json::Value;
 
 use crate::access::{adapter_error, missing, run, try_run};
 use crate::memo::Memo;
-use crate::messages::{ADD_INVOICE, PAY_BOND, PAY_HOLD, inconclusive};
+use crate::messages::{ADD_INVOICE, MessageWindow, PAY_BOND, PAY_HOLD, inconclusive, unix_now};
 
 /// Node reasons for a cancel refused because the order is already closed.
 const CLOSED_REASONS: [&str; 3] = [
@@ -20,6 +22,10 @@ const CLOSED_REASONS: [&str; 3] = [
     "is_not_your_order",
     "not_allowed_by_status",
 ];
+
+/// `order info`'s status while the node holds a settled escrow for the
+/// buyer's payout.
+const SETTLED_ESCROW: &str = "settled-hold-invoice";
 
 /// What a read that cannot say which message is the newest lacks.
 const NEWER_MESSAGE: &str = "a message newer than the last one listed";
@@ -164,10 +170,12 @@ fn terminal(status: &str) -> bool {
 pub(crate) async fn observe(
     device: &DeviceContext<'_>,
     order: &OrderReference,
+    window: MessageWindow,
 ) -> Result<AppOrderState, AdapterError> {
     let Some(reported) = reported_status(device, order).await? else {
-        return unreported(device, order).await;
+        return unreported(device, order, window).await;
     };
+    beyond_window(window.is_capped(), &order.id, &reported)?;
     // The node parks a take on its bond for that taker alone, and reports
     // the order only to the maker meanwhile: for the maker it is still
     // pending, as the book and app v2 show it.
@@ -178,8 +186,8 @@ pub(crate) async fn observe(
     };
     let state = state_of("order.info", status)?;
     let raw_label = match state {
-        OrderState::Completed => rating_label(device, order, status).await?,
-        OrderState::PayoutPending => payout_label(device, order, status).await?,
+        OrderState::Completed => rating_label(device, order, status, window).await?,
+        OrderState::PayoutPending => payout_label(device, order, status, window).await?,
         _ => status.to_owned(),
     };
     Ok(AppOrderState { state, raw_label })
@@ -190,8 +198,9 @@ pub(crate) async fn observe(
 async fn unreported(
     device: &DeviceContext<'_>,
     order: &OrderReference,
+    window: MessageWindow,
 ) -> Result<AppOrderState, AdapterError> {
-    match parked_on_bond(device, &order.id).await? {
+    match parked_on_bond(device, &order.id, window).await? {
         Some(true) => Ok(AppOrderState {
             state: OrderState::Taken,
             raw_label: "waiting-bond".into(),
@@ -204,17 +213,38 @@ async fn unreported(
     }
 }
 
+/// Refuses an order that still waits on its buyer's payout invoice when the
+/// window is `capped`: the node asks for a replacement once, after its
+/// retries are spent, so the request may be older than any window
+/// `message list` can read and nothing read can say whether it came. The
+/// order is left unresolved, never reported cleaned up. An order still
+/// waiting for its first payout invoice is cancellable, and cleanup
+/// resolves it by its cancel and the relay, not by the request.
+fn beyond_window(capped: bool, order_id: &str, status: &str) -> Result<(), AdapterError> {
+    if !capped || status != SETTLED_ESCROW {
+        return Ok(());
+    }
+    Err(AdapterError::environment(format!(
+        "order {order_id} still waits on its buyer's payout invoice (`order info`: \
+         `{status}`) and the run's start lies beyond the {} minutes `message list` reads \
+         back: the node asks for a replacement once, so its request may be older than that \
+         window; the order is left unresolved",
+        MessageWindow::MAX_MINUTES
+    )))
+}
+
 /// After a failed payout the order stays `settled-hold-invoice` while the
 /// node asks the buyer for a new invoice; app v2 shows that request as
 /// `waiting-invoice`, and so does the CLI's newest message. Either label
-/// says which message is the newest, which only a complete list shows: on
-/// a truncated one the read is inconclusive.
+/// says which message is the newest, which only a complete list read back
+/// to the run's start shows: on any other the read is inconclusive.
 async fn payout_label(
     device: &DeviceContext<'_>,
     order: &OrderReference,
     status: &str,
+    window: MessageWindow,
 ) -> Result<String, AdapterError> {
-    let inbox = crate::messages::list(device, &order.id).await?;
+    let inbox = crate::messages::list(device, &order.id, window).await?;
     inbox.prove_absence(&order.id, NEWER_MESSAGE)?;
     let asked = inbox
         .messages
@@ -234,13 +264,17 @@ async fn payout_label(
 /// while its invitation to rate stands, the status otherwise.
 /// Only `rated` rests on a message present; the others say `rate-received`
 /// is absent, which a truncated list cannot show, so such a read is
-/// inconclusive.
+/// inconclusive. A capped window drops only the oldest messages, and
+/// `rate-received` follows `rate`: a listed invitation still proves it, and
+/// with neither listed the node's own status stands -- a recovery, the only
+/// reader of a capped window, needs the state, not the rating.
 async fn rating_label(
     device: &DeviceContext<'_>,
     order: &OrderReference,
     status: &str,
+    window: MessageWindow,
 ) -> Result<String, AdapterError> {
-    let inbox = crate::messages::list(device, &order.id).await?;
+    let inbox = crate::messages::list(device, &order.id, window).await?;
     let has = |action: &str| {
         inbox
             .messages
@@ -270,6 +304,7 @@ fn state_of(command: &str, status: &str) -> Result<OrderState, AdapterError> {
 pub(crate) async fn owned(
     device: &DeviceContext<'_>,
     sync: bool,
+    window: MessageWindow,
 ) -> Result<Vec<String>, AdapterError> {
     if sync {
         // The node announces a range order's remainder to a fresh trade
@@ -290,7 +325,7 @@ pub(crate) async fn owned(
                 .ok_or_else(|| missing("order.mine", "orders[].id"))
         })
         .collect::<Result<_, _>>()?;
-    still_reported(device, local).await
+    still_reported(device, local, window).await
 }
 
 /// The local rows the node still reports to this user. A store keeps every
@@ -302,6 +337,7 @@ pub(crate) async fn owned(
 async fn still_reported(
     device: &DeviceContext<'_>,
     local: Vec<String>,
+    window: MessageWindow,
 ) -> Result<Vec<String>, AdapterError> {
     if local.is_empty() {
         return Ok(local);
@@ -321,7 +357,9 @@ async fn still_reported(
         .collect();
     let mut owned = Vec::with_capacity(local.len());
     for id in local {
-        if reported.contains(&id.as_str()) || parked_on_bond(device, &id).await? != Some(false) {
+        if reported.contains(&id.as_str())
+            || parked_on_bond(device, &id, window).await? != Some(false)
+        {
             owned.push(id);
         }
     }
@@ -333,11 +371,14 @@ async fn still_reported(
 /// bond request, is the trade -- held while its invoice has not expired,
 /// as app v2 holds the pay-bond screen. Whether the bond request is the
 /// newest message only a complete list shows: `None` on a truncated one.
+/// A capped window drops only messages older than a week, and a bond
+/// request that old carries an expired invoice, so the cap changes nothing.
 async fn parked_on_bond(
     device: &DeviceContext<'_>,
     order_id: &str,
+    window: MessageWindow,
 ) -> Result<Option<bool>, AdapterError> {
-    let inbox = crate::messages::list(device, order_id).await?;
+    let inbox = crate::messages::list(device, order_id, window).await?;
     if inbox.truncated {
         return Ok(None);
     }
@@ -354,9 +395,7 @@ fn bond_live(request: &Value) -> bool {
         .and_then(|text| text.parse::<lightning_invoice::Bolt11Invoice>().ok())
         .is_none_or(|invoice| {
             let expires = invoice.duration_since_epoch() + invoice.expiry_time();
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .is_ok_and(|now| now < expires)
+            Duration::from_secs(unix_now()) < expires
         })
 }
 
@@ -364,12 +403,9 @@ fn bond_live(request: &Value) -> bool {
 pub(crate) async fn cancel_if_open(
     device: &DeviceContext<'_>,
     order: &OrderReference,
+    window: MessageWindow,
 ) -> Result<CancelOutcome, AdapterError> {
-    // Read from the status alone: a closed order needs no message, and a
-    // label resting on one may be inconclusive.
-    if let Ok(Some(status)) = reported_status(device, order).await
-        && terminal(&status)
-    {
+    if reads_closed(device, order, window).await? {
         return Ok(CancelOutcome::AlreadyClosed);
     }
     let call = Call::node(&["order", "cancel"])
@@ -380,23 +416,49 @@ pub(crate) async fn cancel_if_open(
         Err(error) if error.code() == Some("order_unknown") => Ok(CancelOutcome::NotFound),
         Err(error) if is_closed_refusal(&error) => closed_after_refusal(device, order, error).await,
         Err(error) if error.reason() == Some("invalid_pubkey") => {
-            already_requested(device, order, error).await
+            already_requested(device, order, error, window).await
         }
         Err(error) => Err(adapter_error(error)),
     }
 }
 
+/// Whether `order info` already reports `order` closed, read from its
+/// status alone: a closed order needs no message, and a label resting on
+/// one may be inconclusive. Under a capped window an order it cannot judge
+/// is refused before anything acts on it (see [`beyond_window`]), and so
+/// is an `order info` that cannot be read; within the window an unreadable
+/// report leaves the decision to the cancel and the node's answer.
+async fn reads_closed(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+    window: MessageWindow,
+) -> Result<bool, AdapterError> {
+    let capped = window.is_capped();
+    let reported = match reported_status(device, order).await {
+        Ok(reported) => reported,
+        Err(error) if capped => return Err(error),
+        Err(_) => return Ok(false),
+    };
+    let Some(status) = reported else {
+        return Ok(false);
+    };
+    beyond_window(capped, &order.id, &status)?;
+    Ok(terminal(&status))
+}
+
 /// The node refuses a cooperative cancel from the side that already asked
 /// for it (`invalid_pubkey`): this side's request stands and only the
 /// counterpart can complete it, as the app's own cancel shows. Without that
-/// request the refusal stands, which only a complete list shows: on a
-/// truncated one it is a relay failure.
+/// request the refusal stands, which only a complete list read back to the
+/// run's start shows: a truncated one is a relay failure, and a window that
+/// falls short of the start an environment one (the request may be older).
 async fn already_requested(
     device: &DeviceContext<'_>,
     order: &OrderReference,
     error: CliError,
+    window: MessageWindow,
 ) -> Result<CancelOutcome, AdapterError> {
-    let inbox = crate::messages::list(device, &order.id).await?;
+    let inbox = crate::messages::list(device, &order.id, window).await?;
     let requested = inbox.messages.iter().any(|message| {
         message.get("action").and_then(Value::as_str) == Some("cooperative-cancel-initiated-by-you")
     });
@@ -484,5 +546,29 @@ mod tests {
         assert!(has(&argv, "--sats", "0"));
         assert!(has(&argv, "--premium", "0"));
         assert!(!argv.contains(&"--expires-in".to_owned()));
+    }
+
+    #[test]
+    fn only_a_settled_escrow_is_left_unresolved_beyond_the_window() {
+        let refused = beyond_window(true, "o1", "settled-hold-invoice").unwrap_err();
+
+        assert_eq!(
+            refused.category,
+            mortsom_common::FailureCategory::EnvironmentMisconfiguration
+        );
+        for part in ["o1", "10080", "left unresolved"] {
+            assert!(refused.message.contains(part), "{}", refused.message);
+        }
+        for status in [
+            "active",
+            "fiat-sent",
+            "waiting-buyer-invoice",
+            "pending",
+            "success",
+            "canceled",
+        ] {
+            assert!(beyond_window(true, "o1", status).is_ok(), "{status}");
+        }
+        assert!(beyond_window(false, "o1", "settled-hold-invoice").is_ok());
     }
 }

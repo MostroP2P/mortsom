@@ -13,7 +13,7 @@ use mortsom_common::Secret;
 
 use crate::access::{adapter_error, client, try_run};
 use crate::memo::Memo;
-use crate::messages::{ADD_INVOICE, PAY_HOLD, wait_for};
+use crate::messages::{ADD_INVOICE, MessageWindow, PAY_HOLD, unix_now, wait_for};
 
 /// Refuses the app-wallet path: the CLI has no wallet to pay with.
 pub(crate) fn require_external(path: PaymentPath) -> Result<(), AdapterError> {
@@ -31,13 +31,14 @@ pub(crate) async fn hold_invoice(
     memo: &Memo,
     order: &OrderReference,
     path: PaymentPath,
+    window: MessageWindow,
     poll: Duration,
 ) -> Result<PaymentHandoff, AdapterError> {
     require_external(path)?;
     let remembered = memo.get(device.actor, &order.id).hold_invoice;
     let invoice = match remembered {
         Some(invoice) => invoice,
-        None => wait_for(device, &order.id, &[PAY_HOLD], None, poll)
+        None => wait_for(device, &order.id, &[PAY_HOLD], None, window, poll)
             .await?
             .invoice
             .ok_or_else(|| AdapterError::contract("a hold invoice request carries no invoice"))?,
@@ -54,6 +55,7 @@ pub(crate) async fn requested_payout(
     device: &DeviceContext<'_>,
     memo: &Memo,
     order: &OrderReference,
+    window: MessageWindow,
     poll: Duration,
 ) -> Result<u64, AdapterError> {
     let remembered = memo.get(device.actor, &order.id);
@@ -65,6 +67,7 @@ pub(crate) async fn requested_payout(
         &order.id,
         &[ADD_INVOICE],
         remembered.payout_submitted_at,
+        window,
         poll,
     )
     .await?;
@@ -136,10 +139,7 @@ fn verdict_of(error: CliError) -> Result<InvoiceSubmission, AdapterError> {
 
 /// After an accepted invoice the next request, if any, must be newer.
 fn submitted(memo: &Memo, device: &DeviceContext<'_>, order: &OrderReference) {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
-        .unwrap_or(0);
+    let now = i64::try_from(unix_now()).unwrap_or(i64::MAX);
     memo.update(device.actor, &order.id, |r| {
         r.payout_sats = None;
         r.payout_submitted_at = Some(now);

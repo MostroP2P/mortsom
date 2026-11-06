@@ -16,6 +16,8 @@ mod orders;
 mod payments;
 mod trade;
 
+pub use messages::MessageWindow;
+
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -68,6 +70,10 @@ pub struct CliAdapterConfig {
     pub commands: BTreeSet<String>,
     /// Whether `order new` accepts a lifetime in seconds (`--expires-in`).
     pub order_expiry_in_seconds: bool,
+    /// How far back the actor's messages are read (`message list --since`):
+    /// a run's window by default; a recovery's reaches back to the run's
+    /// start ([`MessageWindow::SinceRunStart`]).
+    pub message_window: MessageWindow,
 }
 
 /// The `cli` profile.
@@ -172,7 +178,12 @@ impl AppAdapter for CliAdapter {
     }
 
     async fn owned_orders(&self, device: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
-        orders::owned(device, self.offers("order.sync")).await
+        orders::owned(
+            device,
+            self.offers("order.sync"),
+            self.config.message_window,
+        )
+        .await
     }
 
     async fn create_order(
@@ -206,7 +217,15 @@ impl AppAdapter for CliAdapter {
         order: &OrderReference,
         path: PaymentPath,
     ) -> Result<PaymentHandoff, AdapterError> {
-        payments::hold_invoice(device, &self.memo, order, path, self.poll).await
+        payments::hold_invoice(
+            device,
+            &self.memo,
+            order,
+            path,
+            self.config.message_window,
+            self.poll,
+        )
+        .await
     }
 
     async fn buyer_invoice_amount(
@@ -214,7 +233,14 @@ impl AppAdapter for CliAdapter {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<u64, AdapterError> {
-        payments::requested_payout(device, &self.memo, order, self.poll).await
+        payments::requested_payout(
+            device,
+            &self.memo,
+            order,
+            self.config.message_window,
+            self.poll,
+        )
+        .await
     }
 
     async fn provide_buyer_invoice(
@@ -256,7 +282,7 @@ impl AppAdapter for CliAdapter {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<CancelOutcome, AdapterError> {
-        orders::cancel_if_open(device, order).await
+        orders::cancel_if_open(device, order, self.config.message_window).await
     }
 
     async fn observe_order(
@@ -264,7 +290,7 @@ impl AppAdapter for CliAdapter {
         device: &DeviceContext<'_>,
         order: &OrderReference,
     ) -> Result<AppOrderState, AdapterError> {
-        orders::observe(device, order).await
+        orders::observe(device, order, self.config.message_window).await
     }
 
     async fn visible_actions(

@@ -1,11 +1,39 @@
-//! `message list` with `data.truncated`: a list that may be incomplete
-//! proves no absence. A wait keeps polling, and a verdict or a label that
-//! rests on an absence is an inconclusive relay failure.
+//! How the adapter reads `message list`. With `data.truncated` a list that
+//! may be incomplete proves no absence: a wait keeps polling, and a verdict
+//! or a label that rests on an absence is an inconclusive relay failure.
+//! The `--since` window is a day during a run; a recovery reads back to the
+//! run's start, and beyond the CLI's reach an absence proves nothing either:
+//! an order waiting on its payout invoice is left unresolved.
 use super::*;
+
+/// An adapter recovering a run that started at `started` (unix seconds).
+fn recovering(started: u64) -> CliAdapter {
+    CliAdapter::new(CliAdapterConfig {
+        order_expiry_secs: Some(90),
+        commands: every_command(),
+        order_expiry_in_seconds: true,
+        message_window: MessageWindow::SinceRunStart { started },
+    })
+    .with_poll(Duration::from_millis(1))
+}
 
 /// `order info` reporting `o1` in `status`.
 fn reported(status: &str) -> serde_json::Value {
     json!({"orders": [{"id": "o1", "status": status}]})
+}
+
+/// The `--since` of the `message list` the CLI was asked for.
+fn since_of(cli: &ScriptedCli) -> Vec<String> {
+    let list = cli
+        .seen()
+        .into_iter()
+        .find(|seen| seen.command == "message.list")
+        .unwrap();
+    list.args
+        .windows(2)
+        .filter(|w| w[0] == "--since")
+        .map(|w| w[1].clone())
+        .collect()
 }
 
 /// The node's request for the seller's hold invoice, as `message list`
@@ -251,4 +279,163 @@ async fn a_take_parked_on_its_bond_is_not_read_from_a_truncated_list() {
         .unwrap_err();
 
     assert_eq!(error.category, FailureCategory::Relay);
+}
+
+#[tokio::test]
+async fn a_run_reads_a_days_messages() {
+    let (cli, session) = session();
+    cli.ok("order.info", reported("settled-hold-invoice"));
+    cli.ok("message.list", json!({"messages": [], "truncated": false}));
+
+    adapter()
+        .observe_order(&device(&session, Actor::Bob), &order(OrderKind::Sell))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        CliAdapterConfig::default().message_window,
+        MessageWindow::Run
+    );
+    assert_eq!(since_of(&cli), ["1440"]);
+}
+
+#[tokio::test]
+async fn a_payout_beyond_the_window_is_left_unresolved_and_never_cancelled() {
+    let (cli, session) = session();
+    cli.always("order.info", reported("settled-hold-invoice"));
+    let adapter = recovering(crate::messages::unix_now() - 8 * 24 * 3600);
+
+    let observed = adapter
+        .observe_order(&device(&session, Actor::Bob), &order(OrderKind::Sell))
+        .await
+        .unwrap_err();
+    let cancel = adapter
+        .cancel_if_open(&device(&session, Actor::Alice), &order(OrderKind::Sell))
+        .await
+        .unwrap_err();
+
+    for error in [&observed, &cancel] {
+        assert_eq!(error.category, FailureCategory::EnvironmentMisconfiguration);
+    }
+    assert!(
+        cancel.message.contains("left unresolved"),
+        "{}",
+        cancel.message
+    );
+    let commands = cli.commands();
+    assert!(
+        !commands.iter().any(|c| c == "order.cancel"),
+        "{commands:?}"
+    );
+    assert!(
+        !commands.iter().any(|c| c == "message.list"),
+        "{commands:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_recovery_within_the_window_reads_from_the_runs_start() {
+    let (cli, session) = session();
+    cli.ok("order.info", reported("settled-hold-invoice"));
+    cli.ok(
+        "message.list",
+        json!({"messages": [{"action": "add-invoice", "next_step": "add_invoice"}],
+            "truncated": false}),
+    );
+
+    let state = recovering(crate::messages::unix_now() - 90)
+        .observe_order(&device(&session, Actor::Bob), &order(OrderKind::Sell))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        (state.state, state.raw_label.as_str()),
+        (OrderState::PayoutPending, "waiting-invoice")
+    );
+    assert_eq!(since_of(&cli), ["3"]);
+}
+
+#[tokio::test]
+async fn a_capped_recovery_still_cancels_an_order_that_waits_on_no_invoice() {
+    let (cli, session) = session();
+    cli.ok("order.info", reported("active"));
+    cli.ok("order.cancel", json!({"result": "canceled"}));
+    cli.ok("order.info", json!({"orders": [], "not_returned": ["o1"]}));
+    cli.ok("order.cancel", json!({"result": "canceled"}));
+    let adapter = recovering(0);
+    let device = device(&session, Actor::Alice);
+
+    let active = adapter
+        .cancel_if_open(&device, &order(OrderKind::Sell))
+        .await
+        .unwrap();
+    let unreported = adapter
+        .cancel_if_open(&device, &order(OrderKind::Sell))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        [active, unreported],
+        [CancelOutcome::Cancelled, CancelOutcome::Cancelled]
+    );
+    assert_eq!(
+        cli.commands(),
+        ["order.info", "order.cancel", "order.info", "order.cancel"]
+    );
+}
+
+#[tokio::test]
+async fn an_unreadable_report_stops_a_cancel_only_beyond_the_window() {
+    let (cli, session) = session();
+    cli.fail("order.info", "error", "relay_connection_failed");
+    cli.ok("order.cancel", json!({"result": "canceled"}));
+    cli.fail("order.info", "error", "relay_connection_failed");
+    let device = device(&session, Actor::Alice);
+
+    let within = adapter()
+        .cancel_if_open(&device, &order(OrderKind::Sell))
+        .await
+        .unwrap();
+    let capped = recovering(0)
+        .cancel_if_open(&device, &order(OrderKind::Sell))
+        .await;
+
+    assert_eq!(within, CancelOutcome::Cancelled);
+    assert_eq!(capped.unwrap_err().category, FailureCategory::Relay);
+    assert_eq!(cli.commands(), ["order.info", "order.cancel", "order.info"]);
+}
+
+#[tokio::test]
+async fn a_capped_recovery_reads_a_week_back_and_proves_no_cancel_request_absent() {
+    let (cli, session) = session();
+    for messages in [
+        json!([{"action": "cooperative-cancel-initiated-by-you"}]),
+        json!([{"action": "buyer-took-order"}]),
+    ] {
+        cli.ok("order.info", reported("active"));
+        cli.refuse("order.cancel", "invalid_pubkey");
+        cli.ok(
+            "message.list",
+            json!({"messages": messages, "truncated": false}),
+        );
+    }
+    let adapter = recovering(0);
+    let device = device(&session, Actor::Alice);
+
+    let standing = adapter
+        .cancel_if_open(&device, &order(OrderKind::Sell))
+        .await
+        .unwrap();
+    let absent = adapter
+        .cancel_if_open(&device, &order(OrderKind::Sell))
+        .await
+        .unwrap_err();
+
+    assert_eq!(standing, CancelOutcome::Cancelled);
+    assert_eq!(
+        absent.category,
+        FailureCategory::EnvironmentMisconfiguration
+    );
+    assert!(absent.message.contains("10080"), "{}", absent.message);
+    assert_eq!(since_of(&cli), ["10080"]);
 }
