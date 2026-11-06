@@ -105,6 +105,9 @@ impl std::fmt::Display for ProcessFailed {
 pub trait CliProcess: Send + Sync {
     /// Runs `request` to completion within `timeout`. A non-zero exit is an
     /// output, never a failure: the envelope on stdout says what happened.
+    /// A child that outlives `timeout`, or fails before it exits, is killed,
+    /// and its standard error is then awaited for at most one more second
+    /// (the tail of a hung CLI's standard error is the best evidence of why).
     async fn run(
         &self,
         request: &ProcessRequest,
