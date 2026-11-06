@@ -482,3 +482,133 @@ async fn a_timed_out_invocation_keeps_its_standard_error() {
     assert!(stderr.contains("waiting on relay"), "{stderr}");
     assert!(!stderr.contains("lnbcrt"), "{stderr}");
 }
+
+/// A document for `command` that failed with `status`, whose error carries
+/// `message` and `reason` as the CLI printed them.
+fn told(command: &str, status: &str, message: &str, reason: &str) -> ProcessOutput {
+    let body = serde_json::json!({
+        "schema_version": "1",
+        "command": command,
+        "status": status,
+        "data": null,
+        "error": {"code": "node_refused", "message": message, "reason": reason},
+        "warnings": [],
+        "meta": {},
+    });
+    ProcessOutput {
+        code: Some(1),
+        stdout: body.to_string(),
+        stderr: String::new(),
+    }
+}
+
+/// The error a step fails with reaches the run's report, and the transcript
+/// is the step's evidence: what the CLI said must keep no invoice, neither
+/// the one the step sent nor any other, in either of them.
+#[tokio::test]
+async fn a_failure_the_cli_explains_keeps_no_invoice_in_its_explanation() {
+    let (cli, client) = launched();
+    let invoice = Secret::new("someone@example.com");
+    let other = "lnbcrt10n1pqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+    let said = format!("cannot pay someone@example.com or {other}");
+    cli.raw(
+        "order.add-invoice",
+        Ok(told("order.add-invoice", "error", &said, &said)),
+    );
+    cli.raw(
+        "order.add-invoice",
+        Ok(told("order.add-invoice", "uncertain", &said, &said)),
+    );
+    cli.raw(
+        "order.add-invoice",
+        Ok(document(
+            &format!("order.{other}"),
+            "ok",
+            &serde_json::json!({
+                "note": said,
+                "someone@example.com": {"paid": [said]},
+            }),
+            None,
+            0,
+        )),
+    );
+    let send = || Call::node(&["order", "add-invoice"]).invoice(&invoice);
+
+    let refused = client.invoke(send()).await.unwrap_err();
+    let uncertain = client.invoke(send()).await.unwrap_err();
+    let answered_as = client.invoke(send()).await.unwrap_err();
+
+    let CliError::Refused {
+        message, reason, ..
+    } = &refused
+    else {
+        panic!("{refused:?}");
+    };
+    let told = [message.as_str(), reason.as_deref().unwrap_or_default()];
+    let transcript = client.take_transcript();
+    let diagnostics = client.diagnostics().await;
+    let kept = &diagnostics
+        .iter()
+        .find(|(name, _)| name == "cli-transcript.jsonl")
+        .unwrap()
+        .1;
+    let texts = [
+        refused.to_string(),
+        uncertain.to_string(),
+        answered_as.to_string(),
+        transcript.clone(),
+        kept.clone(),
+    ];
+    assert_eq!(transcript.lines().count(), 3, "{transcript}");
+    assert!(transcript.contains("cannot pay"), "{transcript}");
+    for text in told.into_iter().chain(texts.iter().map(String::as_str)) {
+        assert!(!text.contains("someone@example.com"), "{text}");
+        assert!(!text.contains("lnbcrt"), "{text}");
+    }
+    assert!(
+        matches!(uncertain, CliError::Uncertain { .. }),
+        "{uncertain:?}"
+    );
+    assert!(
+        matches!(answered_as, CliError::Contract { .. }),
+        "{answered_as:?}"
+    );
+}
+
+/// Standard error is free text from the system under test: besides
+/// invoices, it keeps no key-shaped secret (nsec, mnemonic, NWC URI, long
+/// hex token).
+#[tokio::test]
+async fn standard_error_keeps_no_key_shaped_secret() {
+    let (cli, client) = launched();
+    let hex = "ab".repeat(32);
+    let stderr = format!(
+        "loaded nsec1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq\n\
+         wallet nostr+walletconnect://relay?secret=00\n\
+         token {hex}\n\
+         words abandon ability able about above absent absorb abstract absurd abuse access accident\n"
+    );
+    cli.raw(
+        "identity.show",
+        Ok(ProcessOutput {
+            stderr,
+            ..document("identity.show", "ok", &serde_json::json!({}), None, 0)
+        }),
+    );
+
+    client
+        .invoke(Call::local(&["identity", "show"]))
+        .await
+        .unwrap();
+
+    let diagnostics = client.diagnostics().await;
+    let kept = &diagnostics
+        .iter()
+        .find(|(name, _)| name == "cli-stderr.log")
+        .unwrap()
+        .1;
+    for secret in ["nsec1", "walletconnect", hex.as_str(), "abandon ability"] {
+        assert!(!kept.contains(secret), "{secret} in {kept}");
+    }
+    assert!(kept.contains("loaded"), "{kept}");
+}

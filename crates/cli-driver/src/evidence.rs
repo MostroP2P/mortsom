@@ -5,10 +5,11 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use mortsom_common::Secret;
+use mortsom_common::{Redactor, Secret};
+use serde_json::Value;
 
 use crate::call::Call;
-use crate::envelope::{Envelope, Status};
+use crate::envelope::{Envelope, ErrorInfo, Status};
 use crate::error::CliError;
 use crate::process::{ProcessFailed, ProcessOutput};
 use crate::transcript::{Recorded, Transcript, scrub};
@@ -39,7 +40,7 @@ impl Evidence {
             Ok(output) => output,
             Err(ProcessFailed { failure, stderr }) => {
                 // A child that hung or was killed may have said why.
-                self.keep_stderr(&scrub(&stderr, &secrets));
+                self.keep_stderr(&stderr, &secrets);
                 let what = Recorded::Failure(failure.to_string(), None);
                 self.record(&command, argv, elapsed_ms, what);
                 return Err(CliError::Process {
@@ -48,7 +49,7 @@ impl Evidence {
                 });
             }
         };
-        self.keep_stderr(&scrub(&output.stderr, &secrets));
+        self.keep_stderr(&output.stderr, &secrets);
         if let Some(error) = without_document(&command, &output) {
             let what = Recorded::Failure(error.to_string(), output.code);
             self.record(&command, argv, elapsed_ms, what);
@@ -63,25 +64,30 @@ impl Evidence {
                 return Err(CliError::Contract { command, detail });
             }
         };
-        let what = Recorded::Outcome(&envelope, output.code);
+        let recorded = scrubbed(&envelope, &secrets);
+        let what = Recorded::Outcome(&recorded, output.code);
         self.record(&command, argv, elapsed_ms, what);
         if envelope.command != command {
-            let detail = format!("answered as `{}`", envelope.command);
+            let detail = scrub(&format!("answered as `{}`", envelope.command), &secrets);
             return Err(CliError::Contract { command, detail });
         }
-        outcome(command, envelope)
+        outcome(command, envelope, &secrets)
     }
 
     fn record(&self, command: &str, argv: &[String], elapsed_ms: u64, what: Recorded<'_>) {
         lock(&self.transcript).record(command, argv, elapsed_ms, what);
     }
 
-    fn keep_stderr(&self, stderr: &str) {
+    /// Keeps the CLI's standard error, free text from the system under
+    /// test: scrubbed of invoices and of the invocation's secrets, then of
+    /// anything key-shaped (nsec, mnemonic, NWC URI, long hex token).
+    fn keep_stderr(&self, stderr: &str, secrets: &[&Secret]) {
         if stderr.is_empty() {
             return;
         }
+        let stderr = Redactor::new().redact(&scrub(stderr, secrets));
         let mut kept = lock(&self.stderr);
-        kept.push_str(stderr);
+        kept.push_str(&stderr);
         if !stderr.ends_with('\n') {
             kept.push('\n');
         }
@@ -134,11 +140,73 @@ fn without_document(command: &str, output: &ProcessOutput) -> Option<CliError> {
     }
 }
 
-fn outcome(command: String, envelope: Envelope) -> Result<Envelope, CliError> {
+/// The envelope as the transcript keeps it: every string and object key
+/// the CLI printed (its error object, data, warnings and stages) loses the
+/// invocation's secrets and every invoice. The transcript then replaces
+/// whatever sits under a secret key on its own.
+fn scrubbed(envelope: &Envelope, secrets: &[&Secret]) -> Envelope {
+    Envelope {
+        schema_version: envelope.schema_version.clone(),
+        command: envelope.command.clone(),
+        status: envelope.status,
+        data: scrub_value(&envelope.data, secrets),
+        error: envelope.error.as_ref().map(|error| ErrorInfo {
+            code: scrub(&error.code, secrets),
+            message: scrub(&error.message, secrets),
+            reason: error.reason.as_deref().map(|reason| scrub(reason, secrets)),
+        }),
+        warnings: envelope
+            .warnings
+            .iter()
+            .map(|warning| scrub_value(warning, secrets))
+            .collect(),
+        meta: scrub_value(&envelope.meta, secrets),
+    }
+}
+
+/// `value` with every string and object key scrubbed, at any depth.
+fn scrub_value(value: &Value, secrets: &[&Secret]) -> Value {
+    match value {
+        Value::String(text) => Value::String(scrub(text, secrets)),
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| scrub_value(item, secrets))
+                .collect(),
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .enumerate()
+                .map(|(index, (key, inner))| {
+                    (scrub_key(key, index, secrets), scrub_value(inner, secrets))
+                })
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// An object key, scrubbed; a key that changed also carries `index`, its
+/// position in the object, so two scrubbed keys never become one.
+fn scrub_key(key: &str, index: usize, secrets: &[&Secret]) -> String {
+    let scrubbed = scrub(key, secrets);
+    if scrubbed == key {
+        scrubbed
+    } else {
+        format!("{scrubbed}{index}")
+    }
+}
+
+/// The `ok` outcome, or the failure the CLI reported. Its message and
+/// reason reach the run's report, so they are scrubbed like any free text.
+fn outcome(command: String, envelope: Envelope, secrets: &[&Secret]) -> Result<Envelope, CliError> {
     let (code, message, reason) = envelope
         .error
         .as_ref()
-        .map(|e| (e.code.clone(), e.message.clone(), e.reason.clone()))
+        .map(|e| {
+            let reason = e.reason.as_deref().map(|reason| scrub(reason, secrets));
+            (e.code.clone(), scrub(&e.message, secrets), reason)
+        })
         .unwrap_or_default();
     match envelope.status {
         Status::Ok => Ok(envelope),
