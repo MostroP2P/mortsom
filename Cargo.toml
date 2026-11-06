@@ -12,6 +12,7 @@ members = [
     "crates/scenario-kit",
     "crates/solver",
     "crates/app-adapters/mobile-v2",
+    "crates/app-adapters/cli",
     "crates/cli-driver",
     "scenarios",
 ]
@@ -37,6 +38,7 @@ mortsom-observers = { path = "crates/observers" }
 mortsom-scenario-kit = { path = "crates/scenario-kit" }
 mortsom-solver = { path = "crates/solver" }
 mortsom-adapter-mobile-v2 = { path = "crates/app-adapters/mobile-v2" }
+mortsom-adapter-cli = { path = "crates/app-adapters/cli" }
 mortsom-cli-driver = { path = "crates/cli-driver" }
 mortsom-scenarios = { path = "scenarios" }
 

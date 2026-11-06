@@ -1855,6 +1855,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mortsom-adapter-cli"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "lightning-invoice",
+ "mortsom-app-contract",
+ "mortsom-cli-driver",
+ "mortsom-common",
+ "mortsom-ui-driver",
+ "nostr",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "mortsom-adapter-mobile-v2"
 version = "0.1.1"
 dependencies = [
