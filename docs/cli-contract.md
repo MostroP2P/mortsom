@@ -70,10 +70,13 @@ Actions read from `message list`: `bond-slashed` (cause `dispute` when the order
 `admin-canceled`, else `timeout`), `bond-payout-completed`.
 
 The `message list` window is `--since 1440` during a run. Recovery reads from the run's start, recorded
-in the journal, to now, capped at 10080 minutes (the CLI's maximum). The daemon asks for a payout
+in the journal, to now, capped at 10080 minutes (the CLI's maximum). When the run started longer ago
+than that, an action missing from the list may be older than the window and proves nothing: a check
+that needs the absence fails as an environment failure instead of passing. The daemon asks for a payout
 replacement once, after its retries are spent, so a request older than that window cannot be read: an
-order whose `order info` still waits on the actor (a payout or a bond-claim invoice) is left unresolved
-with that reason, never reported as cleaned up.
+order whose `order info` still reads `settled-hold-invoice` (its buyer's payout failed and waits on a
+new invoice) is left unresolved with that reason, never reported as cleaned up. A bond-claim request is
+asked again until an invoice arrives, so a standing one is always inside the window.
 
 With `data.truncated` true the list may be incomplete (the relay returned its per-relay limit, or more
 than the record cap matched), so an absent action is inconclusive: a request, `bond-slashed` or
