@@ -172,10 +172,14 @@ fn is_secret_key(key: &str) -> bool {
     SECRET_KEYS.contains(&key) || key.contains("invoice")
 }
 
-/// Lightning invoices and LNURLs, whatever the network.
+/// Lightning invoices and LNURLs, whatever the network, wherever they start.
+///
+/// There is no word boundary before the prefix: a letter, digit, `_` or the
+/// tail of an escape such as `\n` may sit right before an invoice, and the
+/// only cost of matching there is over-redaction.
 fn lightning() -> Option<&'static regex::Regex> {
     static PATTERN: std::sync::LazyLock<Option<regex::Regex>> = std::sync::LazyLock::new(|| {
-        regex::Regex::new(r"(?i)\b(?:ln(?:bcrt|bc|tbs|tb|sb)[0-9a-z]{20,}|lnurl[0-9a-z]{20,})").ok()
+        regex::Regex::new(r"(?i)(?:ln(?:bcrt|bc|tbs|tb|sb)[0-9a-z]{20,}|lnurl[0-9a-z]{20,})").ok()
     });
     PATTERN.as_ref()
 }
@@ -370,6 +374,31 @@ mod tests {
         let scrubbed = scrub(text, &[&secret]);
 
         assert_eq!(scrubbed, "debug: paying [redacted] to [redacted]");
+    }
+
+    #[test]
+    fn an_invoice_glued_to_a_word_character_is_still_redacted() {
+        let invoice = format!("lnbcrt10n1p{}", "q".repeat(40));
+        let complaint = Envelope::parse(
+            &format!(
+                r#"{{"schema_version":"1","command":"c","status":"ok","warnings":"\n{invoice}"}}"#
+            ),
+            Some(0),
+        )
+        .unwrap_err();
+        let texts = [
+            complaint,
+            format!("x_{invoice}"),
+            format!("%3A{invoice}"),
+            format!("日本{invoice}"),
+        ];
+
+        for text in texts {
+            let scrubbed = scrub(&text, &[]);
+            assert!(!scrubbed.contains("lnbcrt10n1p"), "{scrubbed}");
+        }
+        let argv = vec!["--note".to_owned(), format!("x_{invoice}")];
+        assert_eq!(sanitize_argv(&argv), ["--note", "x_[redacted]"]);
     }
 
     #[test]
