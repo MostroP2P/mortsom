@@ -95,11 +95,17 @@ pub async fn payout_invoice_below_expiry_floor(ctx: &Context) -> Result<(), Scen
         BuyerInvoice::Expiring { secs: floor / 2 },
     )
     .await?;
+    // A client that judges invoices itself names its verdict; one that
+    // does not (the CLI) sends the invoice and the daemon is the judge.
+    let judges = ctx
+        .adapter
+        .capabilities()
+        .supports(Capability::InvoiceCheck);
     if let Refusal::App { check } = &refused.refusal
-        && check != EXPIRES_TOO_SOON
+        && (!judges || check != EXPIRES_TOO_SOON)
     {
         return Err(ScenarioError::product(format!(
-            "the app refused an invoice below the expiry floor as `{check}`, not `{EXPIRES_TOO_SOON}`"
+            "the client refused an invoice below the expiry floor as `{check}`, not `{EXPIRES_TOO_SOON}`"
         )));
     }
     // Still taken, still waiting for Bob's invoice, on both sides.
@@ -108,9 +114,10 @@ pub async fn payout_invoice_below_expiry_floor(ctx: &Context) -> Result<(), Scen
     let accepted =
         actions::submit_accepted_buyer_invoice(ctx, Actor::Bob, &order, BuyerInvoice::Standard)
             .await?;
-    if accepted.check.as_deref() != Some(VALID) {
+    let expected = judges.then_some(VALID);
+    if accepted.check.as_deref() != expected {
         return Err(ScenarioError::product(format!(
-            "the app sent a proper invoice without judging it `{VALID}` (it showed {:?})",
+            "the client sent a proper invoice judging it {:?}, not {expected:?}",
             accepted.check
         )));
     }

@@ -57,6 +57,9 @@ impl AppAdapter for MobileV2Adapter {
             Capability::Rating,
             Capability::Bond,
             Capability::TestEnvironmentMarker,
+            Capability::OfferedActions,
+            Capability::OrderExpiry,
+            Capability::InvoiceCheck,
         ])
     }
 
