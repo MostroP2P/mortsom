@@ -611,6 +611,18 @@ mod tests {
         let linux = build_command(Path::new("/app"), Platform::Linux, "public", 7001, None);
         assert!(!linux.args.iter().any(|arg| arg.contains("web-resources")));
     }
+
+    /// A journal may record the `cli` runtime before this build can run
+    /// it: its artifact is refused with an error, never a session.
+    #[test]
+    fn a_cli_artifact_is_refused_until_the_cli_profile_is_available() {
+        let artifact = artifact_in(Path::new("/bundle"), Platform::Cli);
+
+        let refused = validate_artifact(Platform::Cli, &artifact, &crate::doctor::RealHost);
+
+        assert_eq!(artifact, Path::new("/bundle/mostro-cli"));
+        assert_eq!(refused, Err("the cli profile is not available yet".into()));
+    }
 }
 
 #[cfg(test)]

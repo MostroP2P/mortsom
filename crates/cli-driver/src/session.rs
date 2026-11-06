@@ -199,19 +199,55 @@ mod tests {
         assert!(terminated.is_err(), "{terminated:?}");
     }
 
+    /// A CLI has no screen: every control of one is refused, by name.
     #[tokio::test]
     async fn the_screen_controls_are_unsupported_and_named() {
         let (_, session) = session();
+        let id = "order.status";
+        let wait = Duration::from_secs(1);
 
-        assert!(matches!(
-            session.tap("order.status").await,
-            Err(UiError::Unsupported(_))
-        ));
-        assert!(matches!(
-            session.screenshot_png().await,
-            Err(UiError::Unsupported("screenshots"))
-        ));
-        assert!(session.set_connectivity(false).await.is_err());
+        let refused: [(&str, Result<(), UiError>, &str); 13] = [
+            ("exists", session.exists(id).await.map(drop), ELEMENTS),
+            (
+                "exists_anywhere",
+                session.exists_anywhere(id).await.map(drop),
+                ELEMENTS,
+            ),
+            ("wait_for", session.wait_for(id, wait).await, ELEMENTS),
+            ("wait_gone", session.wait_gone(id, wait).await, ELEMENTS),
+            ("tap", session.tap(id).await, ELEMENTS),
+            ("type_text", session.type_text(id, "1").await, ELEMENTS),
+            ("text_of", session.text_of(id).await.map(drop), ELEMENTS),
+            (
+                "is_enabled",
+                session.is_enabled(id).await.map(drop),
+                ELEMENTS,
+            ),
+            ("label_of", session.label_of(id).await.map(drop), ELEMENTS),
+            (
+                "screenshot_png",
+                session.screenshot_png().await.map(drop),
+                "screenshots",
+            ),
+            ("background", session.background(1).await, "backgrounding"),
+            (
+                "set_connectivity",
+                session.set_connectivity(false).await,
+                "network control",
+            ),
+            (
+                "set_orientation",
+                session.set_orientation(true).await,
+                "rotation",
+            ),
+        ];
+
+        for (control, result, named) in refused {
+            assert!(
+                matches!(result, Err(UiError::Unsupported(what)) if what == named),
+                "{control}: {result:?}"
+            );
+        }
     }
 
     #[tokio::test]

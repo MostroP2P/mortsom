@@ -227,3 +227,39 @@ fn outcome(command: String, envelope: Envelope, secrets: &[&Secret]) -> Result<E
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    fn kept_stderr(evidence: &Evidence) -> String {
+        evidence
+            .diagnostics()
+            .into_iter()
+            .find(|(name, _)| name == "cli-stderr.log")
+            .map(|(_, text)| text)
+            .unwrap()
+    }
+
+    /// The cap keeps the newest standard error, and a cut that falls inside
+    /// a multi-byte character moves past it instead of splitting it.
+    #[test]
+    fn standard_error_keeps_its_newest_part_cut_at_a_character_boundary() {
+        let evidence = Evidence::default();
+        // One byte, then a two-byte character whose second byte is exactly
+        // where the cap cuts.
+        let first = format!("x\u{e9}{}\n", ".".repeat(STDERR_LIMIT - 2));
+        assert_eq!(first.len(), STDERR_LIMIT + 2);
+
+        evidence.keep_stderr(&first, &[]);
+        let cut = kept_stderr(&evidence);
+        evidence.keep_stderr("newest", &[]);
+        let kept = kept_stderr(&evidence);
+
+        assert_eq!(cut, first[3..]);
+        assert!(kept.len() <= STDERR_LIMIT, "{}", kept.len());
+        assert!(kept.ends_with(".\nnewest\n"));
+        assert!(!kept.contains('x') && !kept.contains('\u{e9}'));
+    }
+}
