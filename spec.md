@@ -6,7 +6,7 @@
 
 **Status:** normative for all new work
 
-**Target app:** Mostro app v2 (`MostroP2P/app`)
+**Target clients:** Mostro app v2 (`MostroP2P/app`); mostro-cli (`MostroP2P/mostro-cli`, profile `cli`)
 
 **Default client platform:** Linux
 
@@ -32,6 +32,11 @@ Its first version did this with Android emulators. Two things changed:
 Mortsom therefore targets app v2 in two execution modes, **Linux** and **Web**, both produced from the same
 Flutter source. The Android emulator path has been removed: no emulator, Appium, adb or APK code remains in
 the repository, and `--platform` accepts only `linux` and `web`.
+
+The same scenarios also drive **mostro-cli**, the command-line client, as the application profile `cli`
+(section 6.3). One run then tests the daemon and the CLI together, and pointing it at a mostro-cli pull
+request makes it that repository's end-to-end check. The CLI is driven only through its machine interface
+(`--output json`), always as a subprocess.
 
 ## 2. Goal and acceptance
 
@@ -64,8 +69,8 @@ evidence but are never counted as an accepted cell.
 
 | Actor | Role | Wallet |
 |---|---|---|
-| Alice | App v2 user. Seller in `happy_sell`, taker-seller in `happy_buy` | LND `alice` |
-| Bob | App v2 user. Buyer in `happy_sell`, maker-buyer in `happy_buy` | LND `bob` |
+| Alice | Client user (app v2 or mostro-cli). Seller in `happy_sell`, taker-seller in `happy_buy` | LND `alice` |
+| Bob | Client user (app v2 or mostro-cli). Buyer in `happy_sell`, maker-buyer in `happy_buy` | LND `bob` |
 | Carol | The server side: the LND node behind `mostrod` | LND `carol` |
 
 Alice and Bob each run their own isolated copy of app v2. Their wallets are external LND nodes in the stack,
@@ -112,6 +117,14 @@ mortsom run happy_sell --rebuild
 # Reuse a build instead of compiling from source.
 mortsom run happy_sell --platform linux --app-artifact /path/to/bundle/mostro
 mortsom run happy_sell --platform web   --app-artifact /path/to/build/web
+
+# mostro-cli instead of the app (profile `cli`, section 6.3): main of MostroP2P/mostro-cli by default,
+# a branch or pull request, a local checkout, or a prebuilt executable.
+mortsom doctor --profile cli
+mortsom run --profile cli --tag smoke
+mortsom run --profile cli happy_sell --cli-ref https://github.com/MostroP2P/mostro-cli/pull/123
+mortsom run --profile cli happy_buy --cli-source ../mostro-cli
+mortsom run --profile cli --tag smoke --cli-artifact /path/to/mostro-cli
 
 # Recover a run that left orders, payments or profiles behind.
 mortsom cleanup <run-id>
@@ -249,6 +262,33 @@ allowed. No JavaScript calls into Dart, Rust or application state.
 Flutter may rebuild offscreen semantics after focus or scroll: re-find elements after transitions, scroll
 through user actions, and wait for interactability with bounded predicates instead of fixed sleeps.
 
+### 6.3 CLI (profile `cli`)
+
+`--profile cli` (or `mobile.profile = "cli"`) drives mostro-cli instead of the app; `--platform` picks an
+app platform and is refused with it. Each actor action is one child process of the CLI's machine
+interface (`--output json`, contract version 1): one versioned outcome document per invocation, whose
+status (`ok`, `error`, `uncertain`) and stable error code decide the result; prose is never parsed. The
+contract Mortsom relies on is [docs/cli-contract.md](docs/cli-contract.md). mostro-cli is GPL-3.0-only
+and Mortsom MIT: the CLI is always a subprocess, never a linked library.
+
+Each actor owns a private `MCLI_DIR` and `HOME` (the CLI's identity store), retained under the recovery
+journal like an app profile. The child inherits no other environment, runs in the actor's private home,
+and reaches only the daemon and the run relay the build names (`--mostro-pubkey`, `--relays`,
+`--transport nip44`). Invocations of one actor never overlap. Invoices travel on standard input
+(`--invoice -`), never in process arguments. The lifecycle maps onto the store: first launch is
+`identity init` on an empty store, a relaunch reads `identity show`, and a recovery reopens the retained
+store. Observed state is the daemon's report to the order's party (`order info`, a read-only query);
+requests that arrive while the actor is idle (a hold invoice for a maker, a payout request after the
+seller paid, a bond, a slashed bond's share) are read with `message list`.
+
+The CLI has no wallet, so both actors are always on the external-wallet path: Mortsom pays the hold
+invoice and bonds from the nodes it holds and hands the CLI the invoices it issued there. It offers every
+command at any time and cannot be told to expire an order sooner unless its `order new` takes
+`--expires-in`; what the built CLI offers is read from its offline discovery (`mostro-cli schema`), and a
+capability whose commands it lacks is not claimed, so its scenarios are skipped with the reason. A CLI
+without the commands the profile cannot run without (identity, the order lifecycle, `message list`)
+fails before any actor starts.
+
 ## 7. Client builds and automation contract
 
 Without an explicit local source or prebuilt artifact, Mortsom fetches `main` from
@@ -300,6 +340,19 @@ Mortsom records the source revision, dirty flag, build flags, tool versions and 
 use the same artifact. A prebuilt artifact or kept bundle must pass the same visible environment and identity
 checks as a fresh build.
 
+A `cli` run builds `main` of `https://github.com/MostroP2P/mostro-cli.git` unless told otherwise.
+`--cli-ref` accepts a branch name or a canonical `https://github.com/MostroP2P/mostro-cli/pull/<number>`
+URL, fetched like an app ref into the ignored `.mortsom/mostro-cli/` cache and built detached and clean;
+`--cli-source` builds a local checkout, dirty state included; `--cli-artifact` takes a prebuilt
+executable. The three conflict. The build is `cargo build --release --locked --bin mostro-cli` with a
+shared, ignored target directory under `.mortsom/mostro-cli/`, so a repeated or nearby commit compiles
+incrementally; the provenance records the selector, fetched commit, dirty flag, package version, `rustc`
+and `cargo` versions and the command. The CLI build is a bundle of two files, the executable and
+`mortsom-cli.json` (the daemon key and run relay it is pointed at), captured and fingerprinted like an app
+bundle: recovery reopens the CLI against the same daemon. Its discovery must offer every command the
+profile needs before an actor starts. `doctor --profile cli` checks a prebuilt executable's discovery and,
+for a source selection, Git and Cargo, deferring the discovery to the build.
+
 The app owns the automation contract (`docs/automation-contract.md` in the app repository): stable identifiers
 for onboarding, navigation, settings, form fields, order identity and status, invoices, cancellation, errors,
 and later disputes and ratings. Missing controls are added as ordinary accessible product UI with widget
@@ -344,7 +397,10 @@ accepts either the bond family or the rest, and the operator switches with `stac
 `stack up --replace`, each of which mints a new daemon identity and so a new client build.
 
 A scenario whose profile lacks a required capability is **skipped with a reason, never failed**, and a
-skipped scenario is never counted as accepted.
+skipped scenario is never counted as accepted. Two capabilities exist for what a client may not offer:
+`offered-actions` (the app shows only the trade actions a state allows; the CLI offers every command and
+lets the daemon refuse) and `order-expiry` (a test build asks the daemon for the stack's short order
+lifetime). A scenario that reads either declares it.
 The same holds for a scenario that needs an interruption the run cannot cause: sending the app to the
 background, cutting its network, rotating the device, or restarting or replaying into the run relay. Linux
 and Web clients cause none of them, and a run's relay is the stack's.
@@ -581,7 +637,7 @@ These rules protect real funds, even on regtest, and are never relaxed for conve
 - Network clearance comes from the observed wallet and node networks. `localhost` does not prove regtest.
   Explicit mainnet confirmation remains fail-closed.
 - Secrets use `env:` references, become `Secret` values immediately and never appear in arguments, build
-  defines, logs or artifacts.
+  defines, logs or artifacts. Invoices handed to the CLI travel on its standard input (`--invoice -`).
 
 ## 11. Cleanup and recovery
 
@@ -621,6 +677,11 @@ the required UI actions. Web rebinds the exact original loopback origin; if it c
 explicitly. A missing profile, a changed identity or a changed stack is an unrecoverable-identity error, never
 permission to create a fresh identity. Evidence is written before protected storage is removed; the durable
 closed manifest is authoritative.
+
+The CLI runtime (section 6.3) marks each invocation, not a session: the marker is set before the child
+starts and cleared once it is gone, by a task that outlives a caller that gives up. A marker left by a killed
+coordinator is reconciled by the CLI runtime itself, and only after it verifies that no process on the host
+runs with the actor's `MCLI_DIR`; while one does, the storage stays refused.
 
 A killed run leaves active-runtime markers and later invocations fail closed. Markers are never removed just
 to bypass that refusal.
@@ -690,7 +751,10 @@ digest and version, declared limits and relay endpoints.
 
 Evidence is sanitized: keys, mnemonics, credentials, NWC URIs and invoice contents never appear. Raw app and
 service logs live only in actor-private directories and are removed on teardown. Linux screenshots capture
-the actor's virtual display, never the operator's desktop.
+the actor's virtual display, never the operator's desktop. A CLI actor has no screen: each step keeps the
+transcript of the invocations it made (`cli.jsonl`: the command, its arguments with any invoice masked, the
+exit code, the outcome status and code, and the outcome data with every invoice and payment request
+replaced), and teardown keeps the actor's whole transcript and the CLI's standard error.
 
 `run` prints one report for the whole invocation, after its last run: a row per scenario with its outcome
 (`PASS`, `FAIL`, `SKIP`, `FLAKY` for a pass that needed a retry, `STOP` for one a refused run kept from
@@ -757,4 +821,5 @@ Documented as roadmap, not required by this version:
 | [docs/HANDOFF.md](docs/HANDOFF.md) | Current state, open work and how to resume |
 | [docs/acceptance-ledger.md](docs/acceptance-ledger.md) | Per-platform acceptance ledger |
 | [docs/runbook.md](docs/runbook.md) | Failure categories and operator responses |
+| [docs/cli-contract.md](docs/cli-contract.md) | The mostro-cli machine interface the `cli` profile relies on |
 | [docs/history/](docs/history/) | Archived material: spec v0.3 with its plan and attempt ledger, the app v2 inventory and the crate rationale (both written when the emulator path still existed) |

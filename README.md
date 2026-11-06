@@ -319,6 +319,42 @@ cargo run -p mortsom-coordinator --example prepare_client -- web https://github.
 These commands use the default config and the stack selected by `MORTSOM_STACK_DIR` (or `stack`). They
 remove their temporary captured bundle on completion and create no order/payment.
 
+## Testing mostro-cli (profile `cli`)
+
+The same scenarios drive [mostro-cli](https://github.com/MostroP2P/mostro-cli) instead of the app with
+`--profile cli` (or `mobile.profile = "cli"`). Each actor action is one `mostro-cli --output json`
+subprocess with the actor's private `MCLI_DIR` and `HOME`; Mortsom pays and invoices from the stack's LND
+nodes, since the CLI has no wallet. The contract is [docs/cli-contract.md](docs/cli-contract.md).
+
+```sh
+./target/debug/mortsom doctor --profile cli                       # git and cargo for a source build
+./target/debug/mortsom run --profile cli --tag smoke              # builds main of MostroP2P/mostro-cli
+./target/debug/mortsom run --profile cli happy_sell \
+  --cli-ref https://github.com/MostroP2P/mostro-cli/pull/123      # a branch or a pull request's head
+./target/debug/mortsom run --profile cli --tag smoke --cli-source ../mostro-cli   # local checkout
+./target/debug/mortsom doctor --profile cli --cli-artifact ../mostro-cli/target/release/mostro-cli
+./target/debug/mortsom run --profile cli --tag smoke --cli-artifact ../mostro-cli/target/release/mostro-cli
+```
+
+`--cli-ref`, `--cli-source` and `--cli-artifact` are mutually exclusive; `--platform` is refused with the
+CLI. Source builds run `cargo build --release --locked --bin mostro-cli` with a shared target directory
+under `.mortsom/mostro-cli/`. The run first reads the CLI's offline discovery (`mostro-cli schema`): a CLI
+without the commands the profile needs is refused before an actor starts, and a scenario needing a
+capability the CLI does not offer (rating without `order rate`, `pending_order_expires` without
+`order new --expires-in`, `unauthorized_actions_at_taken`, which reads offered actions a CLI has none of)
+is skipped with the reason. Each step keeps `cli.jsonl`, the sanitized transcript of the invocations it
+made, instead of a screenshot.
+
+The `mostro-cli e2e` workflow runs a scenario tag (smoke by default) by hand for any CLI branch or pull
+request (`cli_ref` takes `https://github.com/MostroP2P/mostro-cli/pull/<number>`) and nightly against
+`main`. It needs no secrets: the stack is regtest, built by the job. Mortsom is private, so mostro-cli,
+a public repository, does not run it from its own pull requests: that would need a token to check
+Mortsom out and would publish Mortsom's logs and evidence.
+
+`mortsom parity <mobile-v2 run> <cli run>` compares the two clients on shared scenarios. Accepted
+differences go in `config/parity-intentional.toml`, scoped to the pair with
+`profiles = ["mobile-v2", "cli"]`.
+
 ## What it tests
 
 Scenarios are grouped in families. Each scenario carries its family name as a tag; `smoke` cuts across
