@@ -68,6 +68,12 @@ async fn pid_in(pid_file: &Path) -> u32 {
 /// that counts as gone. A survivor is killed before this says so, so a
 /// failing test leaks no process.
 async fn is_gone(pid: u32) -> bool {
+    // Without procfs every process would look gone, and the tests would
+    // prove nothing.
+    assert!(
+        Path::new("/proc/self/stat").exists(),
+        "these tests read /proc to see whether a process is gone"
+    );
     let stat = PathBuf::from(format!("/proc/{pid}/stat"));
     let deadline = Instant::now() + PATIENCE;
     loop {
@@ -323,6 +329,10 @@ async fn a_timed_out_child_is_reaped_when_the_timeout_is_reported() {
 
     assert_eq!(failure.failure, ProcessFailure::Timeout(SHELL_DEADLINE));
     let pid = pid_in(&pid_file).await;
+    assert!(
+        Path::new("/proc/self/stat").exists(),
+        "this test reads /proc to see whether the child is gone"
+    );
     let reaped = !Path::new(&format!("/proc/{pid}")).exists();
     if !reaped {
         kill_sleep(pid);
