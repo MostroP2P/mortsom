@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use mortsom_app_contract::{FiatAmount, OrderKind, OrderState};
 use mortsom_cli_driver::testing::ScriptedCli;
-use mortsom_cli_driver::{CliClient, CliConfig, CliSession, NodeTarget};
+use mortsom_cli_driver::{CliClient, CliConfig, CliProcess, CliSession, NodeTarget};
 use mortsom_common::{Actor, FailureCategory, Lane};
 use mortsom_ui_driver::UiSession;
 use serde_json::json;
@@ -31,6 +31,12 @@ fn adapter() -> CliAdapter {
 
 fn session() -> (Arc<ScriptedCli>, CliSession) {
     let cli = Arc::new(ScriptedCli::default());
+    let session = session_over(cli.clone());
+    (cli, session)
+}
+
+/// A fresh session whose CLI runs on `process`.
+fn session_over(process: Arc<dyn CliProcess>) -> CliSession {
     let config = CliConfig {
         binary: "/opt/mostro-cli".into(),
         node: NodeTarget {
@@ -41,9 +47,9 @@ fn session() -> (Arc<ScriptedCli>, CliSession) {
         timeout: Duration::from_secs(5),
         path_env: None,
     };
-    let client = CliClient::new(config, cli.clone());
+    let client = CliClient::new(config, process);
     client.start_fresh().unwrap();
-    (cli, CliSession::new(Arc::new(client)))
+    CliSession::new(Arc::new(client))
 }
 
 fn device(ui: &dyn UiSession, actor: Actor) -> DeviceContext<'_> {
@@ -190,11 +196,11 @@ async fn a_take_sell_reply_answers_the_payout_amount_without_another_read() {
 #[tokio::test]
 async fn a_maker_waits_for_the_payout_request_on_its_messages() {
     let (cli, session) = session();
-    cli.ok("message.list", json!({"messages": []}));
+    cli.ok("message.list", json!({"messages": [], "truncated": false}));
     cli.always(
         "message.list",
         json!({"messages": [{"action": "add-invoice", "next_step": "add_invoice", "created_at_unix": "100",
-            "payload": {"kind": "order", "order": {"sats_amount": "4950"}}}]}),
+            "payload": {"kind": "order", "order": {"sats_amount": "4950"}}}], "truncated": false}),
     );
 
     let sats = adapter()
@@ -204,23 +210,6 @@ async fn a_maker_waits_for_the_payout_request_on_its_messages() {
 
     assert_eq!(sats, 4950);
     assert_eq!(cli.commands(), ["message.list", "message.list"]);
-}
-
-#[tokio::test]
-async fn a_request_that_never_comes_is_a_product_failure() {
-    let (cli, session) = session();
-    cli.always("message.list", json!({"messages": []}));
-
-    let error = adapter()
-        .pay_hold_invoice(
-            &device(&session, Actor::Alice),
-            &order(OrderKind::Sell),
-            PaymentPath::ExternalWallet,
-        )
-        .await
-        .unwrap_err();
-
-    assert_eq!(error.category, FailureCategory::Product);
 }
 
 #[tokio::test]
@@ -286,7 +275,7 @@ async fn the_state_comes_from_the_nodes_report() {
         json!({"orders": [{"id": "o1", "status": "fiat-sent"}], "not_returned": []}),
     );
     cli.ok("order.info", json!({"orders": [], "not_returned": ["o1"]}));
-    cli.ok("message.list", json!({"messages": []}));
+    cli.ok("message.list", json!({"messages": [], "truncated": false}));
     let device = device(&session, Actor::Alice);
 
     let state = adapter()
@@ -307,9 +296,9 @@ async fn the_state_comes_from_the_nodes_report() {
 async fn a_completed_trade_reads_its_rating_as_the_app_labels_it() {
     let (cli, session) = session();
     for messages in [
-        json!({"messages": [{"action": "purchase-completed"}]}),
-        json!({"messages": [{"action": "purchase-completed"}, {"action": "rate"}]}),
-        json!({"messages": [{"action": "rate"}, {"action": "rate-received"}]}),
+        json!({"messages": [{"action": "purchase-completed"}], "truncated": false}),
+        json!({"messages": [{"action": "purchase-completed"}, {"action": "rate"}], "truncated": false}),
+        json!({"messages": [{"action": "rate"}, {"action": "rate-received"}], "truncated": false}),
     ] {
         cli.ok(
             "order.info",
@@ -338,8 +327,8 @@ async fn a_new_payout_request_reads_waiting_invoice_while_the_escrow_is_settled(
     let failed = json!({"action": "payment-failed", "next_step": null});
     let asked = json!({"action": "add-invoice", "next_step": "add_invoice"});
     for messages in [
-        json!({"messages": [failed.clone()]}),
-        json!({"messages": [failed, asked]}),
+        json!({"messages": [failed.clone()], "truncated": false}),
+        json!({"messages": [failed, asked], "truncated": false}),
     ] {
         cli.ok(
             "order.info",
@@ -370,9 +359,15 @@ async fn a_take_parked_on_its_bond_reads_waiting_bond_until_it_is_cancelled() {
         "payload": {"kind": "payment_request", "invoice": "not-a-bolt11", "amount": null, "order": null}});
     let canceled = json!({"action": "canceled", "next_step": null});
     cli.ok("order.info", json!({"orders": [], "not_returned": ["o1"]}));
-    cli.ok("message.list", json!({"messages": [bond.clone()]}));
+    cli.ok(
+        "message.list",
+        json!({"messages": [bond.clone()], "truncated": false}),
+    );
     cli.ok("order.info", json!({"orders": [], "not_returned": ["o1"]}));
-    cli.ok("message.list", json!({"messages": [bond, canceled]}));
+    cli.ok(
+        "message.list",
+        json!({"messages": [bond, canceled], "truncated": false}),
+    );
     let device = device(&session, Actor::Bob);
 
     let parked = adapter()
@@ -462,8 +457,8 @@ async fn a_cancel_refused_as_closed_reads_closed_and_an_unknown_order_is_not_fou
 async fn a_repeated_cooperative_cancel_stands_and_a_strangers_does_not() {
     let (cli, session) = session();
     for messages in [
-        json!({"messages": [{"action": "cooperative-cancel-initiated-by-you"}]}),
-        json!({"messages": [{"action": "buyer-took-order"}]}),
+        json!({"messages": [{"action": "cooperative-cancel-initiated-by-you"}], "truncated": false}),
+        json!({"messages": [{"action": "buyer-took-order"}], "truncated": false}),
     ] {
         cli.ok(
             "order.info",
@@ -499,7 +494,7 @@ async fn own_orders_come_from_the_local_store_after_adopting_announced_ones() {
         json!({"orders": [{"id": "o1", "status": "pending"}, {"id": "o2", "status": "active"}],
             "not_returned": ["undone"]}),
     );
-    cli.ok("message.list", json!({"messages": []}));
+    cli.ok("message.list", json!({"messages": [], "truncated": false}));
     cli.ok("order.mine", json!({"orders": [{"id": "o1"}]}));
     cli.ok(
         "order.info",
@@ -697,3 +692,6 @@ async fn an_invoice_the_cli_or_the_node_refuses_is_an_answer() {
     );
     assert_eq!(accepted, InvoiceSubmission::Accepted { check: None });
 }
+
+#[path = "tests_messages.rs"]
+mod message_list;

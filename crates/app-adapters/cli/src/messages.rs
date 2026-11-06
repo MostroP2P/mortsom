@@ -2,12 +2,14 @@
 //! `message list`: the requests that arrive while the actor is idle (a hold
 //! invoice for the maker, a payout request after the seller paid, a bond, a
 //! slashed bond's share).
+//! A list may come back truncated (`data.truncated`): what it holds is read
+//! as usual, and what is missing from it proves nothing.
 
 use std::time::Duration;
 
 use mortsom_app_contract::{AdapterError, DeviceContext};
-use mortsom_cli_driver::{Call, unsigned_of};
-use mortsom_common::Secret;
+use mortsom_cli_driver::{Call, Envelope, unsigned_of};
+use mortsom_common::{FailureCategory, Secret};
 use serde_json::Value;
 use tokio::time::Instant;
 
@@ -34,20 +36,67 @@ pub(crate) struct Request {
     pub created_at: i64,
 }
 
-/// The messages the node sent this actor about `order_id`, oldest first.
-pub(crate) async fn list(
-    device: &DeviceContext<'_>,
-    order_id: &str,
-) -> Result<Vec<Value>, AdapterError> {
-    let call = Call::node(&["message", "list"])
-        .arg("order", order_id)
-        .arg("since", HISTORY_MINUTES);
-    let outcome = run(device, call).await?;
-    outcome
+/// What `message list` returned for one order.
+#[derive(Debug)]
+pub(crate) struct Inbox {
+    /// The node's messages, oldest first.
+    pub messages: Vec<Value>,
+    /// `data.truncated`: a relay returned its per-relay limit, or more than
+    /// the CLI's record cap matched. The list may then be incomplete, so an
+    /// action absent from it proves nothing.
+    pub truncated: bool,
+}
+
+impl Inbox {
+    /// Backs a verdict that rests on `what` being absent: `Ok` on a complete
+    /// list, a relay failure on one that may be incomplete.
+    pub(crate) fn prove_absence(&self, order_id: &str, what: &str) -> Result<(), AdapterError> {
+        if self.truncated {
+            return Err(inconclusive(order_id, what));
+        }
+        Ok(())
+    }
+}
+
+/// The relay failure of a verdict that a truncated list cannot back.
+pub(crate) fn inconclusive(order_id: &str, what: &str) -> AdapterError {
+    AdapterError::new(
+        FailureCategory::Relay,
+        format!(
+            "`message list` for order {order_id} may be incomplete (`truncated`), \
+             so the absence of {what} proves nothing"
+        ),
+    )
+}
+
+/// The messages and the completeness flag of a `message list` outcome;
+/// the contract promises both.
+fn inbox_of(outcome: &Envelope) -> Result<Inbox, AdapterError> {
+    let messages = outcome
         .field(&["messages"])
         .and_then(Value::as_array)
         .cloned()
-        .ok_or_else(|| missing("message.list", "messages"))
+        .ok_or_else(|| missing("message.list", "messages"))?;
+    let truncated = outcome
+        .field(&["truncated"])
+        .and_then(Value::as_bool)
+        .ok_or_else(|| missing("message.list", "truncated"))?;
+    Ok(Inbox {
+        messages,
+        truncated,
+    })
+}
+
+/// The messages the node sent this actor about `order_id`, oldest first,
+/// and whether the list may be incomplete.
+pub(crate) async fn list(
+    device: &DeviceContext<'_>,
+    order_id: &str,
+) -> Result<Inbox, AdapterError> {
+    let call = Call::node(&["message", "list"])
+        .arg("order", order_id)
+        .arg("since", HISTORY_MINUTES);
+    inbox_of(&run(device, call).await?)
 }
 
 /// The newest request with `next_step` among `steps` sent after `after`.
@@ -101,7 +150,9 @@ fn request_of(message: &Value, steps: &[&str]) -> Option<Request> {
 }
 
 /// Waits, within the device's deadline, for a request among `steps` newer
-/// than `after`.
+/// than `after`. A truncated list is read again like one without the
+/// request; a deadline that passes before any read ends, or after such a
+/// read, proves nothing about the node, so it is a relay failure.
 pub(crate) async fn wait_for(
     device: &DeviceContext<'_>,
     order_id: &str,
@@ -110,24 +161,51 @@ pub(crate) async fn wait_for(
     poll: Duration,
 ) -> Result<Request, AdapterError> {
     let deadline = Instant::now() + device.ui_timeout;
+    // Whether the last read without the request was truncated; `None`
+    // until a read ends.
+    let mut truncated = None;
     let waited = tokio::time::timeout_at(deadline, async {
         loop {
-            if let Some(request) = newest(&list(device, order_id).await?, steps, after) {
+            let inbox = list(device, order_id).await?;
+            if let Some(request) = newest(&inbox.messages, steps, after) {
                 return Ok(request);
             }
+            truncated = Some(inbox.truncated);
             tokio::time::sleep(poll).await;
         }
     })
     .await;
     // A read cut short by the deadline is abandoned whole: the CLI driver
     // reaps its child and clears its runtime marker on its own.
-    waited.unwrap_or_else(|_| {
-        Err(AdapterError::product(format!(
-            "the node did not ask for {} on order {order_id} within {:?}",
-            steps.join(" or "),
-            device.ui_timeout
-        )))
-    })
+    waited.unwrap_or_else(|_| Err(never_asked(order_id, steps, device.ui_timeout, truncated)))
+}
+
+/// The failure of a wait for `steps` that ran out after `waited`: the node
+/// never asked, unless the last read was truncated and the request may be
+/// beyond it.
+/// The failure of a wait for `steps` that ran out after `waited`: the node
+/// never asked only when the last read without the request was complete
+/// (`Some(false)`); with no read ended, or a truncated one, nothing proves it.
+fn never_asked(
+    order_id: &str,
+    steps: &[&str],
+    waited: Duration,
+    truncated: Option<bool>,
+) -> AdapterError {
+    let what = steps.join(" or ");
+    match truncated {
+        None => AdapterError::new(
+            FailureCategory::Relay,
+            format!(
+                "no `message list` read for order {order_id} ended within {waited:?}, \
+                 so nothing shows whether the node asked for {what}"
+            ),
+        ),
+        Some(true) => inconclusive(order_id, &format!("a request for {what} within {waited:?}")),
+        Some(false) => AdapterError::product(format!(
+            "the node did not ask for {what} on order {order_id} within {waited:?}"
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -202,5 +280,67 @@ mod tests {
         assert!(newest(&messages, &[ADD_INVOICE], Some(11)).is_none());
         assert!(newest(&messages, &[ADD_INVOICE], Some(10)).is_some());
         assert!(newest(&messages, &[PAY_BOND], None).is_none());
+    }
+
+    fn outcome(data: Value) -> Envelope {
+        let output = mortsom_cli_driver::testing::document("message.list", "ok", &data, None, 0);
+        Envelope::parse(&output.stdout, output.code).unwrap()
+    }
+
+    #[test]
+    fn a_listing_says_whether_it_may_be_incomplete() {
+        let complete = outcome(json!({"messages": [{"action": "rate"}], "truncated": false}));
+        let truncated = outcome(json!({"messages": [], "truncated": true}));
+
+        let complete = inbox_of(&complete).unwrap();
+        let truncated = inbox_of(&truncated).unwrap();
+
+        assert_eq!(complete.messages.len(), 1);
+        assert!(!complete.truncated);
+        assert!(truncated.truncated);
+    }
+
+    #[test]
+    fn a_listing_without_a_boolean_truncated_flag_breaks_the_contract() {
+        let absent = outcome(json!({"messages": []}));
+        let text = outcome(json!({"messages": [], "truncated": "true"}));
+
+        for listing in [absent, text] {
+            let error = inbox_of(&listing).unwrap_err();
+            assert_eq!(error.category, FailureCategory::AutomationContract);
+        }
+    }
+
+    #[test]
+    fn an_absence_stands_only_on_a_complete_list() {
+        let complete = Inbox {
+            messages: vec![],
+            truncated: false,
+        };
+        let truncated = Inbox {
+            messages: vec![],
+            truncated: true,
+        };
+
+        let proven = complete.prove_absence("o1", "bond-slashed");
+        let error = truncated.prove_absence("o1", "bond-slashed").unwrap_err();
+
+        assert!(proven.is_ok());
+        assert_eq!(error.category, FailureCategory::Relay);
+        assert!(error.message.contains("o1"), "{}", error.message);
+        assert!(error.message.contains("bond-slashed"), "{}", error.message);
+    }
+
+    #[test]
+    fn a_wait_that_ran_out_blames_the_node_only_after_a_complete_read() {
+        let waited = Duration::from_secs(1);
+
+        let unread = never_asked("o1", &[PAY_HOLD], waited, None);
+        let complete = never_asked("o1", &[PAY_HOLD], waited, Some(false));
+        let truncated = never_asked("o1", &[PAY_HOLD], waited, Some(true));
+
+        assert_eq!(unread.category, FailureCategory::Relay);
+        assert_eq!(complete.category, FailureCategory::Product);
+        assert_eq!(truncated.category, FailureCategory::Relay);
     }
 }

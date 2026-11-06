@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::access::{adapter_error, missing, run, try_run};
 use crate::memo::Memo;
-use crate::messages::{ADD_INVOICE, PAY_BOND, PAY_HOLD};
+use crate::messages::{ADD_INVOICE, PAY_BOND, PAY_HOLD, inconclusive};
 
 /// Node reasons for a cancel refused because the order is already closed.
 const CLOSED_REASONS: [&str; 3] = [
@@ -20,6 +20,9 @@ const CLOSED_REASONS: [&str; 3] = [
     "is_not_your_order",
     "not_allowed_by_status",
 ];
+
+/// What a read that cannot say which message is the newest lacks.
+const NEWER_MESSAGE: &str = "a message newer than the last one listed";
 
 fn side(kind: OrderKind) -> &'static str {
     match kind {
@@ -132,40 +135,46 @@ async fn side_on_book(
     }
 }
 
-/// The order's state as the node reports it to its party.
-pub(crate) async fn observe(
+/// The status `order info` reports for `order` to this user; `None` when
+/// it reports none.
+async fn reported_status(
     device: &DeviceContext<'_>,
     order: &OrderReference,
-) -> Result<AppOrderState, AdapterError> {
+) -> Result<Option<String>, AdapterError> {
     let call = Call::node(&["order", "info"]).arg("order", order.id.clone());
     let outcome = run(device, call).await?;
     let orders = outcome
         .field(&["orders"])
         .and_then(Value::as_array)
         .ok_or_else(|| missing("order.info", "orders"))?;
-    let reported = orders
+    Ok(orders
         .iter()
         .find(|o| o.get("id").and_then(Value::as_str) == Some(order.id.as_str()))
-        .and_then(|o| o.get("status").and_then(Value::as_str));
-    let Some(status) = reported else {
-        if parked_on_bond(device, &order.id).await? {
-            return Ok(AppOrderState {
-                state: OrderState::Taken,
-                raw_label: "waiting-bond".into(),
-            });
-        }
-        return Err(AdapterError::product(format!(
-            "the node does not report order {} to this user",
-            order.id
-        )));
+        .and_then(|o| o.get("status").and_then(Value::as_str))
+        .map(str::to_owned))
+}
+
+/// Whether `status`, as `order info` reports it, is a state no transition
+/// leaves.
+fn terminal(status: &str) -> bool {
+    OrderState::from_protocol_status(status).is_some_and(OrderState::is_terminal)
+}
+
+/// The order's state as the node reports it to its party.
+pub(crate) async fn observe(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<AppOrderState, AdapterError> {
+    let Some(reported) = reported_status(device, order).await? else {
+        return unreported(device, order).await;
     };
     // The node parks a take on its bond for that taker alone, and reports
     // the order only to the maker meanwhile: for the maker it is still
     // pending, as the book and app v2 show it.
-    let status = if status == "waiting-taker-bond" {
+    let status = if reported == "waiting-taker-bond" {
         "pending"
     } else {
-        status
+        reported.as_str()
     };
     let state = state_of("order.info", status)?;
     let raw_label = match state {
@@ -176,16 +185,39 @@ pub(crate) async fn observe(
     Ok(AppOrderState { state, raw_label })
 }
 
+/// An order `order info` does not report to this user: a take parked on its
+/// bond, or not this user's order. A truncated list cannot tell which.
+async fn unreported(
+    device: &DeviceContext<'_>,
+    order: &OrderReference,
+) -> Result<AppOrderState, AdapterError> {
+    match parked_on_bond(device, &order.id).await? {
+        Some(true) => Ok(AppOrderState {
+            state: OrderState::Taken,
+            raw_label: "waiting-bond".into(),
+        }),
+        Some(false) => Err(AdapterError::product(format!(
+            "the node does not report order {} to this user",
+            order.id
+        ))),
+        None => Err(inconclusive(&order.id, NEWER_MESSAGE)),
+    }
+}
+
 /// After a failed payout the order stays `settled-hold-invoice` while the
 /// node asks the buyer for a new invoice; app v2 shows that request as
-/// `waiting-invoice`, and so does the CLI's newest message.
+/// `waiting-invoice`, and so does the CLI's newest message. Either label
+/// says which message is the newest, which only a complete list shows: on
+/// a truncated one the read is inconclusive.
 async fn payout_label(
     device: &DeviceContext<'_>,
     order: &OrderReference,
     status: &str,
 ) -> Result<String, AdapterError> {
-    let messages = crate::messages::list(device, &order.id).await?;
-    let asked = messages
+    let inbox = crate::messages::list(device, &order.id).await?;
+    inbox.prove_absence(&order.id, NEWER_MESSAGE)?;
+    let asked = inbox
+        .messages
         .last()
         .and_then(|m| m.get("next_step"))
         .and_then(Value::as_str)
@@ -200,20 +232,28 @@ async fn payout_label(
 /// What a completed trade shows about this user's rating, as app v2 labels
 /// it: `rated` once the node confirmed this user's rating, `pending-rating`
 /// while its invitation to rate stands, the status otherwise.
+/// Only `rated` rests on a message present; the others say `rate-received`
+/// is absent, which a truncated list cannot show, so such a read is
+/// inconclusive.
 async fn rating_label(
     device: &DeviceContext<'_>,
     order: &OrderReference,
     status: &str,
 ) -> Result<String, AdapterError> {
-    let messages = crate::messages::list(device, &order.id).await?;
+    let inbox = crate::messages::list(device, &order.id).await?;
     let has = |action: &str| {
-        messages
+        inbox
+            .messages
             .iter()
             .any(|m| m.get("action").and_then(Value::as_str) == Some(action))
     };
-    Ok(if has("rate-received") {
-        "rated".into()
-    } else if has("rate") {
+    if has("rate-received") {
+        return Ok("rated".into());
+    }
+    if inbox.truncated {
+        return Err(inconclusive(&order.id, "`rate-received`"));
+    }
+    Ok(if has("rate") {
         "pending-rating".into()
     } else {
         status.to_owned()
@@ -256,7 +296,9 @@ pub(crate) async fn owned(
 /// The local rows the node still reports to this user. A store keeps every
 /// row it ever wrote; an order whose take was undone, or that the node no
 /// longer counts as this user's, is not theirs any more -- as app v2 stops
-/// listing it.
+/// listing it. A row whose list is truncated cannot be judged and stays:
+/// dropping it would read an unproven absence as the order closing, or as
+/// never this user's, and failing would let one old row block the listing.
 async fn still_reported(
     device: &DeviceContext<'_>,
     local: Vec<String>,
@@ -279,7 +321,7 @@ async fn still_reported(
         .collect();
     let mut owned = Vec::with_capacity(local.len());
     for id in local {
-        if reported.contains(&id.as_str()) || parked_on_bond(device, &id).await? {
+        if reported.contains(&id.as_str()) || parked_on_bond(device, &id).await? != Some(false) {
             owned.push(id);
         }
     }
@@ -289,12 +331,19 @@ async fn still_reported(
 /// A take parked on its bond: the node counts the taker as a party only
 /// once the bond locks, so until then the actor's own newest message, the
 /// bond request, is the trade -- held while its invoice has not expired,
-/// as app v2 holds the pay-bond screen.
-async fn parked_on_bond(device: &DeviceContext<'_>, order_id: &str) -> Result<bool, AdapterError> {
-    let messages = crate::messages::list(device, order_id).await?;
-    Ok(messages.last().is_some_and(|newest| {
+/// as app v2 holds the pay-bond screen. Whether the bond request is the
+/// newest message only a complete list shows: `None` on a truncated one.
+async fn parked_on_bond(
+    device: &DeviceContext<'_>,
+    order_id: &str,
+) -> Result<Option<bool>, AdapterError> {
+    let inbox = crate::messages::list(device, order_id).await?;
+    if inbox.truncated {
+        return Ok(None);
+    }
+    Ok(Some(inbox.messages.last().is_some_and(|newest| {
         newest.get("next_step").and_then(Value::as_str) == Some(PAY_BOND) && bond_live(newest)
-    }))
+    })))
 }
 
 /// Whether the bond invoice a request carries is still payable.
@@ -316,8 +365,10 @@ pub(crate) async fn cancel_if_open(
     device: &DeviceContext<'_>,
     order: &OrderReference,
 ) -> Result<CancelOutcome, AdapterError> {
-    if let Ok(state) = observe(device, order).await
-        && state.state.is_terminal()
+    // Read from the status alone: a closed order needs no message, and a
+    // label resting on one may be inconclusive.
+    if let Ok(Some(status)) = reported_status(device, order).await
+        && terminal(&status)
     {
         return Ok(CancelOutcome::AlreadyClosed);
     }
@@ -337,21 +388,26 @@ pub(crate) async fn cancel_if_open(
 
 /// The node refuses a cooperative cancel from the side that already asked
 /// for it (`invalid_pubkey`): this side's request stands and only the
-/// counterpart can complete it, as the app's own cancel shows.
+/// counterpart can complete it, as the app's own cancel shows. Without that
+/// request the refusal stands, which only a complete list shows: on a
+/// truncated one it is a relay failure.
 async fn already_requested(
     device: &DeviceContext<'_>,
     order: &OrderReference,
     error: CliError,
 ) -> Result<CancelOutcome, AdapterError> {
-    let messages = crate::messages::list(device, &order.id).await?;
-    let requested = messages.iter().any(|message| {
+    let inbox = crate::messages::list(device, &order.id).await?;
+    let requested = inbox.messages.iter().any(|message| {
         message.get("action").and_then(Value::as_str) == Some("cooperative-cancel-initiated-by-you")
     });
     if requested {
-        Ok(CancelOutcome::Cancelled)
-    } else {
-        Err(adapter_error(error))
+        return Ok(CancelOutcome::Cancelled);
     }
+    inbox.prove_absence(
+        &order.id,
+        &format!("this side's cooperative cancel request behind the refusal ({error})"),
+    )?;
+    Err(adapter_error(error))
 }
 
 fn is_closed_refusal(error: &CliError) -> bool {
@@ -361,14 +417,15 @@ fn is_closed_refusal(error: &CliError) -> bool {
             .is_some_and(|reason| CLOSED_REASONS.contains(&reason))
 }
 
-/// A refusal proves nothing by itself: the order must read closed.
+/// A refusal proves nothing by itself: `order info` must report the order
+/// closed.
 async fn closed_after_refusal(
     device: &DeviceContext<'_>,
     order: &OrderReference,
     error: CliError,
 ) -> Result<CancelOutcome, AdapterError> {
-    match observe(device, order).await {
-        Ok(state) if state.state.is_terminal() => Ok(CancelOutcome::AlreadyClosed),
+    match reported_status(device, order).await {
+        Ok(Some(status)) if terminal(&status) => Ok(CancelOutcome::AlreadyClosed),
         _ => Err(adapter_error(error)),
     }
 }
