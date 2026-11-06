@@ -16,6 +16,10 @@ use crate::evidence::Evidence;
 use crate::process::{CliProcess, ProcessRequest};
 /// The private subdirectories of an actor's CLI storage.
 const LAYOUT: [&str; 2] = ["mcli", "home"];
+/// Beyond an invocation's own deadline, how long ending it may take: the
+/// child is killed and reaped, its standard error read and its stop
+/// recorded.
+const SETTLE_GRACE: Duration = Duration::from_secs(5);
 
 /// What every invocation of one actor shares.
 #[derive(Debug, Clone)]
@@ -123,16 +127,27 @@ impl CliClient {
             .map(|root| root.path().to_path_buf())
     }
 
-    /// Releases a temporary root. Retained storage stays for its owner, and
-    /// a root an invocation still runs in stays until the process exits.
-    pub fn close(&self) {
-        let Ok(_idle) = self.idle() else {
-            return;
-        };
+    /// Waits until no invocation runs: one a caller gave up on is still
+    /// bounded by its own deadline, so it ends within that and a grace.
+    async fn settled(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, CliError> {
+        let bound = self.config.timeout + SETTLE_GRACE;
+        tokio::time::timeout(bound, self.serial.lock())
+            .await
+            .map_err(|_| {
+                CliError::Storage(format!("an invocation was still running after {bound:?}"))
+            })
+    }
+
+    /// Ends the client once no invocation runs, then releases a temporary
+    /// root; retained storage stays for its owner. An invocation that
+    /// outlives its deadline is a failed shutdown, and its root is kept.
+    pub async fn close(&self) -> Result<(), CliError> {
+        let _settled = self.settled().await?;
         let mut root = lock(&self.root);
         if matches!(root.as_ref(), Some(Root::Temporary(_))) {
             *root = None;
         }
+        Ok(())
     }
 
     fn open(&self) -> Result<Root, CliError> {
@@ -217,8 +232,14 @@ impl CliClient {
         self.evidence.take_transcript()
     }
 
-    /// The whole transcript and the CLI's standard error, for the run.
-    pub fn diagnostics(&self) -> Vec<(String, String)> {
+    /// The whole transcript and the CLI's standard error, for the run,
+    /// once an invocation still running has recorded its outcome. If one
+    /// outlives its deadline, what was recorded so far.
+    pub async fn diagnostics(&self) -> Vec<(String, String)> {
+        let settled = self.settled().await;
+        if let Err(error) = &settled {
+            tracing::warn!(%error, "collecting the CLI evidence without the running invocation");
+        }
         self.evidence.diagnostics()
     }
 }

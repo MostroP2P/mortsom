@@ -105,6 +105,28 @@ impl CliProcess for ScriptedCli {
     }
 }
 
+/// A CLI that takes `delay` to answer every command with an empty `ok`,
+/// whatever deadline it is given: an invocation still running when its
+/// caller gives up.
+#[derive(Debug)]
+pub struct SlowCli {
+    /// How long each answer takes.
+    pub delay: Duration,
+}
+
+#[async_trait]
+impl CliProcess for SlowCli {
+    async fn run(
+        &self,
+        request: &ProcessRequest,
+        _timeout: Duration,
+    ) -> Result<ProcessOutput, ProcessFailed> {
+        tokio::time::sleep(self.delay).await;
+        let command = command_of(&request.args);
+        Ok(document(&command, "ok", &serde_json::json!({}), None, 0))
+    }
+}
+
 /// The dotted command name: the first two words that are neither flags nor
 /// flag values.
 pub fn command_of(args: &[String]) -> String {

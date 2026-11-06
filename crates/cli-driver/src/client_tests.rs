@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::process::{ProcessFailed, ProcessFailure, ProcessOutput};
-use crate::testing::{ScriptedCli, document};
+use crate::testing::{ScriptedCli, SlowCli, document};
 use mortsom_common::Secret;
 
 fn config() -> CliConfig {
@@ -88,7 +88,7 @@ async fn a_refusal_an_uncertain_write_and_a_broken_answer_are_told_apart() {
     assert!(matches!(refused, Err(CliError::Refused { ref code, .. }) if code == "node_refused"));
     assert!(matches!(uncertain, Err(CliError::Uncertain { .. })));
     assert!(matches!(broken, Err(CliError::Contract { .. })));
-    let diagnostics = client.diagnostics();
+    let diagnostics = client.diagnostics().await;
     assert_eq!(diagnostics.len(), 2);
     assert_eq!(diagnostics[1].1, "warning\n");
     assert_eq!(client.take_transcript().lines().count(), 3);
@@ -177,33 +177,15 @@ fn protected_recovery_storage_is_never_cleared() {
     assert!(matches!(error, CliError::Storage(_)), "{error}");
 }
 
-#[test]
-fn a_temporary_root_is_released_when_the_session_ends() {
+#[tokio::test]
+async fn a_temporary_root_is_released_when_the_session_ends() {
     let (_, client) = launched();
     let root = client.root().unwrap();
 
-    client.close();
+    client.close().await.unwrap();
 
     assert!(client.root().is_none());
     assert!(!root.exists());
-}
-
-/// A CLI that takes `delay` to answer every command with an empty `ok`.
-struct SlowCli {
-    delay: Duration,
-}
-
-#[async_trait::async_trait]
-impl CliProcess for SlowCli {
-    async fn run(
-        &self,
-        request: &ProcessRequest,
-        _timeout: Duration,
-    ) -> Result<ProcessOutput, ProcessFailed> {
-        tokio::time::sleep(self.delay).await;
-        let command = crate::testing::command_of(&request.args);
-        Ok(document(&command, "ok", &serde_json::json!({}), None, 0))
-    }
 }
 
 fn retained(process: Arc<dyn CliProcess>) -> (tempfile::TempDir, PathBuf, Arc<CliClient>) {
@@ -259,6 +241,63 @@ async fn an_invocation_whose_caller_gave_up_still_reaches_the_transcript() {
     assert_eq!(transcript.lines().count(), 2, "{transcript}");
 }
 
+/// Abandons one `identity show` that is still running.
+async fn give_up_on_one(client: &CliClient) {
+    let gave_up = tokio::time::timeout(
+        Duration::from_millis(20),
+        client.invoke(Call::local(&["identity", "show"])),
+    )
+    .await;
+    assert!(gave_up.is_err(), "the caller should have timed out");
+}
+
+/// Teardown must not report a clean stop while a child still uses the
+/// actor's storage: closing waits for the invocation a caller abandoned.
+#[tokio::test]
+async fn closing_waits_for_an_invocation_whose_caller_gave_up() {
+    let (_parent, root, client) = retained(Arc::new(SlowCli {
+        delay: Duration::from_millis(150),
+    }));
+    give_up_on_one(&client).await;
+
+    client.close().await.unwrap();
+
+    mortsom_desktop_driver::storage::ensure_stopped(&root).unwrap();
+    assert_eq!(client.take_transcript().lines().count(), 1);
+}
+
+/// An invocation that outlives its own deadline is a failed shutdown.
+#[tokio::test(start_paused = true)]
+async fn closing_fails_while_an_invocation_outlives_its_deadline() {
+    let (_parent, _root, client) = retained(Arc::new(SlowCli {
+        delay: Duration::from_secs(3600),
+    }));
+    give_up_on_one(&client).await;
+
+    let closed = client.close().await;
+
+    assert!(matches!(closed, Err(CliError::Storage(_))), "{closed:?}");
+}
+
+/// The run's evidence is collected before teardown: it must already hold
+/// the invocation a caller abandoned.
+#[tokio::test]
+async fn diagnostics_wait_for_an_invocation_whose_caller_gave_up() {
+    let (_parent, _root, client) = retained(Arc::new(SlowCli {
+        delay: Duration::from_millis(150),
+    }));
+    give_up_on_one(&client).await;
+
+    let diagnostics = client.diagnostics().await;
+
+    let transcript = &diagnostics
+        .iter()
+        .find(|(name, _)| name == "cli-transcript.jsonl")
+        .unwrap()
+        .1;
+    assert!(transcript.contains("identity.show"), "{transcript}");
+}
+
 #[tokio::test]
 async fn a_crash_is_a_product_failure_and_an_argument_refusal_a_contract_one() {
     let (cli, client) = launched();
@@ -310,7 +349,7 @@ async fn standard_error_keeps_no_invoice() {
         .await
         .unwrap();
 
-    let stderr = &client.diagnostics()[1].1;
+    let stderr = &client.diagnostics().await[1].1;
     assert!(!stderr.contains("lnbcrt"), "{stderr}");
     assert!(!stderr.contains("someone@example.com"), "{stderr}");
 }
@@ -334,7 +373,7 @@ async fn a_timed_out_invocation_keeps_its_standard_error() {
         .unwrap_err();
 
     assert!(matches!(error, CliError::Process { .. }), "{error}");
-    let diagnostics = client.diagnostics();
+    let diagnostics = client.diagnostics().await;
     let stderr = &diagnostics
         .iter()
         .find(|(name, _)| name == "cli-stderr.log")

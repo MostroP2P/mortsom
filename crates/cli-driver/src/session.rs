@@ -89,14 +89,15 @@ impl UiSession for CliSession {
         Ok(())
     }
     async fn diagnostics(&self) -> Vec<(String, String)> {
-        self.client.diagnostics()
+        self.client.diagnostics().await
     }
     fn command_line(&self) -> Option<&dyn std::any::Any> {
         Some(self)
     }
+    /// Ends once no invocation runs; one that outlives its deadline fails
+    /// the shutdown instead of being reported as stopped.
     async fn end(&self) -> Result<(), UiError> {
-        self.client.close();
-        Ok(())
+        self.client.close().await.map_err(ui_error)
     }
 }
 
@@ -113,11 +114,10 @@ mod tests {
     use super::*;
     use crate::call::{Call, NodeTarget};
     use crate::client::CliConfig;
-    use crate::testing::ScriptedCli;
+    use crate::testing::{ScriptedCli, SlowCli};
 
-    fn session() -> (Arc<ScriptedCli>, CliSession) {
-        let cli = Arc::new(ScriptedCli::default());
-        let config = CliConfig {
+    fn config() -> CliConfig {
+        CliConfig {
             binary: "/opt/mostro-cli".into(),
             node: NodeTarget {
                 mostro_pubkey: "ab".repeat(32),
@@ -126,9 +126,33 @@ mod tests {
             },
             timeout: Duration::from_secs(5),
             path_env: None,
-        };
-        let client = Arc::new(CliClient::new(config, cli.clone()));
+        }
+    }
+
+    fn session() -> (Arc<ScriptedCli>, CliSession) {
+        let cli = Arc::new(ScriptedCli::default());
+        let client = Arc::new(CliClient::new(config(), cli.clone()));
         (cli, CliSession::new(client))
+    }
+
+    /// Teardown counts a session as ended only once nothing runs in it.
+    #[tokio::test(start_paused = true)]
+    async fn a_session_whose_invocation_outlives_its_deadline_fails_to_end() {
+        let slow = Arc::new(SlowCli {
+            delay: Duration::from_secs(3600),
+        });
+        let session = CliSession::new(Arc::new(CliClient::new(config(), slow)));
+        session.clear_app().await.unwrap();
+        let gave_up = tokio::time::timeout(
+            Duration::from_millis(20),
+            session.client().invoke(Call::local(&["identity", "show"])),
+        )
+        .await;
+        assert!(gave_up.is_err(), "the caller should have timed out");
+
+        let ended = session.end().await;
+
+        assert!(ended.is_err(), "{ended:?}");
     }
 
     #[tokio::test]
