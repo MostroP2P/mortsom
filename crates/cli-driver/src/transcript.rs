@@ -44,7 +44,8 @@ pub struct Transcript {
 }
 
 impl Transcript {
-    /// Records one invocation. `argv` is sanitized here, again.
+    /// Records one invocation. `argv` is sanitized here, again, and every
+    /// free-text field (the error object, the failure) loses its invoices.
     pub fn record(&mut self, command: &str, argv: &[String], elapsed_ms: u64, what: Recorded<'_>) {
         let (exit, status, error, failure, data) = match what {
             Recorded::Outcome(envelope, exit) => {
@@ -53,12 +54,14 @@ impl Transcript {
                 (
                     exit,
                     Some(envelope.status.as_str()),
-                    envelope.error.clone(),
+                    envelope.error.as_ref().map(scrub_error),
                     None,
                     data,
                 )
             }
-            Recorded::Failure(reason, exit) => (exit, None, None, Some(reason), Value::Null),
+            Recorded::Failure(reason, exit) => {
+                (exit, None, None, Some(scrub(&reason, &[])), Value::Null)
+            }
         };
         let entry = Entry {
             seq: self.lines.len() + 1,
@@ -96,6 +99,16 @@ impl Transcript {
     /// Whether nothing was recorded.
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
+    }
+}
+
+/// The error object with every Lightning invoice in its text replaced: the
+/// CLI under test fills it, so nothing in it is trusted to be clean.
+fn scrub_error(error: &ErrorInfo) -> ErrorInfo {
+    ErrorInfo {
+        code: scrub(&error.code, &[]),
+        message: scrub(&error.message, &[]),
+        reason: error.reason.as_deref().map(|reason| scrub(reason, &[])),
     }
 }
 
@@ -235,6 +248,46 @@ mod tests {
         assert!(!text.contains("lnbcrt1"), "{text}");
         assert!(text.contains("\"order_id\":\"o1\""), "{text}");
         assert!(text.contains(REDACTED));
+    }
+
+    #[test]
+    fn failure_text_and_error_fields_never_carry_an_invoice() {
+        let invoice = "lnbcrt10n1pqqqqqqqqqqqqqqqqqqqqqqqqqqq";
+        let refusal = Envelope::parse(
+            &format!(
+                r#"{{"schema_version":"1","command":"order.add-invoice","status":"error",
+                "data":null,"error":{{"code":"node_refused","message":"bad {invoice}",
+                "reason":"{invoice}"}},"warnings":[],"meta":{{}}}}"#
+            ),
+            Some(1),
+        )
+        .unwrap();
+        let complaint = format!("outcome schema version `{invoice}` is not the supported `1`");
+        let mut transcript = Transcript::default();
+
+        transcript.record("order.info", &[], 1, Recorded::Failure(complaint, Some(0)));
+        transcript.record(
+            "order.add-invoice",
+            &[],
+            2,
+            Recorded::Outcome(&refusal, Some(1)),
+        );
+
+        let text = transcript.render();
+        assert!(!text.contains("lnbcrt1"), "{text}");
+        assert!(text.contains("\"code\":\"node_refused\""), "{text}");
+        assert!(
+            text.contains(&format!("\"message\":\"bad {REDACTED}\"")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("\"reason\":\"{REDACTED}\"")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("schema version `{REDACTED}`")),
+            "{text}"
+        );
     }
 
     #[test]
