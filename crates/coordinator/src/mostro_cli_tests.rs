@@ -47,6 +47,22 @@ fn a_cli_that_takes_the_invoice_only_as_an_argument_is_refused() {
     assert!(error.contains("standard input"), "{error}");
 }
 
+/// The contract's sentinel is `"x-stdin": "-"`: any other value is a CLI
+/// that would refuse `--invoice -` only once a trade is under way.
+#[test]
+fn a_cli_whose_stdin_marker_is_not_the_dash_is_refused() {
+    for marker in [r#"null"#, r#"false"#, r#""yes""#] {
+        let text = discovery_document(Value::Array(every_required()))
+            .replace(r#""x-stdin":"-""#, &format!(r#""x-stdin":{marker}"#));
+        assert!(text.contains(&format!(r#""x-stdin":{marker}"#)), "{text}");
+
+        let discovery = Discovery::parse(&text, Some(0)).unwrap();
+
+        assert!(!discovery.stdin_invoice, "{marker}");
+        assert!(require(&discovery).is_err(), "{marker}");
+    }
+}
+
 #[test]
 fn a_cli_without_a_reply_budget_keeps_its_default() {
     let text = discovery_document(Value::Array(every_required())).replace(

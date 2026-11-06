@@ -159,17 +159,20 @@ impl Discovery {
                     .is_some_and(|modes| modes.iter().any(|m| m == "json"))
             })
             .collect();
-        let has_input = |command: &str, pointer: &str| {
-            json.iter().any(|c| {
-                c.get("name").and_then(Value::as_str) == Some(command)
-                    && c.pointer(pointer).is_some()
-            })
+        let input = |command: &str, pointer: &str| {
+            json.iter()
+                .filter(|c| c.get("name").and_then(Value::as_str) == Some(command))
+                .find_map(|c| c.pointer(pointer))
         };
-        let order_expiry_in_seconds = has_input("order.new", "/input_schema/properties/expires-in");
-        let stdin_invoice = has_input(
+        let order_expiry_in_seconds =
+            input("order.new", "/input_schema/properties/expires-in").is_some();
+        // The contract's sentinel, not merely the key: `"x-stdin": "-"`.
+        let stdin_invoice = input(
             "order.add-invoice",
             "/input_schema/properties/invoice/x-stdin",
-        );
+        )
+        .and_then(Value::as_str)
+            == Some("-");
         let reply_timeout = envelope
             .field(&["global_options"])
             .and_then(Value::as_array)
