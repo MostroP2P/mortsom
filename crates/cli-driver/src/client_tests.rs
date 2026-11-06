@@ -1,6 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
+use crate::process::{ProcessFailure, ProcessOutput};
 use crate::testing::{ScriptedCli, document};
 use mortsom_common::Secret;
 
@@ -231,6 +232,31 @@ async fn a_caller_that_gives_up_leaves_no_marker_and_no_overlap() {
     assert!(matches!(busy, Err(CliError::Storage(_))), "{busy:?}");
     assert!(next.is_ok(), "{next:?}");
     mortsom_desktop_driver::storage::ensure_stopped(&root).unwrap();
+}
+
+/// The evidence of a run that timed out must still show the command it was
+/// waiting on: the invocation records its outcome even when no caller is
+/// left to read it.
+#[tokio::test]
+async fn an_invocation_whose_caller_gave_up_still_reaches_the_transcript() {
+    let (_parent, _root, client) = retained(Arc::new(SlowCli {
+        delay: Duration::from_millis(150),
+    }));
+
+    let gave_up = tokio::time::timeout(
+        Duration::from_millis(20),
+        client.invoke(Call::local(&["identity", "show"])),
+    )
+    .await;
+    assert!(gave_up.is_err(), "the caller should have timed out");
+    // The next invocation waits for the abandoned one to finish.
+    client
+        .invoke(Call::local(&["identity", "show"]))
+        .await
+        .unwrap();
+
+    let transcript = client.take_transcript();
+    assert_eq!(transcript.lines().count(), 2, "{transcript}");
 }
 
 #[tokio::test]

@@ -9,16 +9,11 @@ use std::time::{Duration, Instant};
 use mortsom_desktop_driver::Platform;
 use mortsom_desktop_driver::storage::{ActiveRuntime, ActorStorage};
 
-use mortsom_common::Secret;
-
 use crate::call::{Call, NodeTarget};
-use crate::envelope::{Envelope, Status};
+use crate::envelope::Envelope;
 use crate::error::CliError;
-use crate::process::{CliProcess, ProcessFailure, ProcessOutput, ProcessRequest};
-use crate::transcript::{Recorded, Transcript, scrub};
-
-/// How much of the CLI's standard error is kept per actor.
-const STDERR_LIMIT: usize = 256 * 1024;
+use crate::evidence::Evidence;
+use crate::process::{CliProcess, ProcessRequest};
 /// The private subdirectories of an actor's CLI storage.
 const LAYOUT: [&str; 2] = ["mcli", "home"];
 
@@ -41,8 +36,8 @@ pub struct CliClient {
     process: Arc<dyn CliProcess>,
     storage: Option<ActorStorage>,
     root: Mutex<Option<Root>>,
-    transcript: Mutex<Transcript>,
-    stderr: Mutex<String>,
+    /// Transcript and standard error, shared with running invocations.
+    evidence: Evidence,
     /// Held for the whole life of an invocation, by the task that runs it:
     /// a caller that gives up never releases it while a child still runs.
     serial: Arc<tokio::sync::Mutex<()>>,
@@ -73,8 +68,7 @@ impl CliClient {
             process,
             storage: None,
             root: Mutex::new(None),
-            transcript: Mutex::new(Transcript::default()),
-            stderr: Mutex::new(String::new()),
+            evidence: Evidence::default(),
             serial: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
@@ -172,11 +166,14 @@ impl CliClient {
             stdin: call.stdin().cloned(),
         };
         let process = Arc::clone(&self.process);
+        let evidence = self.evidence.clone();
         let timeout = self.config.timeout;
         let retained = self.storage.is_some();
-        // The child, its reaping and the runtime marker live in their own
-        // task: a caller that gives up (a scenario deadline) leaves neither a
-        // live child nor a marker that would refuse every later invocation.
+        // The child, its reaping, the runtime marker and the record of the
+        // outcome live in their own task: a caller that gives up (a scenario
+        // deadline) leaves neither a live child nor a marker that would
+        // refuse every later invocation, and the invocation still reaches
+        // the transcript.
         let task = tokio::spawn(async move {
             let _serial = serial;
             let active = match retained {
@@ -190,12 +187,12 @@ impl CliClient {
             let result = process.run(&request, timeout).await;
             let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
             let stopped = active.map_or(Ok(()), |active| active.stopped().map_err(storage_error));
-            Ok::<_, CliError>((result, elapsed_ms, stopped))
+            let outcome = evidence.interpret(&call, &argv, elapsed_ms, result);
+            Ok::<_, CliError>((outcome, stopped))
         });
-        let (result, elapsed_ms, stopped) = task
+        let (outcome, stopped) = task
             .await
             .map_err(|e| CliError::Storage(format!("the CLI invocation task failed: {e}")))??;
-        let outcome = self.interpret(&call, &argv, elapsed_ms, result);
         match (stopped, outcome) {
             (Ok(()), outcome) => outcome,
             (Err(storage), Ok(_)) => Err(storage),
@@ -203,55 +200,6 @@ impl CliClient {
                 "{storage}; the command itself failed: {command}"
             ))),
         }
-    }
-
-    fn interpret(
-        &self,
-        call: &Call,
-        argv: &[String],
-        elapsed_ms: u64,
-        result: Result<ProcessOutput, ProcessFailure>,
-    ) -> Result<Envelope, CliError> {
-        let command = call.name();
-        let output = match result {
-            Ok(output) => output,
-            Err(cause) => {
-                self.record(
-                    &command,
-                    argv,
-                    elapsed_ms,
-                    Recorded::Failure(cause.to_string(), None),
-                );
-                return Err(CliError::Process { command, cause });
-            }
-        };
-        let secrets: Vec<&Secret> = call.stdin().into_iter().collect();
-        self.keep_stderr(&scrub(&output.stderr, &secrets));
-        if let Some(error) = without_document(&command, &output) {
-            let what = Recorded::Failure(error.to_string(), output.code);
-            self.record(&command, argv, elapsed_ms, what);
-            return Err(error);
-        }
-        let envelope = match Envelope::parse(&output.stdout, output.code) {
-            Ok(envelope) => envelope,
-            Err(detail) => {
-                let detail = scrub(&detail, &secrets);
-                let what = Recorded::Failure(detail.clone(), output.code);
-                self.record(&command, argv, elapsed_ms, what);
-                return Err(CliError::Contract { command, detail });
-            }
-        };
-        self.record(
-            &command,
-            argv,
-            elapsed_ms,
-            Recorded::Outcome(&envelope, output.code),
-        );
-        if envelope.command != command {
-            let detail = format!("answered as `{}`", envelope.command);
-            return Err(CliError::Contract { command, detail });
-        }
-        outcome(command, envelope)
     }
 
     fn env(&self, root: &Path) -> BTreeMap<String, String> {
@@ -264,87 +212,14 @@ impl CliClient {
         env
     }
 
-    fn record(&self, command: &str, argv: &[String], elapsed_ms: u64, what: Recorded<'_>) {
-        lock(&self.transcript).record(command, argv, elapsed_ms, what);
-    }
-
-    fn keep_stderr(&self, stderr: &str) {
-        if stderr.is_empty() {
-            return;
-        }
-        let mut kept = lock(&self.stderr);
-        kept.push_str(stderr);
-        if !stderr.ends_with('\n') {
-            kept.push('\n');
-        }
-        if kept.len() > STDERR_LIMIT {
-            let cut = kept.len() - STDERR_LIMIT;
-            let boundary = (cut..kept.len())
-                .find(|i| kept.is_char_boundary(*i))
-                .unwrap_or(kept.len());
-            kept.drain(..boundary);
-        }
-    }
-
     /// Transcript lines recorded since the previous call.
     pub fn take_transcript(&self) -> String {
-        lock(&self.transcript).take_unread()
+        self.evidence.take_transcript()
     }
 
     /// The whole transcript and the CLI's standard error, for the run.
     pub fn diagnostics(&self) -> Vec<(String, String)> {
-        let mut files = Vec::new();
-        let transcript = lock(&self.transcript);
-        if !transcript.is_empty() {
-            files.push(("cli-transcript.jsonl".to_owned(), transcript.render()));
-        }
-        let stderr = lock(&self.stderr);
-        if !stderr.is_empty() {
-            files.push(("cli-stderr.log".to_owned(), stderr.clone()));
-        }
-        files
-    }
-}
-
-/// A child that printed nothing: exit 2 is the argument parser refusing
-/// what Mortsom sent (a contract mismatch); any other failure is the CLI
-/// crashing, a failure of the system under test.
-fn without_document(command: &str, output: &ProcessOutput) -> Option<CliError> {
-    if !output.stdout.trim().is_empty() {
-        return None;
-    }
-    match output.code {
-        Some(0) | None => None,
-        Some(2) => Some(CliError::Contract {
-            command: command.to_owned(),
-            detail: "the CLI refused its arguments without an outcome document (exit 2)".into(),
-        }),
-        Some(exit) => Some(CliError::Crashed {
-            command: command.to_owned(),
-            exit,
-        }),
-    }
-}
-
-fn outcome(command: String, envelope: Envelope) -> Result<Envelope, CliError> {
-    let (code, message, reason) = envelope
-        .error
-        .as_ref()
-        .map(|e| (e.code.clone(), e.message.clone(), e.reason.clone()))
-        .unwrap_or_default();
-    match envelope.status {
-        Status::Ok => Ok(envelope),
-        Status::Error => Err(CliError::Refused {
-            command,
-            code,
-            message,
-            reason,
-        }),
-        Status::Uncertain => Err(CliError::Uncertain {
-            command,
-            code,
-            message,
-        }),
+        self.evidence.diagnostics()
     }
 }
 
