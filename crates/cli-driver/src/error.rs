@@ -69,6 +69,11 @@ impl CliError {
             // The CLI is the system under test: its crash is a product failure.
             CliError::Crashed { .. } => FailureCategory::Product,
             CliError::Refused { code, .. } => category_of_code(code),
+            // The node acted, but the actor's store could not record it:
+            // the cause is the environment, as with `store_unwritable`.
+            CliError::Uncertain { code, .. } if code == "order_not_saved" => {
+                FailureCategory::EnvironmentMisconfiguration
+            }
             CliError::Uncertain { .. } => FailureCategory::Relay,
         }
     }
@@ -119,7 +124,8 @@ pub fn category_of_code(code: &str) -> FailureCategory {
         | "identity_unreadable"
         | "identity_exists"
         | "store_unwritable"
-        | "store_unreadable" => FailureCategory::EnvironmentMisconfiguration,
+        | "store_unreadable"
+        | "order_not_saved" => FailureCategory::EnvironmentMisconfiguration,
         _ => FailureCategory::Product,
     }
 }
@@ -189,5 +195,24 @@ mod tests {
         assert_eq!(uncertain.category(), FailureCategory::Relay);
         assert_eq!(uncertain.code(), Some("reply_timeout"));
         assert_eq!(process.code(), None);
+    }
+
+    #[test]
+    fn an_order_the_actors_store_could_not_save_is_the_environments_failure() {
+        let uncertain = |code: &str| CliError::Uncertain {
+            command: "order.new".into(),
+            code: code.into(),
+            message: "x".into(),
+        };
+
+        assert_eq!(
+            uncertain("order_not_saved").category(),
+            FailureCategory::EnvironmentMisconfiguration
+        );
+        assert_eq!(
+            category_of_code("order_not_saved"),
+            FailureCategory::EnvironmentMisconfiguration
+        );
+        assert_eq!(uncertain("unknown_code").category(), FailureCategory::Relay);
     }
 }
