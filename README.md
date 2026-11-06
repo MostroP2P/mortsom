@@ -512,3 +512,8 @@ Releases are cut with `cargo release`, from `main` directly or from a
 `release/vX.Y.Z` branch when the bump should be reviewed first; the changelog,
 the tag and the GitHub release follow from it. See
 [docs/releasing.md](docs/releasing.md).
+
+## License
+
+Mortsom is free software, licensed under the GNU Affero General Public License, version 3 or (at your
+option) any later version (`AGPL-3.0-or-later`). See [LICENSE](LICENSE) for the full text.
