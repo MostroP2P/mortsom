@@ -85,28 +85,6 @@ pub fn resolve_client(
     }
 }
 
-/// Refuses a flag that selects the other client: an app artifact or app
-/// source with the CLI, or a CLI selection with the app.
-pub fn check_flags(
-    platform: Platform,
-    app_artifact: bool,
-    app_source: bool,
-    cli: &crate::mostro_cli_build::CliSelection,
-) -> Result<(), String> {
-    match platform {
-        Platform::Cli if app_artifact || app_source => Err(
-            "--app-artifact, --app-ref and --app-source select the app; profile `cli` takes \
-             --cli-artifact, --cli-ref or --cli-source"
-                .into(),
-        ),
-        Platform::Linux | Platform::Web if !cli.is_empty() => Err(
-            "--cli-artifact, --cli-ref and --cli-source select mostro-cli; they need --profile cli"
-                .into(),
-        ),
-        _ => Ok(()),
-    }
-}
-
 /// The daemon and relays a CLI build is pointed at.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

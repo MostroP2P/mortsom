@@ -38,18 +38,16 @@ impl Upstream for MostroCli {
 /// Validated mostro-cli branch name or GitHub pull-request URL.
 pub type Selector = git_source::Selector<MostroCli>;
 
-/// Which mostro-cli a `cli` run drives.
-#[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
+/// Which mostro-cli a `cli` run drives: `--artifact`, `--source` or `--ref`
+/// read for profile `cli` (see [`crate::cli::ClientBuild`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CliSelection {
-    /// Prebuilt mostro-cli executable for profile `cli`.
-    #[arg(long, value_name = "PATH", conflicts_with_all = ["cli_ref", "cli_source"])]
+    /// Prebuilt mostro-cli executable.
     pub cli_artifact: Option<PathBuf>,
     /// mostro-cli branch or https://github.com/MostroP2P/mostro-cli/pull/123
     /// (its head commit) to build; `main` when nothing is selected.
-    #[arg(long, value_name = "BRANCH_OR_PR_URL", conflicts_with = "cli_source")]
     pub cli_ref: Option<Selector>,
     /// Local mostro-cli checkout to build, including uncommitted changes.
-    #[arg(long, value_name = "PATH")]
     pub cli_source: Option<PathBuf>,
 }
 
@@ -139,13 +137,6 @@ async fn build(
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use clap::Parser;
-
-    #[derive(Parser)]
-    struct Args {
-        #[command(flatten)]
-        cli: CliSelection,
-    }
 
     #[test]
     fn a_pull_request_of_mostro_cli_is_built_from_its_head() {
@@ -170,12 +161,13 @@ mod tests {
     }
 
     #[test]
-    fn the_three_sources_exclude_one_another() {
-        assert!(Args::try_parse_from(["t", "--cli-artifact", "/x", "--cli-ref", "main"]).is_err());
-        assert!(Args::try_parse_from(["t", "--cli-source", "/x", "--cli-ref", "main"]).is_err());
-        let parsed = Args::try_parse_from(["t", "--cli-ref", "develop"]).unwrap();
-        assert_eq!(parsed.cli.cli_ref.unwrap().git_ref(), "refs/heads/develop");
-        assert!(Args::try_parse_from(["t"]).unwrap().cli.is_empty());
+    fn nothing_selected_is_an_empty_selection() {
+        assert!(CliSelection::default().is_empty());
+        let selected = CliSelection {
+            cli_ref: Some(Selector::main()),
+            ..CliSelection::default()
+        };
+        assert!(!selected.is_empty());
     }
 
     #[test]

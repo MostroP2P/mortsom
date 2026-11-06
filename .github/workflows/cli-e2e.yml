@@ -44,9 +44,9 @@ jobs:
       - name: Regtest stack
         run: $MORTSOM stack up
       - name: Preflight
-        run: $MORTSOM doctor --profile cli --cli-ref "$CLI_REF"
+        run: $MORTSOM doctor --profile cli --ref "$CLI_REF"
       - name: Run
-        run: $MORTSOM run --profile cli --cli-ref "$CLI_REF" --tag "$TAG"
+        run: $MORTSOM run --profile cli --ref "$CLI_REF" --tag "$TAG"
       - name: Cleanup what the run may have left
         if: always()
         run: |

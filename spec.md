@@ -102,29 +102,29 @@ mortsom run happy_buy --platform linux
 mortsom run happy_buy --platform web
 
 # Select a remote branch or paste a GitHub PR URL; use its exact head.
-mortsom run happy_sell --app-ref main
-mortsom run --tag happy-path --platform web --app-ref https://github.com/MostroP2P/app/pull/123
+mortsom run happy_sell --ref main
+mortsom run --tag happy-path --platform web --ref https://github.com/MostroP2P/app/pull/123
 
 # The whole catalogue: every registered scenario, one run each.
 mortsom run
 
 # Explicit developer checkout (including local changes).
-mortsom run happy_sell --app-source ../mobilev2
+mortsom run happy_sell --source ../mobilev2
 
 # Build from source even when an identical kept bundle exists.
 mortsom run happy_sell --rebuild
 
 # Reuse a build instead of compiling from source.
-mortsom run happy_sell --platform linux --app-artifact /path/to/bundle/mostro
-mortsom run happy_sell --platform web   --app-artifact /path/to/build/web
+mortsom run happy_sell --platform linux --artifact /path/to/bundle/mostro
+mortsom run happy_sell --platform web   --artifact /path/to/build/web
 
 # mostro-cli instead of the app (profile `cli`, section 6.3): main of MostroP2P/mostro-cli by default,
 # a branch or pull request, a local checkout, or a prebuilt executable.
 mortsom doctor --profile cli
 mortsom run --profile cli --tag smoke
-mortsom run --profile cli happy_sell --cli-ref https://github.com/MostroP2P/mostro-cli/pull/123
-mortsom run --profile cli happy_buy --cli-source ../mostro-cli
-mortsom run --profile cli --tag smoke --cli-artifact /path/to/mostro-cli
+mortsom run --profile cli happy_sell --ref https://github.com/MostroP2P/mostro-cli/pull/123
+mortsom run --profile cli happy_buy --source ../mostro-cli
+mortsom run --profile cli --tag smoke --artifact /path/to/mostro-cli
 
 # Recover a run that left orders, payments or profiles behind.
 mortsom cleanup <run-id>
@@ -291,8 +291,13 @@ fails before any actor starts.
 
 ## 7. Client builds and automation contract
 
+`--artifact`, `--source` and `--ref` select the build of the client the profile drives: the app for
+`mobile-v2`, mostro-cli for `cli`. The profile is `--profile`, else `mobile.profile` (local overlay
+included). The three conflict, and a `--ref` outside the profile's repository is an argument error before
+anything starts.
+
 Without an explicit local source or prebuilt artifact, Mortsom fetches `main` from
-`https://github.com/MostroP2P/app.git`. `--app-ref` accepts a branch name or a canonical
+`https://github.com/MostroP2P/app.git`. `--ref` accepts a branch name or a canonical
 `https://github.com/MostroP2P/app/pull/<number>` URL (optional trailing slash). The matching
 `refs/heads/<branch>` or `refs/pull/<number>/head` is fetched on every invocation; PRs use the proposal's
 head, including fork PRs, never the base branch or synthetic merge. Invalid selectors and missing or
@@ -314,13 +319,13 @@ kept bundle that fails verification or the artifact checks, which its fingerprin
 Linux executable that lost its mode), is discarded and the source is built. The key sees nothing of the host
 beyond those tool versions, such as compiler flags in the environment or upgraded system libraries;
 `run --rebuild` covers such a change, building even on a match and replacing the kept bundle. It conflicts
-with `--app-artifact`. At most four bundles are kept; the least recently used are evicted after a store.
+with `--artifact`. At most four bundles are kept; the least recently used are evicted after a store.
 Local checkouts and prebuilt artifacts are never kept or reused. Failing to read or keep a bundle is logged
 as a warning and falls back to, or keeps, the fresh build.
 
 `mobile.app_ref` configures the same selector; omitting it selects `main`. `mobile.source_dir` selects an
-explicit developer checkout and conflicts with `mobile.app_ref`. `--app-source` and `--app-ref` override the
-configured source mode. They conflict with each other and with `--app-artifact`. Prebuilt artifacts bypass
+explicit developer checkout and conflicts with `mobile.app_ref`. `--source` and `--ref` override the
+configured source mode. They conflict with each other and with `--artifact`. Prebuilt artifacts bypass
 source fetching/building. Existing local-source configurations remain supported, including their dirty state.
 `doctor` checks installed tools without fetching or building remote source and marks source-contract checks
 as deferred until `run` fetches it. Neither command changes the daemon version or stack lifecycle.
@@ -341,9 +346,9 @@ use the same artifact. A prebuilt artifact or kept bundle must pass the same vis
 checks as a fresh build.
 
 A `cli` run builds `main` of `https://github.com/MostroP2P/mostro-cli.git` unless told otherwise.
-`--cli-ref` accepts a branch name or a canonical `https://github.com/MostroP2P/mostro-cli/pull/<number>`
+`--ref` accepts a branch name or a canonical `https://github.com/MostroP2P/mostro-cli/pull/<number>`
 URL, fetched like an app ref into the ignored `.mortsom/mostro-cli/` cache and built detached and clean;
-`--cli-source` builds a local checkout, dirty state included; `--cli-artifact` takes a prebuilt
+`--source` builds a local checkout, dirty state included; `--artifact` takes a prebuilt
 executable. The three conflict. The build is `cargo build --release --locked --bin mostro-cli` with a
 shared, ignored target directory under `.mortsom/mostro-cli/`, so a repeated or nearby commit compiles
 incrementally; the provenance records the selector, fetched commit, dirty flag, package version, `rustc`

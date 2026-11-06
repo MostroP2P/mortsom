@@ -187,22 +187,15 @@ async fn run_once(
             return Attempt::Refused(e.to_string());
         }
     };
-    // The client is decided before anything is admitted or built, and a
-    // flag that selects the other client is refused rather than ignored.
+    // The client is decided before anything is admitted or built. The build
+    // flags were already read for the same profile (`cli::select_client`).
     let platform = match crate::mostro_cli::resolve_client(
         &config.mobile.profile,
         profile.as_deref(),
         platform,
     )
-    .and_then(|(_, platform)| {
-        crate::mostro_cli::check_flags(
-            platform,
-            artifact.is_some(),
-            source.selection().is_some(),
-            &cli,
-        )
-        .map(|()| platform)
-    }) {
+    .map(|(_, platform)| platform)
+    {
         Ok(platform) => platform,
         Err(error) => return Attempt::Refused(error),
     };

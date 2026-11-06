@@ -11,7 +11,7 @@ mod run_report;
 mod source;
 use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};
 use run::run_command;
-pub use source::SourceOverrides;
+pub use source::{ClientBuild, ClientSelection, SourceOverrides, effective_profile};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -138,19 +138,13 @@ pub enum Command {
         /// app) or `cli` (mostro-cli).
         #[arg(long, value_name = "PROFILE")]
         profile: Option<String>,
-        /// The mostro-cli to drive with profile `cli`.
+        /// The build of the profile's client.
         #[command(flatten)]
-        cli: crate::mostro_cli_build::CliSelection,
-        /// Prebuilt native executable or Web bundle; otherwise builds the source.
-        #[arg(long)]
-        app_artifact: Option<PathBuf>,
+        build: ClientBuild,
         /// Build the fetched app even when an identical kept bundle exists,
         /// and replace it.
-        #[arg(long, conflicts_with = "app_artifact")]
+        #[arg(long, conflicts_with = "artifact")]
         rebuild: bool,
-        /// Override configured source selection.
-        #[command(flatten)]
-        source: SourceOverrides,
         /// Xvfb executable for isolated Linux desktops.
         #[arg(long, default_value = "Xvfb")]
         xvfb: PathBuf,
@@ -178,15 +172,10 @@ pub enum Command {
         /// Client profile, overriding `mobile.profile`: `mobile-v2` or `cli`.
         #[arg(long, value_name = "PROFILE")]
         profile: Option<String>,
-        /// The mostro-cli to check with profile `cli`.
+        /// The build of the profile's client to check: an artifact is
+        /// validated instead of the build prerequisites.
         #[command(flatten)]
-        cli: crate::mostro_cli_build::CliSelection,
-        /// Validate an existing artifact instead of source/build prerequisites.
-        #[arg(long)]
-        app_artifact: Option<PathBuf>,
-        /// Override configured source selection.
-        #[command(flatten)]
-        source: SourceOverrides,
+        build: ClientBuild,
         /// Skip every check that opens a network connection.
         #[arg(long)]
         no_network: bool,
@@ -492,12 +481,14 @@ pub async fn run(cli: Cli) -> ExitCode {
             tag,
             platform,
             profile,
-            cli: cli_selection,
-            app_artifact,
+            build,
             rebuild,
-            source,
             xvfb,
         } => {
+            let client = match select_client(&cli.config, profile.as_deref(), &build) {
+                Ok(client) => client,
+                Err(code) => return code,
+            };
             run_command(
                 &cli.config,
                 &cli.stack_dir,
@@ -507,14 +498,14 @@ pub async fn run(cli: Cli) -> ExitCode {
                     tag,
                     platform,
                     profile,
-                    cli: cli_selection,
-                    artifact: app_artifact,
+                    cli: client.cli,
+                    artifact: client.artifact,
                     policy: if rebuild {
                         crate::build_cache::Policy::Rebuild
                     } else {
                         crate::build_cache::Policy::Reuse
                     },
-                    source,
+                    source: client.source,
                     xvfb,
                 },
             )
@@ -526,16 +517,18 @@ pub async fn run(cli: Cli) -> ExitCode {
             json,
             platform,
             profile,
-            cli: cli_selection,
-            app_artifact,
-            source,
+            build,
         } => {
+            let client = match select_client(&cli.config, profile.as_deref(), &build) {
+                Ok(client) => client,
+                Err(code) => return code,
+            };
             // The daemon probe waits for events republished on the daemon's
             // own cycle, so it uses the configured health timeout.
             let net = match Config::diagnose_with_source(
                 &cli.config,
                 |name| RealHost.env(name),
-                source.selection().as_ref(),
+                client.source.selection().as_ref(),
             )
             .config
             {
@@ -550,9 +543,9 @@ pub async fn run(cli: Cli) -> ExitCode {
                 &crate::doctor::DesktopDoctorOptions {
                     platform,
                     profile,
-                    cli: cli_selection,
-                    artifact: app_artifact,
-                    source,
+                    cli: client.cli,
+                    artifact: client.artifact,
+                    source: client.source,
                     no_network,
                 },
                 &RealHost,
@@ -597,6 +590,22 @@ pub async fn adapter_for(
         }
         _ => Ok(select_adapter()),
     }
+}
+
+/// Reads `--artifact`, `--source` and `--ref` for the profile the
+/// invocation drives; a `--ref` outside that profile's repository is an
+/// argument error, reported before anything starts.
+fn select_client(
+    config_path: &std::path::Path,
+    profile: Option<&str>,
+    build: &ClientBuild,
+) -> Result<ClientSelection, ExitCode> {
+    build
+        .for_profile(&effective_profile(config_path, profile))
+        .map_err(|error| {
+            eprintln!("error: {error}");
+            ExitCode::from(2)
+        })
 }
 
 async fn run_relay(config_path: &std::path::Path, command: RelayCommand) -> ExitCode {
@@ -783,7 +792,7 @@ mod tests {
                 "mortsom",
                 "run",
                 "--rebuild",
-                "--app-artifact",
+                "--artifact",
                 "/bundle/mostro"
             ])
             .is_err()

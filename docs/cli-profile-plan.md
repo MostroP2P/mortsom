@@ -9,7 +9,7 @@ Base: Mortsom `main` (9dbe627), mostro-cli `main` (6cff9b5).
 |---|---|
 | 0 — contract and prerequisites | `spec.md` §6.3 and the related sections, `AGENTS.md`, `docs/cli-contract.md`. mostro-cli: `identity init`/`identity show` and `--invoice -` implemented (specs 009, 010). |
 | 1 — driver, adapter, smoke | `crates/cli-driver`, `crates/app-adapters/cli`, `Platform::Cli`, `--profile`, CLI preparation, sessions, evidence (`cli.jsonl`), recovery. Unit and process tests pass. Live: a manual regtest trade with the CLI went pending → waiting-payment → active → fiat-sent → success. |
-| 2 — builds and CI | `--cli-ref`, `--cli-source`, `--cli-artifact`, `doctor --profile cli`; workflow `mostro-cli e2e` (Mortsom), by hand with a mostro-cli branch or pull request, and nightly. A `pull_request` workflow in mostro-cli is left out: Mortsom is private, so it would need a token and would publish Mortsom's logs. |
+| 2 — builds and CI | `--ref`, `--source`, `--artifact`, `doctor --profile cli`; workflow `mostro-cli e2e` (Mortsom), by hand with a mostro-cli branch or pull request, and nightly. A `pull_request` workflow in mostro-cli is left out: Mortsom is private, so it would need a token and would publish Mortsom's logs. |
 | 3 — more families | Adapter covers range (`order sync`), cancellations, payment failures, restarts, disputes, rating, bonds. mostro-cli: `order mine`, `--expires-in`, `dispute open`, `order rate`, bond flows and `--reply-timeout` (specs 011–016). |
 | 4 — parity | Intentional differences can be scoped to profiles (`profiles = [...]`). Live: `mortsom parity` between the Linux app and the CLI shows parity with no difference on `happy_sell`, `happy_buy` and `cancel_before_taken`. |
 
@@ -86,14 +86,14 @@ gets its own adapter.
 - `crates/cli-driver` (new): process boundary with stdin and an emptied
   environment, envelope parser, sanitized transcript, `CliSession`.
 - `crates/app-adapters/cli` (new): `CliAdapter`.
-- Coordinator: `--profile`, `--cli-artifact`, adapter selection, CLI
+- Coordinator: `--profile`, `--artifact`, adapter selection, CLI
   preparation and sessions.
-- Exit: `mortsom run --profile cli --cli-artifact <bin> --tag smoke` passes.
+- Exit: `mortsom run --profile cli --artifact <bin> --tag smoke` passes.
 
 ### Phase 2 — build from main or a pull request, and CI
 
-- `Upstream` for `MostroP2P/mostro-cli` (`--cli-ref <branch|PR URL>`,
-  `--cli-source <dir>`), `cargo build --release --locked`, kept builds.
+- `Upstream` for `MostroP2P/mostro-cli` (`--ref <branch|PR URL>`,
+  `--source <dir>`), `cargo build --release --locked`, kept builds.
 - `doctor --profile cli`: `mostro-cli schema --output json` must expose
   schema version 1 and every command the adapter uses.
 - CI: a Mortsom workflow (manual with a `cli_ref` input, plus nightly). A

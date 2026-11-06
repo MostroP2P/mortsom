@@ -35,7 +35,7 @@ pub async fn run_desktop_doctor(
     let mut report = DoctorReport::default();
     // The configured profile counts as much as `--profile`: read it before
     // the tools are checked, since they differ per client.
-    let configured = configured_profile(config_path);
+    let configured = crate::config::configured_profile(config_path);
     let cli_requested = crate::mostro_cli::resolve_client(
         configured
             .as_deref()
@@ -143,16 +143,6 @@ pub async fn run_desktop_doctor(
 
 /// `mobile.profile` as the configuration file names it, read without
 /// resolving anything else; `None` when the file or the key is absent.
-fn configured_profile(config_path: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(config_path).ok()?;
-    let value: toml::Value = toml::from_str(&text).ok()?;
-    value
-        .get("mobile")?
-        .get("profile")?
-        .as_str()
-        .map(str::to_owned)
-}
-
 async fn check_tools(
     platform: Platform,
     needs_build: bool,

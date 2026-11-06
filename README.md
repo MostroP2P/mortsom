@@ -248,13 +248,13 @@ With the default configuration, `run` fetches `main` from `MostroP2P/app`, build
 platform and executes the scenarios. Use one selector flag for a branch or a pasted GitHub PR URL:
 
 ```sh
-./target/debug/mortsom run happy_sell --app-ref main
-./target/debug/mortsom run happy_buy --platform web --app-ref main
-./target/debug/mortsom run happy_sell --app-ref https://github.com/MostroP2P/app/pull/410
+./target/debug/mortsom run happy_sell --ref main
+./target/debug/mortsom run happy_buy --platform web --ref main
+./target/debug/mortsom run happy_sell --ref https://github.com/MostroP2P/app/pull/410
 ./target/debug/mortsom run --tag happy-path --platform web \
-  --app-ref https://github.com/MostroP2P/app/pull/410
+  --ref https://github.com/MostroP2P/app/pull/410
 # Replace the example with any branch that exists in MostroP2P/app:
-./target/debug/mortsom run --tag cancellation --app-ref feature/my-fix
+./target/debug/mortsom run --tag cancellation --ref feature/my-fix
 ```
 
 PR selectors fetch the **PR head commit**, including contributions from forks. They never test the base or
@@ -276,7 +276,7 @@ skips several minutes of compilation. Its report then shows `app_build.origin = 
 original build's facts. Anything that changes a key input (a new commit, a new stack identity, a toolchain
 upgrade) builds again. The key does not see compiler flags set in the environment or upgraded system
 libraries: after such a change, `--rebuild` builds even on a match and replaces the kept bundle. The four most
-recently used bundles are kept. Local checkouts (`--app-source`) and `--app-artifact` are never kept or
+recently used bundles are kept. Local checkouts (`--source`) and `--artifact` are never kept or
 reused.
 
 The entire invocation, including a family selected with `--tag`, builds and captures **one bundle** and
@@ -295,19 +295,20 @@ selected scenarios; an older or incompatible PR reports the missing file/control
 ### Local source and prebuilt alternatives
 
 ```sh
-./target/debug/mortsom run happy_sell --app-source ../mobilev2
-./target/debug/mortsom doctor --platform web --app-source ../mobilev2
+./target/debug/mortsom run happy_sell --source ../mobilev2
+./target/debug/mortsom doctor --platform web --source ../mobilev2
 ./target/debug/mortsom run happy_sell --platform linux \
-  --app-artifact ../mobilev2/build/linux/x64/release/bundle/mostro
-./target/debug/mortsom run happy_buy --platform web --app-artifact ../mobilev2/build/web
+  --artifact ../mobilev2/build/linux/x64/release/bundle/mostro
+./target/debug/mortsom run happy_buy --platform web --artifact ../mobilev2/build/web
 ```
 
 `mobile.source_dir` also preserves the explicit local-checkout workflow and its intentional local changes.
-`mobile.app_ref` selects managed source instead; these config keys conflict. CLI `--app-ref` or
-`--app-source` overrides the configured source mode. `--app-artifact` bypasses fetching and building;
-the three CLI choices are mutually exclusive. Relative paths are resolved from the current directory.
+`mobile.app_ref` selects managed source instead; these config keys conflict. `--ref` or `--source`
+overrides the configured source mode. `--artifact` bypasses fetching and building; the three are mutually
+exclusive. Relative paths are resolved from the current directory. The same three flags select
+mostro-cli's build under `--profile cli`: they always mean the client of the profile in use.
 
-For Linux, point `--app-artifact` at the executable inside the complete bundle; for Web, at the output
+For Linux, point `--artifact` at the executable inside the complete bundle; for Web, at the output
 directory. Mortsom hashes and captures the whole bundle. Prebuilt source history is explicitly unknown.
 To compile and verify without launching clients, use the preparation example (optional branch/PR argument):
 
@@ -330,14 +331,15 @@ nodes, since the CLI has no wallet. The contract is [docs/cli-contract.md](docs/
 ./target/debug/mortsom doctor --profile cli                       # git and cargo for a source build
 ./target/debug/mortsom run --profile cli --tag smoke              # builds main of MostroP2P/mostro-cli
 ./target/debug/mortsom run --profile cli happy_sell \
-  --cli-ref https://github.com/MostroP2P/mostro-cli/pull/123      # a branch or a pull request's head
-./target/debug/mortsom run --profile cli --tag smoke --cli-source ../mostro-cli   # local checkout
-./target/debug/mortsom doctor --profile cli --cli-artifact ../mostro-cli/target/release/mostro-cli
-./target/debug/mortsom run --profile cli --tag smoke --cli-artifact ../mostro-cli/target/release/mostro-cli
+  --ref https://github.com/MostroP2P/mostro-cli/pull/123     # a branch or a pull request's head
+./target/debug/mortsom run --profile cli --tag smoke --source ../mostro-cli      # local checkout
+./target/debug/mortsom doctor --profile cli --artifact ../mostro-cli/target/release/mostro-cli
+./target/debug/mortsom run --profile cli --tag smoke --artifact ../mostro-cli/target/release/mostro-cli
 ```
 
-`--cli-ref`, `--cli-source` and `--cli-artifact` are mutually exclusive; `--platform` is refused with the
-CLI. Source builds run `cargo build --release --locked --bin mostro-cli` with a shared target directory
+`--ref`, `--source` and `--artifact` are the app's flags read for mostro-cli: `--ref` must name a branch
+or a pull request of `MostroP2P/mostro-cli`, and the three are mutually exclusive. `--platform` is refused
+with the CLI. Source builds run `cargo build --release --locked --bin mostro-cli` with a shared target directory
 under `.mortsom/mostro-cli/`. The run first reads the CLI's offline discovery (`mostro-cli schema`): a CLI
 without the commands the profile needs is refused before an actor starts, and a scenario needing a
 capability the CLI does not offer (rating without `order rate`, `pending_order_expires` without
@@ -500,7 +502,7 @@ Older journals without recorded environment facts cannot be abandoned. To keep s
 and intact while explicitly using a **different, verified Mortsom regtest stack**:
 
 ```sh
-mortsom run --tag smoke --app-ref https://github.com/MostroP2P/app/pull/456 \
+mortsom run --tag smoke --ref https://github.com/MostroP2P/app/pull/456 \
   --preserve-legacy-recovery <run-id>
 ```
 

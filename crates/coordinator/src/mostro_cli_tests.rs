@@ -90,22 +90,6 @@ fn the_profile_decides_the_runtime_and_refuses_a_platform_with_the_cli() {
 }
 
 #[test]
-fn a_flag_for_the_other_client_is_refused_not_ignored() {
-    use crate::mostro_cli_build::CliSelection;
-    let none = CliSelection::default();
-    let with_cli = CliSelection {
-        cli_artifact: Some("/x".into()),
-        ..CliSelection::default()
-    };
-
-    assert!(check_flags(Platform::Cli, false, false, &with_cli).is_ok());
-    assert!(check_flags(Platform::Cli, true, false, &none).is_err());
-    assert!(check_flags(Platform::Cli, false, true, &none).is_err());
-    assert!(check_flags(Platform::Linux, false, false, &with_cli).is_err());
-    assert!(check_flags(Platform::Web, true, true, &none).is_ok());
-}
-
-#[test]
 fn discovery_keeps_only_commands_with_a_json_mode() {
     let mut commands = every_required();
     commands
