@@ -25,5 +25,7 @@ pub use call::{Call, NodeTarget};
 pub use client::{CliClient, CliConfig};
 pub use envelope::{Envelope, Status, unsigned_of};
 pub use error::{CliError, category_of_code};
-pub use process::{CliProcess, ProcessFailure, ProcessOutput, ProcessRequest, TokioCliProcess};
+pub use process::{
+    CliProcess, ProcessFailed, ProcessFailure, ProcessOutput, ProcessRequest, TokioCliProcess,
+};
 pub use session::CliSession;

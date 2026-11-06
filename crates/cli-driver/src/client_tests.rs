@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
-use crate::process::{ProcessFailure, ProcessOutput};
+use crate::process::{ProcessFailed, ProcessFailure, ProcessOutput};
 use crate::testing::{ScriptedCli, document};
 use mortsom_common::Secret;
 
@@ -199,7 +199,7 @@ impl CliProcess for SlowCli {
         &self,
         request: &ProcessRequest,
         _timeout: Duration,
-    ) -> Result<ProcessOutput, ProcessFailure> {
+    ) -> Result<ProcessOutput, ProcessFailed> {
         tokio::time::sleep(self.delay).await;
         let command = crate::testing::command_of(&request.args);
         Ok(document(&command, "ok", &serde_json::json!({}), None, 0))
@@ -271,7 +271,7 @@ async fn a_crash_is_a_product_failure_and_an_argument_refusal_a_contract_one() {
     };
     cli.raw("order.new", silent(101));
     cli.raw("order.new", silent(2));
-    cli.raw("order.new", Err(ProcessFailure::Signaled));
+    cli.raw("order.new", Err(ProcessFailure::Signaled.into()));
 
     let crashed = client
         .invoke(Call::node(&["order", "new"]))
@@ -313,4 +313,33 @@ async fn standard_error_keeps_no_invoice() {
     let stderr = &client.diagnostics()[1].1;
     assert!(!stderr.contains("lnbcrt"), "{stderr}");
     assert!(!stderr.contains("someone@example.com"), "{stderr}");
+}
+
+/// A child that timed out may have printed why: its standard error reaches
+/// the run's evidence, sanitized like any other.
+#[tokio::test]
+async fn a_timed_out_invocation_keeps_its_standard_error() {
+    let (cli, client) = launched();
+    cli.raw(
+        "order.new",
+        Err(ProcessFailed {
+            failure: ProcessFailure::Timeout(Duration::from_secs(1)),
+            stderr: "waiting on relay for lnbcrt10n1pqqqqqqqqqqqqqqqqqqqqqqqqqqq\n".into(),
+        }),
+    );
+
+    let error = client
+        .invoke(Call::node(&["order", "new"]))
+        .await
+        .unwrap_err();
+
+    assert!(matches!(error, CliError::Process { .. }), "{error}");
+    let diagnostics = client.diagnostics();
+    let stderr = &diagnostics
+        .iter()
+        .find(|(name, _)| name == "cli-stderr.log")
+        .unwrap()
+        .1;
+    assert!(stderr.contains("waiting on relay"), "{stderr}");
+    assert!(!stderr.contains("lnbcrt"), "{stderr}");
 }

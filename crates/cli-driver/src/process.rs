@@ -18,6 +18,9 @@ use zeroize::Zeroizing;
 /// How much of each output stream is kept; the rest is drained unread so a
 /// runaway child can neither block on a full pipe nor exhaust memory.
 const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
+/// How long a failed invocation waits for the standard error of a child it
+/// already ended: a descendant still holding the pipe cannot hold it up.
+const STDERR_GRACE: Duration = Duration::from_secs(1);
 
 /// One invocation of the executable.
 #[derive(Debug, Clone)]
@@ -63,6 +66,31 @@ pub enum ProcessFailure {
     Signaled,
 }
 
+/// A run that produced no output, with the standard error the child wrote
+/// before it ended (a timed-out or killed child may have said why).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessFailed {
+    /// What went wrong.
+    pub failure: ProcessFailure,
+    /// The child's standard error, bounded and not yet sanitized.
+    pub stderr: String,
+}
+
+impl From<ProcessFailure> for ProcessFailed {
+    fn from(failure: ProcessFailure) -> Self {
+        Self {
+            failure,
+            stderr: String::new(),
+        }
+    }
+}
+
+impl std::fmt::Display for ProcessFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.failure.fmt(f)
+    }
+}
+
 /// Runs the executable once per request.
 #[async_trait]
 pub trait CliProcess: Send + Sync {
@@ -72,7 +100,7 @@ pub trait CliProcess: Send + Sync {
         &self,
         request: &ProcessRequest,
         timeout: Duration,
-    ) -> Result<ProcessOutput, ProcessFailure>;
+    ) -> Result<ProcessOutput, ProcessFailed>;
 }
 
 /// The real child process, killed when its deadline passes.
@@ -85,7 +113,7 @@ impl CliProcess for TokioCliProcess {
         &self,
         request: &ProcessRequest,
         timeout: Duration,
-    ) -> Result<ProcessOutput, ProcessFailure> {
+    ) -> Result<ProcessOutput, ProcessFailed> {
         let mut command = tokio::process::Command::new(&request.program);
         command
             .args(&request.args)
@@ -102,7 +130,7 @@ impl CliProcess for TokioCliProcess {
             .kill_on_drop(true);
         let mut child = command
             .spawn()
-            .map_err(|e| ProcessFailure::Spawn(e.to_string()))?;
+            .map_err(|e| ProcessFailed::from(ProcessFailure::Spawn(e.to_string())))?;
         let stdout = tokio::spawn(read_bounded(child.stdout.take()));
         let stderr = tokio::spawn(read_bounded(child.stderr.take()));
         let stdin = child.stdin.take();
@@ -122,21 +150,35 @@ impl CliProcess for TokioCliProcess {
             Ok(Ok(status)) => status,
             Ok(Err(failure)) => {
                 reap(&mut child).await;
-                return Err(failure);
+                return Err(failed(failure, stderr).await);
             }
             // Killed and waited for: the child is gone before we say so.
             Err(_) => {
                 reap(&mut child).await;
-                return Err(ProcessFailure::Timeout(timeout));
+                return Err(failed(ProcessFailure::Timeout(timeout), stderr).await);
             }
         };
-        let code = status.code().ok_or(ProcessFailure::Signaled)?;
+        let Some(code) = status.code() else {
+            return Err(failed(ProcessFailure::Signaled, stderr).await);
+        };
         Ok(ProcessOutput {
             code: Some(code),
             stdout: joined(stdout).await?,
             stderr: joined(stderr).await?,
         })
     }
+}
+
+/// `failure`, with what the ended child had written to standard error.
+async fn failed(
+    failure: ProcessFailure,
+    stderr: tokio::task::JoinHandle<std::io::Result<String>>,
+) -> ProcessFailed {
+    let stderr = match tokio::time::timeout(STDERR_GRACE, joined(stderr)).await {
+        Ok(Ok(text)) => text,
+        _ => String::new(),
+    };
+    ProcessFailed { failure, stderr }
 }
 
 /// Kills the child and waits for it to be gone.
@@ -280,7 +322,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(failure, ProcessFailure::Timeout(Duration::from_millis(200)));
+        assert_eq!(
+            failure.failure,
+            ProcessFailure::Timeout(Duration::from_millis(200))
+        );
     }
 
     #[tokio::test]
@@ -292,7 +337,7 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(failure, ProcessFailure::Signaled);
+        assert_eq!(failure.failure, ProcessFailure::Signaled);
     }
 
     #[tokio::test]
@@ -307,7 +352,10 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert_eq!(failure, ProcessFailure::Timeout(Duration::from_millis(300)));
+        assert_eq!(
+            failure.failure,
+            ProcessFailure::Timeout(Duration::from_millis(300))
+        );
         let pid = std::fs::read_to_string(&pid_file).unwrap();
         let proc_dir = std::path::Path::new("/proc").join(pid.trim());
         assert!(!proc_dir.exists(), "the timed-out child is still alive");
@@ -323,6 +371,31 @@ mod tests {
             .await
             .unwrap_err();
 
-        assert!(matches!(failure, ProcessFailure::Spawn(_)), "{failure:?}");
+        assert!(
+            matches!(failure.failure, ProcessFailure::Spawn(_)),
+            "{failure:?}"
+        );
+    }
+
+    /// A child that hangs or is killed may have said why on standard error:
+    /// the failure carries it, so the run's evidence keeps it.
+    #[tokio::test]
+    async fn a_failed_child_keeps_what_it_wrote_to_standard_error() {
+        let hung = shell("echo stuck >&2; exec sleep 30", &[], None);
+        let killed = shell("echo bye >&2; kill -9 $$", &[], None);
+
+        let timed_out = TokioCliProcess
+            .run(&hung, Duration::from_millis(300))
+            .await
+            .unwrap_err();
+        let signaled = TokioCliProcess
+            .run(&killed, Duration::from_secs(10))
+            .await
+            .unwrap_err();
+
+        assert!(matches!(timed_out.failure, ProcessFailure::Timeout(_)));
+        assert_eq!(timed_out.stderr.trim(), "stuck");
+        assert_eq!(signaled.failure, ProcessFailure::Signaled);
+        assert_eq!(signaled.stderr.trim(), "bye");
     }
 }

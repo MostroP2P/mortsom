@@ -10,7 +10,7 @@ use mortsom_common::Secret;
 use crate::call::Call;
 use crate::envelope::{Envelope, Status};
 use crate::error::CliError;
-use crate::process::{ProcessFailure, ProcessOutput};
+use crate::process::{ProcessFailed, ProcessOutput};
 use crate::transcript::{Recorded, Transcript, scrub};
 
 /// How much of the CLI's standard error is kept per actor.
@@ -31,18 +31,23 @@ impl Evidence {
         call: &Call,
         argv: &[String],
         elapsed_ms: u64,
-        result: Result<ProcessOutput, ProcessFailure>,
+        result: Result<ProcessOutput, ProcessFailed>,
     ) -> Result<Envelope, CliError> {
         let command = call.name();
+        let secrets: Vec<&Secret> = call.stdin().into_iter().collect();
         let output = match result {
             Ok(output) => output,
-            Err(cause) => {
-                let what = Recorded::Failure(cause.to_string(), None);
+            Err(ProcessFailed { failure, stderr }) => {
+                // A child that hung or was killed may have said why.
+                self.keep_stderr(&scrub(&stderr, &secrets));
+                let what = Recorded::Failure(failure.to_string(), None);
                 self.record(&command, argv, elapsed_ms, what);
-                return Err(CliError::Process { command, cause });
+                return Err(CliError::Process {
+                    command,
+                    cause: failure,
+                });
             }
         };
-        let secrets: Vec<&Secret> = call.stdin().into_iter().collect();
         self.keep_stderr(&scrub(&output.stderr, &secrets));
         if let Some(error) = without_document(&command, &output) {
             let what = Recorded::Failure(error.to_string(), output.code);

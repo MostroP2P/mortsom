@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use crate::process::{CliProcess, ProcessFailure, ProcessOutput, ProcessRequest};
+use crate::process::{CliProcess, ProcessFailed, ProcessFailure, ProcessOutput, ProcessRequest};
 
 /// One recorded request.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +26,7 @@ pub struct SeenRequest {
 /// Answers by dotted command name; unscripted commands time out.
 #[derive(Debug, Default)]
 pub struct ScriptedCli {
-    answers: Mutex<BTreeMap<String, VecDeque<Result<ProcessOutput, ProcessFailure>>>>,
+    answers: Mutex<BTreeMap<String, VecDeque<Result<ProcessOutput, ProcessFailed>>>>,
     sticky: Mutex<BTreeMap<String, ProcessOutput>>,
     seen: Mutex<Vec<SeenRequest>>,
 }
@@ -51,7 +51,7 @@ impl ScriptedCli {
     }
 
     /// Queues a raw process answer.
-    pub fn raw(&self, command: &str, answer: Result<ProcessOutput, ProcessFailure>) {
+    pub fn raw(&self, command: &str, answer: Result<ProcessOutput, ProcessFailed>) {
         self.queue(command, answer);
     }
 
@@ -70,7 +70,7 @@ impl ScriptedCli {
         self.seen().into_iter().map(|r| r.command).collect()
     }
 
-    fn queue(&self, command: &str, answer: Result<ProcessOutput, ProcessFailure>) {
+    fn queue(&self, command: &str, answer: Result<ProcessOutput, ProcessFailed>) {
         lock(&self.answers)
             .entry(command.to_owned())
             .or_default()
@@ -84,7 +84,7 @@ impl CliProcess for ScriptedCli {
         &self,
         request: &ProcessRequest,
         timeout: Duration,
-    ) -> Result<ProcessOutput, ProcessFailure> {
+    ) -> Result<ProcessOutput, ProcessFailed> {
         let command = command_of(&request.args);
         lock(&self.seen).push(SeenRequest {
             command: command.clone(),
@@ -100,7 +100,7 @@ impl CliProcess for ScriptedCli {
         }
         match lock(&self.sticky).get(&command) {
             Some(output) => Ok(output.clone()),
-            None => Err(ProcessFailure::Timeout(timeout)),
+            None => Err(ProcessFailure::Timeout(timeout).into()),
         }
     }
 }
