@@ -1,27 +1,35 @@
 //! The boundary to the mostro-cli executable: one bounded child process per
-//! invocation, with an emptied environment, a private working directory and
-//! an optional secret written to standard input. Tests inject a scripted
-//! process instead (`testing`).
+//! invocation, leading its own process group, with an emptied environment,
+//! a private working directory and an optional secret written to standard
+//! input. Tests inject a scripted process instead (`testing`).
 
 use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use mortsom_common::Secret;
+use rustix::io::Errno;
+use rustix::process::{
+    Pid, Signal, WaitId, WaitIdOptions, WaitIdStatus, kill_process_group, waitid,
+};
 use thiserror::Error;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::time::{Instant, MissedTickBehavior};
 use zeroize::Zeroizing;
 
 /// How much of each output stream is kept; the rest is drained unread so a
 /// runaway child can neither block on a full pipe nor exhaust memory.
 const OUTPUT_LIMIT: usize = 4 * 1024 * 1024;
 /// How long a failed invocation waits for the standard error of a child it
-/// already ended: a descendant still holding the pipe cannot hold it up.
+/// already ended: a holder that left its group cannot hold it up.
 const STDERR_GRACE: Duration = Duration::from_secs(1);
+/// How often a running child is checked for an exit, which is observed
+/// without reaping the child.
+const EXIT_POLL: Duration = Duration::from_millis(10);
 
 /// One invocation of the executable.
 #[derive(Debug, Clone)]
@@ -104,7 +112,9 @@ pub trait CliProcess: Send + Sync {
     ) -> Result<ProcessOutput, ProcessFailed>;
 }
 
-/// The real child process, killed when its deadline passes.
+/// The real child process. Whether it exits, fails or outlives its deadline,
+/// every descendant still in its process group is killed before it is
+/// reaped.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct TokioCliProcess;
 
@@ -115,82 +125,243 @@ impl CliProcess for TokioCliProcess {
         request: &ProcessRequest,
         timeout: Duration,
     ) -> Result<ProcessOutput, ProcessFailed> {
-        let mut command = tokio::process::Command::new(&request.program);
-        command
-            .args(&request.args)
-            .env_clear()
-            .envs(&request.env)
-            .current_dir(&request.current_dir)
-            .stdin(if request.stdin.is_some() {
-                Stdio::piped()
-            } else {
-                Stdio::null()
-            })
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-        let mut child = command
-            .spawn()
+        let mut leader = Leader::spawn(&mut command(request))
             .map_err(|e| ProcessFailed::from(ProcessFailure::Spawn(e.to_string())))?;
-        let mut stdout = Reader::spawn(child.stdout.take());
-        let mut stderr = Reader::spawn(child.stderr.take());
-        let stdin = child.stdin.take();
-        let deadline = tokio::time::Instant::now() + timeout;
-        let finished = tokio::time::timeout_at(deadline, async {
-            if let (Some(mut pipe), Some(secret)) = (stdin, &request.stdin) {
-                write_secret(&mut pipe, secret).await?;
-                // Dropping the pipe closes it: the child reads end of file.
-            }
-            child
-                .wait()
-                .await
-                .map_err(|e| ProcessFailure::Io(e.to_string()))
-        })
-        .await;
-        let status = match finished {
-            Ok(Ok(status)) => status,
-            Ok(Err(failure)) => {
-                reap(&mut child).await;
-                return Err(failed(failure, stderr).await);
-            }
-            // Killed and waited for: the child is gone before we say so.
-            Err(_) => {
-                reap(&mut child).await;
-                return Err(failed(ProcessFailure::Timeout(timeout), stderr).await);
-            }
+        let mut stdout = Reader::spawn(leader.child.stdout.take());
+        let mut stderr = Reader::spawn(leader.child.stderr.take());
+        let deadline = Instant::now() + timeout;
+        let exited = tokio::time::timeout_at(deadline, leader.exited(request.stdin.as_ref()))
+            .await
+            .unwrap_or(Err(ProcessFailure::Timeout(timeout)));
+        // Exited, failed or late, the leader is still unreaped, so the group
+        // id is still its own: for a one-shot CLI, any member left is a leak.
+        leader.kill_group();
+        if let Err(failure) = exited {
+            // Killed and reaped: the child is gone before we say so.
+            return Err(leader.end(failure, &mut stderr).await);
+        }
+        // The group is never signalled again, so the leader can go now.
+        let status = match leader.reap().await {
+            Ok(status) => status,
+            Err(failure) => return Err(failed(failure, &mut stderr).await),
         };
-        let Some(code) = status.code() else {
-            return Err(failed(ProcessFailure::Signaled, stderr).await);
+        // A holder that left the group can still keep the output open: the
+        // deadline bounds reading it, and a leader a signal ended, which gave
+        // no answer, gets only the grace for its standard error.
+        let until = match status.code() {
+            Some(_) => deadline,
+            None => deadline.min(Instant::now() + STDERR_GRACE),
         };
-        // A descendant that inherited the pipes can hold them open after
-        // the child exits: the deadline bounds reading them too.
-        let collected = tokio::time::timeout_at(deadline, async {
-            tokio::try_join!(stdout.finish(), stderr.finish())
+        let collected = Collected::within(until, &mut stdout, &mut stderr).await;
+        outcome(status, collected, timeout)
+    }
+}
+
+/// The command for `request`: an emptied environment, piped output, and a
+/// process group of its own.
+fn command(request: &ProcessRequest) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(&request.program);
+    command
+        .args(&request.args)
+        .env_clear()
+        .envs(&request.env)
+        .current_dir(&request.current_dir)
+        .stdin(if request.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
         })
-        .await;
-        match collected {
-            Ok(Ok((stdout, stderr))) => Ok(ProcessOutput {
-                code: Some(code),
-                stdout,
-                stderr,
-            }),
-            Ok(Err(failure)) => Err(failure.into()),
-            Err(_) => Err(ProcessFailed {
-                failure: ProcessFailure::Timeout(timeout),
-                stderr: stderr.so_far(),
-            }),
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .kill_on_drop(true);
+    command
+}
+
+/// The child, leader of its own process group: ending the group ends every
+/// descendant that stayed in it, so none outlives the invocation holding
+/// the actor's directory.
+///
+/// The group id is the leader's pid, which stays the leader's until the
+/// leader is reaped: an exited leader is a zombie that is still a member of
+/// its group. So its exit is observed without reaping it, the group is
+/// signalled only while it is unreaped, and the reap comes last. The app
+/// processes of the UI driver are ended the same way.
+struct Leader {
+    child: tokio::process::Child,
+    pid: Pid,
+}
+
+impl Leader {
+    fn spawn(command: &mut tokio::process::Command) -> std::io::Result<Self> {
+        let child = command.spawn()?;
+        let pid = child
+            .id()
+            .and_then(|id| i32::try_from(id).ok())
+            .and_then(Pid::from_raw)
+            .ok_or_else(|| std::io::Error::other("the started CLI has no process id"))?;
+        Ok(Self { child, pid })
+    }
+
+    /// Hands the child its secret, if any, and waits for it to exit,
+    /// leaving it unreaped.
+    async fn exited(&mut self, secret: Option<&Secret>) -> Result<(), ProcessFailure> {
+        if let (Some(mut pipe), Some(secret)) = (self.child.stdin.take(), secret) {
+            write_secret(&mut pipe, secret).await?;
+            // Dropping the pipe closes it: the child reads end of file.
+        }
+        let mut poll = tokio::time::interval(EXIT_POLL);
+        poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        loop {
+            poll.tick().await;
+            match self.status() {
+                Ok(Some(_)) => return Ok(()),
+                Ok(None) => {}
+                Err(error) => return Err(ProcessFailure::Io(error.to_string())),
+            }
+        }
+    }
+
+    /// The leader's exit, if it has exited, observed without reaping it.
+    /// ECHILD says the leader is no longer ours to wait for, nor its pid.
+    fn status(&self) -> rustix::io::Result<Option<WaitIdStatus>> {
+        let options = WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT;
+        waitid(WaitId::Pid(self.pid), options)
+    }
+
+    /// Sends SIGKILL to every member of the group, provided the leader is
+    /// still ours and unreaped, so the id cannot name an unrelated group.
+    fn kill_group(&self) {
+        if let Err(error) = self.status() {
+            tracing::warn!(%error, "the CLI process is no longer ours; its group is left alone");
+            return;
+        }
+        match kill_process_group(self.pid, Signal::KILL) {
+            Ok(()) => {}
+            // The unreaped leader belongs to its group unless it never got
+            // one of its own or moved itself to another.
+            Err(Errno::SRCH) => tracing::warn!("the CLI process group is gone before its reap"),
+            Err(error) => tracing::warn!(%error, "cannot kill the CLI process group"),
+        }
+    }
+
+    /// Ends a leader that did not exit in time or that we failed to talk to,
+    /// once its group is ended: the leader itself too, in case it left the
+    /// group. Then waits briefly for its standard error, reaps it and
+    /// returns `failure` with that text.
+    async fn end(&mut self, failure: ProcessFailure, stderr: &mut Reader) -> ProcessFailed {
+        if self.status().is_ok()
+            && let Err(error) = self.child.start_kill()
+        {
+            tracing::warn!(%error, "cannot kill the CLI process");
+        }
+        let failed = failed(failure, stderr).await;
+        if let Err(error) = self.reap().await {
+            tracing::warn!(%error, "cannot reap the CLI process");
+        }
+        failed
+    }
+
+    /// Reaps the leader, which has exited or been killed: its status was
+    /// fixed when it ended.
+    async fn reap(&mut self) -> Result<ExitStatus, ProcessFailure> {
+        self.child
+            .wait()
+            .await
+            .map_err(|e| ProcessFailure::Io(e.to_string()))
+    }
+}
+
+impl Drop for Leader {
+    fn drop(&mut self) {
+        // Still unreaped: the run was abandoned, and `kill_on_drop` alone
+        // would leave the descendants running.
+        if self.child.id().is_some() {
+            self.kill_group();
         }
     }
 }
 
 /// `failure`, with what the ended child had written to standard error.
-async fn failed(failure: ProcessFailure, mut stderr: Reader) -> ProcessFailed {
-    let stderr = match tokio::time::timeout(STDERR_GRACE, stderr.finish()).await {
-        Ok(Ok(text)) => text,
-        // A descendant still holds the pipe: keep what was read.
-        _ => stderr.so_far(),
+async fn failed(failure: ProcessFailure, stderr: &mut Reader) -> ProcessFailed {
+    let stderr = match stderr.finish_within(STDERR_GRACE).await {
+        Some(text) => text,
+        // A holder that left the group still has the pipe: keep what was read.
+        None => stderr.so_far(),
     };
     ProcessFailed { failure, stderr }
+}
+
+/// What became of the output of a leader that exited.
+#[derive(Debug, PartialEq, Eq)]
+enum Collected {
+    /// Both streams ended.
+    Whole { stdout: String, stderr: String },
+    /// A stream could not be read; standard error as far as it was read.
+    Failed {
+        failure: ProcessFailure,
+        stderr: String,
+    },
+    /// Something still held the output at the deadline; standard error so
+    /// far.
+    Late { stderr: String },
+}
+
+impl Collected {
+    /// Reads both streams to their end, or until `deadline`.
+    async fn within(deadline: Instant, stdout: &mut Reader, stderr: &mut Reader) -> Self {
+        let both = tokio::time::timeout_at(deadline, async {
+            tokio::try_join!(stdout.finish(), stderr.finish())
+        })
+        .await;
+        match both {
+            Ok(Ok((stdout, stderr))) => Self::Whole { stdout, stderr },
+            Ok(Err(failure)) => Self::Failed {
+                failure,
+                stderr: stderr.so_far(),
+            },
+            Err(_) => Self::Late {
+                stderr: stderr.so_far(),
+            },
+        }
+    }
+
+    /// Standard error, whole or as far as it was read.
+    fn into_stderr(self) -> String {
+        match self {
+            Self::Whole { stderr, .. } | Self::Failed { stderr, .. } | Self::Late { stderr } => {
+                stderr
+            }
+        }
+    }
+}
+
+/// The run's result: an output when the leader exited with a code and its
+/// output ended in time. A leader a signal ended gave no answer, whatever
+/// became of its output.
+fn outcome(
+    status: ExitStatus,
+    collected: Collected,
+    timeout: Duration,
+) -> Result<ProcessOutput, ProcessFailed> {
+    let Some(code) = status.code() else {
+        return Err(ProcessFailed {
+            failure: ProcessFailure::Signaled,
+            stderr: collected.into_stderr(),
+        });
+    };
+    match collected {
+        Collected::Whole { stdout, stderr } => Ok(ProcessOutput {
+            code: Some(code),
+            stdout,
+            stderr,
+        }),
+        Collected::Failed { failure, stderr } => Err(ProcessFailed { failure, stderr }),
+        Collected::Late { stderr } => Err(ProcessFailed {
+            failure: ProcessFailure::Timeout(timeout),
+            stderr,
+        }),
+    }
 }
 
 /// One output stream, read in its own task into a bounded buffer the caller
@@ -217,6 +388,17 @@ impl Reader {
         Ok(self.so_far())
     }
 
+    /// The whole stream if it ends within `grace`; `None` while something
+    /// still holds it open. A stream that fails yields what was read, since
+    /// the caller is already reporting the failure that ended the child.
+    async fn finish_within(&mut self, grace: Duration) -> Option<String> {
+        match tokio::time::timeout(grace, self.finish()).await {
+            Ok(Ok(text)) => Some(text),
+            Ok(Err(_)) => Some(self.so_far()),
+            Err(_) => None,
+        }
+    }
+
     /// What was read so far.
     fn so_far(&self) -> String {
         let kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
@@ -227,13 +409,6 @@ impl Reader {
 impl Drop for Reader {
     fn drop(&mut self) {
         self.task.abort();
-    }
-}
-
-/// Kills the child and waits for it to be gone.
-async fn reap(child: &mut tokio::process::Child) {
-    if let Err(error) = child.kill().await {
-        tracing::warn!(%error, "cannot kill the CLI process");
     }
 }
 
@@ -291,183 +466,5 @@ fn ignore_broken_pipe(error: std::io::Error) -> std::io::Result<()> {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-
-    fn shell(script: &str, env: &[(&str, &str)], stdin: Option<&str>) -> ProcessRequest {
-        ProcessRequest {
-            program: PathBuf::from("/bin/sh"),
-            args: vec!["-c".into(), script.into()],
-            env: env
-                .iter()
-                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
-                .collect(),
-            current_dir: std::env::temp_dir(),
-            stdin: stdin.map(Secret::new),
-        }
-    }
-
-    #[tokio::test]
-    async fn the_secret_reaches_standard_input_and_the_exit_code_is_kept() {
-        let request = shell("cat; echo oops >&2; exit 3", &[], Some("lnbcrt1secret"));
-
-        let output = TokioCliProcess
-            .run(&request, Duration::from_secs(10))
-            .await
-            .unwrap();
-
-        assert_eq!(output.code, Some(3));
-        assert_eq!(output.stdout, "lnbcrt1secret\n");
-        assert_eq!(output.stderr.trim(), "oops");
-    }
-
-    #[tokio::test]
-    async fn the_child_inherits_no_environment() {
-        let request = shell(
-            "echo \"${HOME:-unset} ${MCLI_DIR:-unset}\"",
-            &[("MCLI_DIR", "/private")],
-            None,
-        );
-
-        let output = TokioCliProcess
-            .run(&request, Duration::from_secs(10))
-            .await
-            .unwrap();
-
-        assert_eq!(output.stdout.trim(), "unset /private");
-    }
-
-    #[tokio::test]
-    async fn without_a_secret_standard_input_is_already_at_its_end() {
-        let request = shell("cat; echo done", &[], None);
-
-        let output = TokioCliProcess
-            .run(&request, Duration::from_secs(10))
-            .await
-            .unwrap();
-
-        assert_eq!(output.stdout, "done\n");
-    }
-
-    #[tokio::test]
-    async fn a_child_that_never_reads_its_secret_is_not_a_pipe_failure() {
-        let request = shell("exec 0<&-; echo refused; exit 2", &[], Some("x"));
-
-        let output = TokioCliProcess
-            .run(&request, Duration::from_secs(10))
-            .await
-            .unwrap();
-
-        assert_eq!(output.code, Some(2));
-    }
-
-    #[tokio::test]
-    async fn a_child_past_its_deadline_is_a_timeout() {
-        let request = shell("while :; do :; done", &[], None);
-
-        let failure = TokioCliProcess
-            .run(&request, Duration::from_millis(200))
-            .await
-            .unwrap_err();
-
-        assert_eq!(
-            failure.failure,
-            ProcessFailure::Timeout(Duration::from_millis(200))
-        );
-    }
-
-    #[tokio::test]
-    async fn a_child_ended_by_a_signal_is_no_output() {
-        let request = shell("kill -9 $$", &[], None);
-
-        let failure = TokioCliProcess
-            .run(&request, Duration::from_secs(10))
-            .await
-            .unwrap_err();
-
-        assert_eq!(failure.failure, ProcessFailure::Signaled);
-    }
-
-    #[tokio::test]
-    async fn a_timed_out_child_is_gone_when_the_timeout_is_reported() {
-        let dir = tempfile::tempdir().unwrap();
-        let pid_file = dir.path().join("pid");
-        let script = format!("echo $$ > {}; while :; do :; done", pid_file.display());
-        let request = shell(&script, &[], None);
-
-        let failure = TokioCliProcess
-            .run(&request, Duration::from_millis(300))
-            .await
-            .unwrap_err();
-
-        assert_eq!(
-            failure.failure,
-            ProcessFailure::Timeout(Duration::from_millis(300))
-        );
-        let pid = std::fs::read_to_string(&pid_file).unwrap();
-        let proc_dir = std::path::Path::new("/proc").join(pid.trim());
-        assert!(!proc_dir.exists(), "the timed-out child is still alive");
-    }
-
-    #[tokio::test]
-    async fn a_missing_executable_is_a_spawn_failure() {
-        let mut request = shell("true", &[], None);
-        request.program = PathBuf::from("/nonexistent/mostro-cli");
-
-        let failure = TokioCliProcess
-            .run(&request, Duration::from_secs(1))
-            .await
-            .unwrap_err();
-
-        assert!(
-            matches!(failure.failure, ProcessFailure::Spawn(_)),
-            "{failure:?}"
-        );
-    }
-
-    /// A child that hangs or is killed may have said why on standard error:
-    /// the failure carries it, so the run's evidence keeps it.
-    #[tokio::test]
-    async fn a_failed_child_keeps_what_it_wrote_to_standard_error() {
-        let hung = shell("echo stuck >&2; exec sleep 30", &[], None);
-        let killed = shell("echo bye >&2; kill -9 $$", &[], None);
-
-        let timed_out = TokioCliProcess
-            .run(&hung, Duration::from_millis(300))
-            .await
-            .unwrap_err();
-        let signaled = TokioCliProcess
-            .run(&killed, Duration::from_secs(10))
-            .await
-            .unwrap_err();
-
-        assert!(matches!(timed_out.failure, ProcessFailure::Timeout(_)));
-        assert_eq!(timed_out.stderr.trim(), "stuck");
-        assert_eq!(signaled.failure, ProcessFailure::Signaled);
-        assert_eq!(signaled.stderr.trim(), "bye");
-    }
-
-    /// A wrapper that exits but leaves a background process holding its
-    /// output open must not hold the invocation past its deadline.
-    #[tokio::test]
-    async fn a_descendant_holding_the_output_open_cannot_outlast_the_deadline() {
-        let request = shell("echo why >&2; sleep 5 & exit 0", &[], None);
-        let started = std::time::Instant::now();
-
-        let failed = TokioCliProcess
-            .run(&request, Duration::from_millis(300))
-            .await
-            .unwrap_err();
-
-        assert!(
-            started.elapsed() < Duration::from_secs(3),
-            "{:?}",
-            started.elapsed()
-        );
-        assert_eq!(
-            failed.failure,
-            ProcessFailure::Timeout(Duration::from_millis(300))
-        );
-        assert_eq!(failed.stderr.trim(), "why");
-    }
-}
+#[path = "process_tests.rs"]
+mod tests;
