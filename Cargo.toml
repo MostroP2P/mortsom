@@ -18,7 +18,7 @@ members = [
 [workspace.package]
 version = "0.1.1"
 edition = "2024"
-license = "MIT"
+license = "AGPL-3.0-or-later"
 repository = "https://github.com/MostroP2P/mortsom"
 rust-version = "1.89"
 
