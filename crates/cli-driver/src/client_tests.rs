@@ -224,8 +224,10 @@ fn recovery_refuses_another_platform_s_storage_and_keeps_its_marker() {
 #[test]
 fn recovery_refuses_storage_a_live_process_still_uses() {
     let (_parent, root) = interrupted(Platform::Cli);
+    // Alive until killed, however long a loaded host takes to scan /proc.
     let mut live = std::process::Command::new("/bin/sh")
-        .args(["-c", "sleep 5"])
+        .args(["-c", "read line"])
+        .stdin(std::process::Stdio::piped())
         .env("MCLI_DIR", root.join("mcli"))
         .spawn()
         .unwrap();

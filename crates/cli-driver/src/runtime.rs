@@ -81,8 +81,11 @@ mod tests {
         let (_parent, root) = storage();
         let _live = ActiveRuntime::begin(&root).unwrap();
         let mcli = root.join("mcli");
+        // Blocks on its standard input until it is killed (or the test
+        // binary exits), however long a loaded host takes to scan /proc.
         let mut child = std::process::Command::new("/bin/sh")
-            .args(["-c", "sleep 5"])
+            .args(["-c", "read line"])
+            .stdin(std::process::Stdio::piped())
             .env("MCLI_DIR", &mcli)
             .spawn()
             .unwrap();
