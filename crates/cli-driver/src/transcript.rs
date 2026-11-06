@@ -136,14 +136,15 @@ fn sanitize_arg(arg: &str, secret_next: bool) -> String {
     }
 }
 
-/// Replaces every string under a secret key (any key naming an invoice
-/// included) and every string that is a Lightning invoice, at any depth.
+/// Replaces every string at any depth under a secret key (any key naming
+/// an invoice included) and every string that is a Lightning invoice, at
+/// any depth. Nulls, numbers and booleans stay, so the shape stays readable.
 pub fn redact_value(value: &mut Value) {
     match value {
         Value::Object(map) => {
             for (key, inner) in map.iter_mut() {
-                if is_secret_key(key) && inner.is_string() {
-                    *inner = Value::String(REDACTED.into());
+                if is_secret_key(key) {
+                    redact_strings(inner);
                 } else {
                     redact_value(inner);
                 }
@@ -153,6 +154,16 @@ pub fn redact_value(value: &mut Value) {
         Value::String(text) if lightning().is_some_and(|re| re.is_match(text)) => {
             *text = REDACTED.into();
         }
+        _ => {}
+    }
+}
+
+/// Replaces every string at any depth: the whole value of a secret key.
+fn redact_strings(value: &mut Value) {
+    match value {
+        Value::String(text) => *text = REDACTED.into(),
+        Value::Array(items) => items.iter_mut().for_each(redact_strings),
+        Value::Object(map) => map.values_mut().for_each(redact_strings),
         _ => {}
     }
 }
@@ -314,6 +325,41 @@ mod tests {
         assert_eq!(value["note"], REDACTED);
         assert_eq!(value["list"][0], REDACTED);
         assert_eq!(value["list"][1], "plain");
+    }
+
+    #[test]
+    fn strings_nested_under_a_secret_key_are_redacted() {
+        let mut value = serde_json::json!({
+            "payment_request": [null, "user@example.com", 150],
+            "buyer_invoice": {"address": "someone@example.com", "paid": false},
+            "order_id": "o1",
+        });
+
+        redact_value(&mut value);
+
+        assert_eq!(
+            value["payment_request"],
+            serde_json::json!([null, REDACTED, 150])
+        );
+        assert_eq!(value["buyer_invoice"]["address"], REDACTED);
+        assert_eq!(value["buyer_invoice"]["paid"], false);
+        assert_eq!(value["order_id"], "o1");
+    }
+
+    #[test]
+    fn a_payment_request_payload_never_reaches_the_transcript() {
+        let envelope = outcome(r#"{"payment_request":[null,"user@example.com",null]}"#);
+        let mut transcript = Transcript::default();
+
+        transcript.record(
+            "order.take-buy",
+            &[],
+            3,
+            Recorded::Outcome(&envelope, Some(0)),
+        );
+
+        let text = transcript.render();
+        assert!(!text.contains("user@example.com"), "{text}");
     }
 
     #[test]
