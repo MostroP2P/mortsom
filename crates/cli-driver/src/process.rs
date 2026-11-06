@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::io::ErrorKind;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -131,8 +132,8 @@ impl CliProcess for TokioCliProcess {
         let mut child = command
             .spawn()
             .map_err(|e| ProcessFailed::from(ProcessFailure::Spawn(e.to_string())))?;
-        let stdout = tokio::spawn(read_bounded(child.stdout.take()));
-        let stderr = tokio::spawn(read_bounded(child.stderr.take()));
+        let mut stdout = Reader::spawn(child.stdout.take());
+        let mut stderr = Reader::spawn(child.stderr.take());
         let stdin = child.stdin.take();
         let deadline = tokio::time::Instant::now() + timeout;
         let finished = tokio::time::timeout_at(deadline, async {
@@ -161,24 +162,72 @@ impl CliProcess for TokioCliProcess {
         let Some(code) = status.code() else {
             return Err(failed(ProcessFailure::Signaled, stderr).await);
         };
-        Ok(ProcessOutput {
-            code: Some(code),
-            stdout: joined(stdout).await?,
-            stderr: joined(stderr).await?,
+        // A descendant that inherited the pipes can hold them open after
+        // the child exits: the deadline bounds reading them too.
+        let collected = tokio::time::timeout_at(deadline, async {
+            tokio::try_join!(stdout.finish(), stderr.finish())
         })
+        .await;
+        match collected {
+            Ok(Ok((stdout, stderr))) => Ok(ProcessOutput {
+                code: Some(code),
+                stdout,
+                stderr,
+            }),
+            Ok(Err(failure)) => Err(failure.into()),
+            Err(_) => Err(ProcessFailed {
+                failure: ProcessFailure::Timeout(timeout),
+                stderr: stderr.so_far(),
+            }),
+        }
     }
 }
 
 /// `failure`, with what the ended child had written to standard error.
-async fn failed(
-    failure: ProcessFailure,
-    stderr: tokio::task::JoinHandle<std::io::Result<String>>,
-) -> ProcessFailed {
-    let stderr = match tokio::time::timeout(STDERR_GRACE, joined(stderr)).await {
+async fn failed(failure: ProcessFailure, mut stderr: Reader) -> ProcessFailed {
+    let stderr = match tokio::time::timeout(STDERR_GRACE, stderr.finish()).await {
         Ok(Ok(text)) => text,
-        _ => String::new(),
+        // A descendant still holds the pipe: keep what was read.
+        _ => stderr.so_far(),
     };
     ProcessFailed { failure, stderr }
+}
+
+/// One output stream, read in its own task into a bounded buffer the caller
+/// can see before the stream ends. Dropping it stops the reading, so a
+/// descendant holding the pipe holds up nothing.
+struct Reader {
+    task: tokio::task::JoinHandle<std::io::Result<()>>,
+    kept: Arc<Mutex<Vec<u8>>>,
+}
+
+impl Reader {
+    fn spawn(pipe: Option<impl AsyncRead + Unpin + Send + 'static>) -> Self {
+        let kept = Arc::new(Mutex::new(Vec::new()));
+        let task = tokio::spawn(read_bounded(pipe, Arc::clone(&kept)));
+        Self { task, kept }
+    }
+
+    /// The whole stream, once it ends.
+    async fn finish(&mut self) -> Result<String, ProcessFailure> {
+        (&mut self.task)
+            .await
+            .map_err(|e| ProcessFailure::Io(e.to_string()))?
+            .map_err(|e| ProcessFailure::Io(e.to_string()))?;
+        Ok(self.so_far())
+    }
+
+    /// What was read so far.
+    fn so_far(&self) -> String {
+        let kept = self.kept.lock().unwrap_or_else(PoisonError::into_inner);
+        String::from_utf8_lossy(&kept).into_owned()
+    }
+}
+
+impl Drop for Reader {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
 }
 
 /// Kills the child and waits for it to be gone.
@@ -188,30 +237,25 @@ async fn reap(child: &mut tokio::process::Child) {
     }
 }
 
-/// Reads at most [`OUTPUT_LIMIT`] bytes of a stream, draining the rest.
-async fn read_bounded(pipe: Option<impl AsyncRead + Unpin>) -> std::io::Result<String> {
+/// Reads at most [`OUTPUT_LIMIT`] bytes of a stream into `kept`, draining
+/// the rest.
+async fn read_bounded(
+    pipe: Option<impl AsyncRead + Unpin>,
+    kept: Arc<Mutex<Vec<u8>>>,
+) -> std::io::Result<()> {
     let Some(mut pipe) = pipe else {
-        return Ok(String::new());
+        return Ok(());
     };
-    let mut kept = Vec::new();
     let mut buffer = [0_u8; 8192];
     loop {
         let read = pipe.read(&mut buffer).await?;
         if read == 0 {
-            break;
+            return Ok(());
         }
+        let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
         let room = OUTPUT_LIMIT.saturating_sub(kept.len());
         kept.extend_from_slice(&buffer[..read.min(room)]);
     }
-    Ok(String::from_utf8_lossy(&kept).into_owned())
-}
-
-async fn joined(
-    task: tokio::task::JoinHandle<std::io::Result<String>>,
-) -> Result<String, ProcessFailure> {
-    task.await
-        .map_err(|e| ProcessFailure::Io(e.to_string()))?
-        .map_err(|e| ProcessFailure::Io(e.to_string()))
 }
 
 /// Writes the secret and closes the pipe. A child that exits before reading
@@ -397,5 +441,29 @@ mod tests {
         assert_eq!(timed_out.stderr.trim(), "stuck");
         assert_eq!(signaled.failure, ProcessFailure::Signaled);
         assert_eq!(signaled.stderr.trim(), "bye");
+    }
+
+    /// A wrapper that exits but leaves a background process holding its
+    /// output open must not hold the invocation past its deadline.
+    #[tokio::test]
+    async fn a_descendant_holding_the_output_open_cannot_outlast_the_deadline() {
+        let request = shell("echo why >&2; sleep 5 & exit 0", &[], None);
+        let started = std::time::Instant::now();
+
+        let failed = TokioCliProcess
+            .run(&request, Duration::from_millis(300))
+            .await
+            .unwrap_err();
+
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
+        assert_eq!(
+            failed.failure,
+            ProcessFailure::Timeout(Duration::from_millis(300))
+        );
+        assert_eq!(failed.stderr.trim(), "why");
     }
 }
