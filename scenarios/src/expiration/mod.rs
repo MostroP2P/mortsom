@@ -26,6 +26,20 @@ const FUNDED_TAKE_REQUIRES: &[Capability] = &[
     Capability::BuyerInvoice,
 ];
 
+/// Capabilities needed to create an order that asks for the stack's short
+/// lifetime and then to close it.
+const EXPIRY_REQUIRES: &[Capability] = &[
+    Capability::Onboarding,
+    Capability::CustomNodeSelection,
+    Capability::LocalRelayConfiguration,
+    Capability::Nwc,
+    Capability::CreateOrder,
+    Capability::TakeOrder,
+    Capability::BuyerInvoice,
+    Capability::Cancel,
+    Capability::OrderExpiry,
+];
+
 /// What the book shows for an untaken order the daemon expired: its own
 /// status is `expired`, but the public event carries `canceled` -- the
 /// daemon maps every closed-without-a-trade status onto one wire word.
@@ -109,7 +123,7 @@ crate::register_scenario! {
     name: "pending_order_expires",
     body: pending_order_expires,
     tags: &["expiration"],
-    requires: flow::CANCEL_REQUIRES,
+    requires: EXPIRY_REQUIRES,
     timeout_secs: CLOCK_TIMEOUT_SECS,
     moves_value: false,
 }

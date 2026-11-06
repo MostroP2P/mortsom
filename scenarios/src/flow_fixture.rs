@@ -82,6 +82,9 @@ pub struct Misbehaviour {
     pub refuses_for_another_rule: bool,
     /// The app never publishes `valid` for a proper invoice.
     pub never_judges_valid: bool,
+    /// The client has no invoice check at all, like the CLI: it does not
+    /// claim `invoice-check`, sends every invoice and names no verdict.
+    pub lacks_invoice_check: bool,
     /// Payouts to one destination are dispatched past the cap.
     pub ignores_payout_cap: bool,
     /// A cancel of an order that never went active is never published:

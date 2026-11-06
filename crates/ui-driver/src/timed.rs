@@ -186,6 +186,9 @@ impl UiSession for TimedUi {
     async fn diagnostics(&self) -> Vec<(String, String)> {
         self.inner.diagnostics().await
     }
+    fn command_line(&self) -> Option<&dyn std::any::Any> {
+        self.inner.command_line()
+    }
     async fn end(&self) -> Result<(), UiError> {
         self.timed("end", self.inner.end()).await
     }
@@ -219,6 +222,27 @@ mod tests {
             scripted.calls().contains(&"tap order.status".to_owned()),
             "{:?}",
             scripted.calls()
+        );
+    }
+
+    #[test]
+    fn the_command_line_behind_a_timed_session_is_the_inner_sessions() {
+        let screen = TimedUi::new(Arc::new(ScriptedUi::default()));
+        let console = TimedUi::new(Arc::new(ScriptedUi::console()));
+
+        assert!(screen.command_line().is_none());
+        let inner = console
+            .command_line()
+            .and_then(|any| any.downcast_ref::<ScriptedUi>());
+        assert!(inner.is_some());
+    }
+
+    #[test]
+    fn an_unsupported_control_names_itself() {
+        let error = UiError::Unsupported("screenshots");
+        assert_eq!(
+            error.to_string(),
+            "screenshots is not supported by this client"
         );
     }
 

@@ -16,6 +16,10 @@ pub enum UiError {
     /// A WebDriver call failed.
     #[error(transparent)]
     WebDriver(#[from] WebDriverError),
+    /// The client behind the session has no such control: a command-line
+    /// client has no screen to tap, read or photograph.
+    #[error("{0} is not supported by this client")]
+    Unsupported(&'static str),
     /// An element did not appear (or disappear) before the deadline.
     #[error("element `{accessibility_id}` {condition} within {timeout:?}")]
     WaitTimeout {

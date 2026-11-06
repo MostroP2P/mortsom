@@ -407,10 +407,13 @@ accepts either the bond family or the rest, and the operator switches with `stac
 `stack up --replace`, each of which mints a new daemon identity and so a new client build.
 
 A scenario whose profile lacks a required capability is **skipped with a reason, never failed**, and a
-skipped scenario is never counted as accepted. Two capabilities exist for what a client may not offer:
+skipped scenario is never counted as accepted. Three capabilities exist for what a client may not offer:
 `offered-actions` (the app shows only the trade actions a state allows; the CLI offers every command and
-lets the daemon refuse) and `order-expiry` (a test build asks the daemon for the stack's short order
-lifetime). A scenario that reads either declares it.
+lets the daemon refuse), `order-expiry` (a test build asks the daemon for the stack's short order
+lifetime) and `invoice-check` (the app judges a buyer invoice against the node's limits before sending
+it; a client without it sends the invoice and leaves the verdict to the daemon). A scenario that needs
+`offered-actions` or `order-expiry` declares it; one that meets a client without `invoice-check`
+expects the daemon's verdict instead of the app's.
 The same holds for a scenario that needs an interruption the run cannot cause: sending the app to the
 background, cutting its network, rotating the device, or restarting or replaying into the run relay. Linux
 and Web clients cause none of them, and a run's relay is the stack's.
