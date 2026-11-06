@@ -57,6 +57,12 @@ pub trait UiSession: Send + Sync {
     async fn diagnostics(&self) -> Vec<(String, String)> {
         Vec::new()
     }
+    /// The command-line client behind a session that has no screen, for
+    /// the adapter of that client to downcast; `None` for a screen. A
+    /// wrapper forwards its inner session's answer.
+    fn command_line(&self) -> Option<&dyn std::any::Any> {
+        None
+    }
     /// End the session.
     async fn end(&self) -> Result<(), UiError>;
 }
@@ -120,9 +126,19 @@ pub mod tests_support {
         end_failures: Mutex<u32>,
         /// How long each screenshot takes.
         screenshot_delay: Mutex<Duration>,
+        /// Answers [`UiSession::command_line`] with itself, as a session
+        /// without a screen does.
+        console: bool,
     }
 
     impl ScriptedUi {
+        /// A scripted session that presents itself as a command-line client.
+        pub fn console() -> Self {
+            Self {
+                console: true,
+                ..Self::default()
+            }
+        }
         /// Each screenshot takes `delay`, as a large window's does.
         pub fn slow_screenshots(&self, delay: Duration) {
             *self.screenshot_delay.lock().unwrap() = delay;
@@ -524,6 +540,9 @@ pub mod tests_support {
         }
         async fn set_orientation(&self, _: bool) -> Result<(), UiError> {
             Ok(())
+        }
+        fn command_line(&self) -> Option<&dyn std::any::Any> {
+            self.console.then_some(self as &dyn std::any::Any)
         }
         async fn end(&self) -> Result<(), UiError> {
             let mut failures = self.end_failures.lock().unwrap();
