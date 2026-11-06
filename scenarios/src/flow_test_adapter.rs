@@ -27,8 +27,13 @@ impl AppAdapter for Adapter {
             name: "fixture".into(),
         }
     }
+    /// Only what a scenario body asks for: whether the app judges invoices.
     fn capabilities(&self) -> CapabilitySet {
-        CapabilitySet::default()
+        if self.state.lock().unwrap().misbehaviour.lacks_invoice_check {
+            CapabilitySet::default()
+        } else {
+            CapabilitySet::new([Capability::InvoiceCheck])
+        }
     }
     async fn onboard(
         &self,
@@ -347,7 +352,7 @@ impl AppAdapter for Adapter {
         let odd = self.state.lock().unwrap().misbehaviour;
         // The app judges an invoice first once the node's capabilities
         // are in; one it refuses is never sent.
-        if short && !odd.capabilities_arrive_late {
+        if short && !odd.capabilities_arrive_late && !odd.lacks_invoice_check {
             self.action("invoice-refused-by-app", device.actor);
             let check = if odd.refuses_for_another_rule {
                 "wrong-amount"
@@ -366,7 +371,7 @@ impl AppAdapter for Adapter {
         }
         self.provide_buyer_invoice(device, order, Some(invoice))
             .await?;
-        let judged = !short && !odd.never_judges_valid;
+        let judged = !short && !odd.never_judges_valid && !odd.lacks_invoice_check;
         Ok(InvoiceSubmission::Accepted {
             check: judged.then(|| "valid".into()),
         })

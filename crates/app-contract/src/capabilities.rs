@@ -57,11 +57,23 @@ pub enum Capability {
     DeepLinks,
     /// A visible test-environment marker.
     TestEnvironmentMarker,
+    /// Offering only the trade actions the order's state allows, so a check
+    /// can read which ones a side sees. A command-line client offers every
+    /// command at any time and lets the node refuse.
+    OfferedActions,
+    /// Asking the daemon for an order lifetime shorter than its default, in
+    /// seconds (`order_expiration_secs`), so the daemon's own clock can be
+    /// waited out within a run.
+    OrderExpiry,
+    /// Judging a buyer invoice against the node's limits before sending it
+    /// and showing the verdict (`invoice.check`). A client without it sends
+    /// the invoice and lets the node judge.
+    InvoiceCheck,
 }
 
 impl Capability {
     /// Every capability, in declaration order.
-    pub const ALL: [Capability; 21] = [
+    pub const ALL: [Capability; 24] = [
         Capability::Onboarding,
         Capability::CustomNodeSelection,
         Capability::LocalRelayConfiguration,
@@ -83,6 +95,9 @@ impl Capability {
         Capability::Notifications,
         Capability::DeepLinks,
         Capability::TestEnvironmentMarker,
+        Capability::OfferedActions,
+        Capability::OrderExpiry,
+        Capability::InvoiceCheck,
     ];
 
     /// Stable kebab-case name.
@@ -109,6 +124,9 @@ impl Capability {
             Capability::Notifications => "notifications",
             Capability::DeepLinks => "deep-links",
             Capability::TestEnvironmentMarker => "test-environment-marker",
+            Capability::OfferedActions => "offered-actions",
+            Capability::OrderExpiry => "order-expiry",
+            Capability::InvoiceCheck => "invoice-check",
         }
     }
 }

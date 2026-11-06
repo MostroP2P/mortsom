@@ -148,6 +148,33 @@ async fn a_short_invoice_the_app_cannot_judge_yet_is_refused_by_the_daemon() {
     assert_eq!(fixture.relay_states(ORDER), ["pending", "in-progress"]);
 }
 
+/// A client with no invoice check (the CLI) sends the short invoice, the
+/// daemon refuses it, and the proper one is accepted without a verdict.
+#[tokio::test]
+async fn a_client_without_an_invoice_check_leaves_the_verdict_to_the_daemon() {
+    let fixture = Fixture::with(Misbehaviour {
+        lacks_invoice_check: true,
+        ..Default::default()
+    })
+    .await;
+
+    (scenario("payout_invoice_below_expiry_floor").run)(&fixture.context)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        fixture.actions(),
+        [
+            "create:alice",
+            "take:bob",
+            "invoice-refused:bob",
+            "cancel-invoice:bob",
+            "invoice:bob",
+        ]
+    );
+    assert_eq!(fixture.relay_states(ORDER), ["pending", "in-progress"]);
+}
+
 /// The app refusing the short invoice for some other rule is not the
 /// expiry floor at work.
 #[tokio::test]
