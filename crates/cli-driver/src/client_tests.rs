@@ -654,3 +654,52 @@ async fn standard_error_keeps_no_key_shaped_secret() {
     }
     assert!(kept.contains("loaded"), "{kept}");
 }
+
+/// A CLI whose command succeeds while the actor's storage stops accepting
+/// changes, so the runtime marker cannot be cleared afterwards.
+#[derive(Debug)]
+struct LockingCli {
+    root: PathBuf,
+}
+
+#[async_trait::async_trait]
+impl CliProcess for LockingCli {
+    async fn run(
+        &self,
+        request: &ProcessRequest,
+        _timeout: Duration,
+    ) -> Result<ProcessOutput, ProcessFailed> {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&self.root, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let command = command_of(&request.args);
+        Ok(document(&command, "ok", &serde_json::json!({}), None, 0))
+    }
+}
+
+/// The node may have acted: a storage failure after a command that
+/// succeeded must not read as if nothing happened.
+#[tokio::test]
+async fn a_marker_that_outlives_a_successful_command_says_the_command_succeeded() {
+    if rustix::process::geteuid().is_root() {
+        // Permissions do not stop root, so the marker could not be kept.
+        return;
+    }
+    let parent = tempfile::tempdir().unwrap();
+    let root = parent.path().canonicalize().unwrap().join("alice");
+    let process = Arc::new(LockingCli { root: root.clone() });
+    let client = CliClient::new(config(), process).with_storage(ActorStorage::Fresh(root.clone()));
+    client.start_fresh().unwrap();
+
+    let error = client
+        .invoke(Call::node(&["order", "new"]))
+        .await
+        .unwrap_err();
+
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(matches!(error, CliError::Storage(_)), "{error}");
+    assert!(
+        error.to_string().contains("the command itself succeeded"),
+        "{error}"
+    );
+}

@@ -238,7 +238,11 @@ impl CliClient {
             .map_err(|e| CliError::Storage(format!("the CLI invocation task failed: {e}")))??;
         match (stopped, outcome) {
             (Ok(()), outcome) => outcome,
-            (Err(storage), Ok(_)) => Err(storage),
+            // What the command did stands, on the node for a node command:
+            // the report must not read as if nothing happened.
+            (Err(storage), Ok(_)) => Err(CliError::Storage(format!(
+                "{storage}; the command itself succeeded, so what it did stands"
+            ))),
             (Err(storage), Err(command)) => Err(CliError::Storage(format!(
                 "{storage}; the command itself failed: {command}"
             ))),
