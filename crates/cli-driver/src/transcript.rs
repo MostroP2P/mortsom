@@ -2,6 +2,8 @@
 //! capture is for an app, the transcript is for the CLI (spec §12). Invoices
 //! and payment requests never enter it; the standard input never does.
 
+use std::ops::Range;
+
 use serde::Serialize;
 use serde_json::Value;
 
@@ -147,17 +149,56 @@ fn lightning() -> Option<&'static regex::Regex> {
 
 /// Scrubs free text (standard error, a parser's complaint): every Lightning
 /// invoice, and every given secret, is replaced.
+///
+/// Every match is found in the original text first and overlapping matches
+/// are merged, so no replacement can split another match and leave part of
+/// a secret behind.
 pub fn scrub(text: &str, secrets: &[&mortsom_common::Secret]) -> String {
-    let mut scrubbed = match lightning() {
-        Some(re) => re.replace_all(text, REDACTED).into_owned(),
-        None => text.to_owned(),
-    };
-    for secret in secrets {
-        if !secret.expose().is_empty() {
-            scrubbed = scrubbed.replace(secret.expose(), REDACTED);
+    let mut ranges: Vec<Range<usize>> = lightning()
+        .map(|re| re.find_iter(text).map(|m| m.range()).collect())
+        .unwrap_or_default();
+    for value in secrets.iter().map(|s| s.expose()).filter(|v| !v.is_empty()) {
+        ranges.extend(occurrences(text, value));
+    }
+    replace_ranges(text, merge(ranges))
+}
+
+/// Every occurrence of `needle` in `text`, overlapping ones included.
+fn occurrences(text: &str, needle: &str) -> Vec<Range<usize>> {
+    let mut found = Vec::new();
+    let mut from = 0;
+    while let Some(at) = text[from..].find(needle) {
+        let start = from + at;
+        found.push(start..start + needle.len());
+        from = start + text[start..].chars().next().map_or(1, char::len_utf8);
+    }
+    found
+}
+
+/// The ranges sorted, with overlapping or touching ones joined.
+fn merge(mut ranges: Vec<Range<usize>>) -> Vec<Range<usize>> {
+    ranges.sort_by_key(|r| r.start);
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        match merged.last_mut() {
+            Some(last) if range.start <= last.end => last.end = last.end.max(range.end),
+            _ => merged.push(range),
         }
     }
-    scrubbed
+    merged
+}
+
+/// `text` with each of the sorted, disjoint `ranges` replaced once.
+fn replace_ranges(text: &str, ranges: Vec<Range<usize>>) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut cursor = 0;
+    for range in ranges {
+        out.push_str(&text[cursor..range.start]);
+        out.push_str(REDACTED);
+        cursor = range.end;
+    }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 #[cfg(test)]
@@ -221,6 +262,41 @@ mod tests {
         let scrubbed = scrub(text, &[&secret]);
 
         assert_eq!(scrubbed, "debug: paying [redacted] to [redacted]");
+    }
+
+    #[test]
+    fn a_secret_wrapping_an_invoice_is_redacted_whole() {
+        let value = format!("lnbcrt1{}-tail-secret", "q".repeat(24));
+        let secret = mortsom_common::Secret::new(value.clone());
+
+        let scrubbed = scrub(&format!("err: {value} end"), &[&secret]);
+
+        assert_eq!(scrubbed, "err: [redacted] end");
+    }
+
+    #[test]
+    fn a_shorter_secret_never_splits_a_longer_one() {
+        let short = mortsom_common::Secret::new("key");
+        let long = mortsom_common::Secret::new("monkeyboy");
+
+        let scrubbed = scrub("x monkeyboy y", &[&short, &long]);
+
+        assert_eq!(scrubbed, "x [redacted] y");
+    }
+
+    #[test]
+    fn partially_overlapping_secrets_are_both_removed() {
+        let left = mortsom_common::Secret::new("abcd");
+        let right = mortsom_common::Secret::new("cdef");
+
+        assert_eq!(scrub("abcdef!", &[&left, &right]), "[redacted]!");
+    }
+
+    #[test]
+    fn a_secret_overlapping_itself_leaves_nothing_behind() {
+        let secret = mortsom_common::Secret::new("aba");
+
+        assert_eq!(scrub("x ababa y", &[&secret]), "x [redacted] y");
     }
 
     #[test]
