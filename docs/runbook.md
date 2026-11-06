@@ -148,7 +148,7 @@ the old run resolved. The supported alternative is invocation-scoped continuatio
 
 ```sh
 mortsom run --tag smoke --platform linux \
-  --app-ref https://github.com/MostroP2P/app/pull/456 \
+  --ref https://github.com/MostroP2P/app/pull/456 \
   --preserve-legacy-recovery <legacy-run-id>
 ```
 

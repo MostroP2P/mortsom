@@ -70,19 +70,9 @@ fn a_desktop_family_is_a_sequence_of_single_runs_that_stops_at_a_refusal() {
 fn malformed_or_conflicting_source_selectors_stop_before_environment_or_fetch() {
     for platform in ["linux", "web"] {
         for selection in [
-            vec![
-                "happy_sell",
-                "--app-ref",
-                "https://github.com/other/app/pull/1",
-            ],
-            vec!["happy_sell", "--app-ref", "main", "--app-source", "/app"],
-            vec![
-                "happy_sell",
-                "--app-ref",
-                "main",
-                "--app-artifact",
-                "/bundle",
-            ],
+            vec!["happy_sell", "--ref", "https://github.com/other/app/pull/1"],
+            vec!["happy_sell", "--ref", "main", "--source", "/app"],
+            vec!["happy_sell", "--ref", "main", "--artifact", "/bundle"],
         ] {
             let (code, output, artifacts) = run(platform, &selection);
             assert_eq!(code, 2, "{output}");
@@ -96,7 +86,7 @@ fn malformed_or_conflicting_source_selectors_stop_before_environment_or_fetch() 
             platform,
             &[
                 "unknown_scenario",
-                "--app-ref",
+                "--ref",
                 "https://github.com/MostroP2P/app/pull/410",
             ],
         );

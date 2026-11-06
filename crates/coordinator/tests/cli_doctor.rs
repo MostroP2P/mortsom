@@ -106,7 +106,7 @@ fn web_prebuilt_doctor_does_not_require_build_tools() {
             "doctor",
             "--platform",
             "web",
-            "--app-artifact",
+            "--artifact",
             "/prebuilt/web",
             "--no-network",
             "--json",
@@ -147,7 +147,7 @@ fn doctor_source_overrides_replace_invalid_configured_modes_before_diagnosis() {
             format!("[mobile]\n{configured}\n"),
         )
         .unwrap();
-        for selection in [["--app-ref", "main"], ["--app-source", "/app"]] {
+        for selection in [["--ref", "main"], ["--source", "/app"]] {
             let output = Command::cargo_bin("mortsom")
                 .unwrap()
                 .args([

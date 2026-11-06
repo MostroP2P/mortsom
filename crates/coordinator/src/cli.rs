@@ -11,7 +11,7 @@ mod run_report;
 mod source;
 use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};
 use run::run_command;
-pub use source::SourceOverrides;
+pub use source::{ClientBuild, ClientSelection, SourceOverrides};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -133,16 +133,13 @@ pub enum Command {
         /// Client target for Alice and Bob.
         #[arg(long, default_value = "linux")]
         platform: mortsom_desktop_driver::Platform,
-        /// Prebuilt native executable or Web bundle; otherwise builds the source.
-        #[arg(long)]
-        app_artifact: Option<PathBuf>,
+        /// The build of the profile's client.
+        #[command(flatten)]
+        build: ClientBuild,
         /// Build the fetched app even when an identical kept bundle exists,
         /// and replace it.
-        #[arg(long, conflicts_with = "app_artifact")]
+        #[arg(long, conflicts_with = "artifact")]
         rebuild: bool,
-        /// Override configured source selection.
-        #[command(flatten)]
-        source: SourceOverrides,
         /// Xvfb executable for isolated Linux desktops.
         #[arg(long, default_value = "Xvfb")]
         xvfb: PathBuf,
@@ -166,12 +163,10 @@ pub enum Command {
         /// Client target whose prerequisites are checked.
         #[arg(long, default_value = "linux")]
         platform: mortsom_desktop_driver::Platform,
-        /// Validate an existing artifact instead of source/build prerequisites.
-        #[arg(long)]
-        app_artifact: Option<PathBuf>,
-        /// Override configured source selection.
+        /// The build of the profile's client to check: an artifact is
+        /// validated instead of the build prerequisites.
         #[command(flatten)]
-        source: SourceOverrides,
+        build: ClientBuild,
         /// Skip every check that opens a network connection.
         #[arg(long)]
         no_network: bool,
@@ -476,11 +471,14 @@ pub async fn run(cli: Cli) -> ExitCode {
             scenarios,
             tag,
             platform,
-            app_artifact,
+            build,
             rebuild,
-            source,
             xvfb,
         } => {
+            let client = match select_client(&build) {
+                Ok(client) => client,
+                Err(code) => return code,
+            };
             run_command(
                 &cli.config,
                 &cli.stack_dir,
@@ -489,13 +487,13 @@ pub async fn run(cli: Cli) -> ExitCode {
                     scenarios,
                     tag,
                     platform,
-                    artifact: app_artifact,
+                    artifact: client.artifact,
                     policy: if rebuild {
                         crate::build_cache::Policy::Rebuild
                     } else {
                         crate::build_cache::Policy::Reuse
                     },
-                    source,
+                    source: client.source,
                     xvfb,
                 },
             )
@@ -506,15 +504,18 @@ pub async fn run(cli: Cli) -> ExitCode {
             no_network,
             json,
             platform,
-            app_artifact,
-            source,
+            build,
         } => {
+            let client = match select_client(&build) {
+                Ok(client) => client,
+                Err(code) => return code,
+            };
             // The daemon probe waits for events republished on the daemon's
             // own cycle, so it uses the configured health timeout.
             let net = match Config::diagnose_with_source(
                 &cli.config,
                 |name| RealHost.env(name),
-                source.selection().as_ref(),
+                client.source.selection().as_ref(),
             )
             .config
             {
@@ -528,8 +529,8 @@ pub async fn run(cli: Cli) -> ExitCode {
                 &cli.stack_dir,
                 &crate::doctor::DesktopDoctorOptions {
                     platform,
-                    artifact: app_artifact,
-                    source,
+                    artifact: client.artifact,
+                    source: client.source,
                     no_network,
                 },
                 &RealHost,
@@ -560,6 +561,16 @@ pub async fn run(cli: Cli) -> ExitCode {
 /// The adapter of the one profile the config loader accepts, `mobile-v2`.
 pub fn select_adapter() -> Arc<dyn mortsom_app_contract::AppAdapter> {
     Arc::new(MobileV2Adapter::new())
+}
+
+/// Reads `--artifact`, `--source` and `--ref` for the app; a `--ref`
+/// outside the app's repository is an argument error, reported before
+/// anything starts.
+fn select_client(build: &ClientBuild) -> Result<ClientSelection, ExitCode> {
+    build.for_app().map_err(|error| {
+        eprintln!("error: {error}");
+        ExitCode::from(2)
+    })
 }
 
 async fn run_relay(config_path: &std::path::Path, command: RelayCommand) -> ExitCode {
@@ -744,7 +755,7 @@ mod tests {
                 "mortsom",
                 "run",
                 "--rebuild",
-                "--app-artifact",
+                "--artifact",
                 "/bundle/mostro"
             ])
             .is_err()

@@ -115,9 +115,8 @@ mod tests {
         Command::Run {
             preserve_legacy_recovery: Vec::new(),
             platform: mortsom_desktop_driver::Platform::Linux,
-            app_artifact: None,
+            build: Default::default(),
             rebuild: false,
-            source: Default::default(),
             xvfb: PathBuf::from("Xvfb"),
             scenarios: scenarios.iter().map(|s| (*s).to_owned()).collect(),
             tag: tag.map(str::to_owned),
@@ -226,8 +225,7 @@ mod tests {
             a_run(&[], None),
             Command::Doctor {
                 platform: mortsom_desktop_driver::Platform::Web,
-                app_artifact: None,
-                source: Default::default(),
+                build: Default::default(),
                 no_network: false,
                 json: false,
             },
@@ -274,8 +272,7 @@ mod tests {
         let web = caption(
             &Command::Doctor {
                 platform: mortsom_desktop_driver::Platform::Web,
-                app_artifact: None,
-                source: Default::default(),
+                build: Default::default(),
                 no_network: false,
                 json: false,
             },
