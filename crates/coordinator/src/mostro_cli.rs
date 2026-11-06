@@ -206,9 +206,14 @@ impl Discovery {
 /// Runs the executable's offline discovery: no network, no identity, an
 /// emptied environment and a private working directory.
 pub async fn discover(binary: &Path, process: &dyn CliProcess) -> Result<Discovery, String> {
+    // The child runs in a temporary directory, where a relative path would
+    // be looked up: resolve it against the caller's directory first.
+    let program = binary
+        .canonicalize()
+        .map_err(|e| format!("mostro-cli executable {}: {e}", binary.display()))?;
     let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     let request = ProcessRequest {
-        program: binary.to_path_buf(),
+        program,
         args: vec!["--output".into(), "json".into(), "schema".into()],
         env: Default::default(),
         current_dir: dir.path().to_path_buf(),

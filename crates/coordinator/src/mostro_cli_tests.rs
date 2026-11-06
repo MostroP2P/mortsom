@@ -142,6 +142,25 @@ async fn discovery_runs_the_executable_offline() {
     assert_eq!(discovery.missing(), Vec::<&str>::new());
 }
 
+/// `doctor --artifact ./mostro-cli`: the path is the operator's, relative
+/// to their directory, not to the temporary one discovery runs in.
+#[tokio::test]
+async fn a_relative_executable_is_resolved_before_discovery() {
+    let dir = tempfile::tempdir().unwrap();
+    let binary = fake_cli(
+        dir.path(),
+        &discovery_document(Value::Array(every_required())),
+    );
+    let up = std::env::current_dir().unwrap().components().count() - 1;
+    let relative =
+        std::path::PathBuf::from("../".repeat(up)).join(binary.strip_prefix("/").unwrap());
+    assert!(relative.is_relative());
+
+    let discovery = discover(&relative, &TokioCliProcess).await.unwrap();
+
+    assert_eq!(discovery.missing(), Vec::<&str>::new());
+}
+
 #[test]
 fn a_staged_build_holds_the_executable_and_the_node_it_points_at() {
     let source = tempfile::tempdir().unwrap();
