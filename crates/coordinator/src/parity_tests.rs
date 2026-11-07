@@ -1,4 +1,5 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+//! What `mortsom parity` compares, accepts, finds and refuses.
+
 use super::*;
 
 fn summary(run_id: &str, profile: &str, outcomes: &[(&str, &str)]) -> String {
@@ -532,4 +533,44 @@ fn an_entry_scoped_to_profiles_applies_only_between_them() {
         Aspect::StatePath,
         ("mobile-v2", "mobile-v3")
     ));
+}
+
+#[test]
+fn a_scoped_entry_accepts_a_difference_between_its_profiles_and_no_other_pair() {
+    // Arrange: `b` and `c` show the same journey, which differs from `a`'s
+    // in the state path only.
+    let dir = tempfile::tempdir().unwrap();
+    let results = [("happy_sell", "passed")];
+    for (id, profile, state) in [
+        ("a", "mobile-v2", "pending"),
+        ("b", "cli", "canceled"),
+        ("c", "mobile-v3", "canceled"),
+    ] {
+        write_run(
+            dir.path(),
+            id,
+            &summary(id, profile, &results),
+            &timeline(&[("alice", state)], &["pending"], false),
+        );
+    }
+    let scoped = [Intentional {
+        scenario: "happy_sell".into(),
+        aspect: Aspect::StatePath,
+        reason: "the CLI reads the daemon's canceled".into(),
+        profiles: vec!["mobile-v2".into(), "cli".into()],
+    }];
+
+    // Act
+    let between_them = compare_runs(dir.path(), "a", "b", &scoped).unwrap();
+    let reversed = compare_runs(dir.path(), "b", "a", &scoped).unwrap();
+    let another_pair = compare_runs(dir.path(), "a", "c", &scoped).unwrap();
+
+    // Assert
+    assert!(between_them.parity, "{}", between_them.render());
+    assert!(between_them.scenarios[0].findings.is_empty());
+    assert_eq!(between_them.scenarios[0].intentional, scoped);
+    assert!(reversed.parity, "{}", reversed.render());
+    assert!(!another_pair.parity);
+    assert_eq!(another_pair.scenarios[0].findings, vec![Aspect::StatePath]);
+    assert!(another_pair.scenarios[0].intentional.is_empty());
 }

@@ -559,5 +559,6 @@ fn differing_aspects(a: &Side, b: &Side) -> Vec<Aspect> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 #[path = "parity_tests.rs"]
 mod tests;
