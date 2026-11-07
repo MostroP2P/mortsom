@@ -694,12 +694,17 @@ closed manifest is authoritative.
 The CLI runtime (section 6.3) marks each invocation, not a session: the marker is set before the child
 starts and cleared once it is gone, by a task that outlives a caller that gives up. A marker left by a killed
 coordinator is reconciled by the CLI runtime itself, and only after it checks, through `/proc`, that no
-process of the operator's user runs with the actor's `MCLI_DIR`. `/proc` proves that only for a process whose
-environment it shows, and it hides the environment of a non-dumpable process even from that process's user.
-For such a process of the operator's user it can go only by the command line: the process counts as running
-with the actor's `MCLI_DIR` when its command line starts with an executable named `mostro-cli`, or when its
-command line cannot be read either. A process that disappears during the check does not count. While a
-process counts, or when `/proc` cannot be read, the storage stays refused.
+process of the operator's user that `/proc` shows runs with the actor's `MCLI_DIR`. That needs `/proc` to be
+the procfs of Mortsom's own PID namespace, listing every process of the operator's user: a procfs mounted with
+`hidepid=invisible` (while that user is not in its `gid=` group) or `hidepid=ptraceable` leaves out every
+non-dumpable process of that user, and a procfs of another PID namespace shows none of Mortsom's. `/proc` proves
+a listed process free of the store only for a process whose environment it shows, and it hides the environment
+of a non-dumpable process even from that process's user. For such a process of the operator's user (by any of
+the users its status names or, when `hidepid=noaccess` hides the status too, by the owner of its `/proc`
+directory) it can go only by the command line: the process counts as running with the actor's `MCLI_DIR` when
+its first argument names an executable `mostro-cli`, or when its command line cannot be read either. A process
+that has exited does not count. While a process counts, or when `/proc` cannot be read, does not list every
+process of the operator's user, or belongs to another PID namespace, the storage stays refused.
 
 A killed run leaves active-runtime markers and later invocations fail closed. Markers are never removed just
 to bypass that refusal.

@@ -1,17 +1,27 @@
 //! The CLI runtime's own proof of a stop. Its processes are short-lived
 //! children that each run with the actor's `MCLI_DIR`; a marker left by an
 //! interrupted coordinator is reconciled only after checking, through
-//! `/proc`, that no process of the operator's user may still run with that
-//! store (spec §11, runbook: reconcile the owned client processes, never
-//! delete the marker to get past a refusal).
+//! `/proc`, that no process of the operator's user that `/proc` shows may
+//! still run with that store (spec §11, runbook: reconcile the owned client
+//! processes, never delete the marker to get past a refusal).
 //!
-//! `/proc` proves a process free of the store only by showing its
+//! That check needs `/proc` to be the procfs of Mortsom's own PID
+//! namespace, listing every process of the operator's user. Mounted with
+//! `hidepid=invisible` (while that user is not in its `gid=` group) or
+//! `hidepid=ptraceable`, it leaves out every non-dumpable process of that
+//! user, so nothing can be proved and the storage stays refused.
+//!
+//! `/proc` proves a listed process free of the store only by showing its
 //! environment, which it hides even from the process's own user when the
-//! process is non-dumpable. For such a process of the operator's user it can
-//! go only by the command line: the process counts as using the store when
-//! its command line starts with an executable named `mostro-cli`, or cannot
-//! be read either. One of another user cannot be a CLI Mortsom started.
+//! process is non-dumpable. For such a process of the operator's user (by
+//! any of the users its status names or, when `hidepid=noaccess` hides that
+//! too, by the owner of its `/proc` directory) it can go only by the
+//! command line: the process counts as using the store when its first
+//! argument names an executable `mostro-cli`, or when its command line
+//! cannot be read either. One of another user cannot be a CLI Mortsom
+//! started.
 
+mod procfs;
 mod scan;
 
 use std::path::Path;
@@ -26,7 +36,7 @@ use crate::error::CliError;
 use scan::any_process_uses;
 
 /// Clears a marker left by an interrupted invocation once no process uses
-/// the actor's store; refuses while one still does, and refuses storage
+/// the actor's store; refuses while one may still do, and refuses storage
 /// that is not a CLI actor's. Recovery calls it too, before it proves a
 /// retained CLI actor inactive.
 pub fn reconcile(root: &Path) -> Result<(), CliError> {
@@ -34,22 +44,30 @@ pub fn reconcile(root: &Path) -> Result<(), CliError> {
         return Ok(());
     }
     let mcli = root.join(CLI_STORE);
-    if store_in_use(&mcli) {
-        return Err(CliError::Storage(
-            "a mostro-cli process still uses this actor's store; it must exit first".into(),
-        ));
+    if let Some(refusal) = store_in_use(&mcli) {
+        return Err(CliError::Storage(refusal.into()));
     }
     tracing::info!(root = %root.display(), "no CLI process uses the actor's store; clearing its runtime marker");
     clear_verified_stop(root, Platform::Cli).map_err(|e| CliError::Storage(e.to_string()))
 }
 
-/// Whether a process may run with `MCLI_DIR=<mcli>`, as far as `/proc`
-/// can tell; see [`scan::any_process_uses`] for what it can and cannot prove.
-pub(crate) fn store_in_use(mcli: &Path) -> bool {
-    // The real user, not the effective one: a CLI that Mortsom started, in
-    // this run or in a killed one, inherited it, and exec changes only the
-    // effective and saved users (of a set-user-ID executable).
-    any_process_uses(Path::new("/proc"), getuid(), mcli)
+/// Why a process may still run with `MCLI_DIR=<mcli>`, as far as `/proc`
+/// can tell, or `None` when none can; see [`scan::any_process_uses`] for
+/// what a listed process proves.
+pub(crate) fn store_in_use(mcli: &Path) -> Option<&'static str> {
+    let proc_root = Path::new("/proc");
+    if !procfs::lists_every_process(proc_root, std::process::id(), procfs::in_group) {
+        return Some(
+            "/proc does not list every process of this user (it cannot be read, is mounted with \
+             hidepid, or belongs to another PID namespace), so no stop of the actor's CLI can be \
+             proved",
+        );
+    }
+    // The real user: a CLI that Mortsom started, in this run or in a killed
+    // one, inherited it, and exec changes only the effective and saved
+    // users (of a set-user-ID executable). The scan accepts any of the four.
+    any_process_uses(proc_root, getuid(), mcli)
+        .then_some("a mostro-cli process still uses this actor's store; it must exit first")
 }
 
 #[cfg(test)]
@@ -93,7 +111,7 @@ mod tests {
         child.wait().unwrap();
 
         assert!(matches!(refused, Err(CliError::Storage(_))), "{refused:?}");
-        assert!(in_use);
+        assert!(in_use.is_some());
         assert!(ensure_stopped(&root).is_err());
     }
 
@@ -172,7 +190,7 @@ mod tests {
     fn a_store_nobody_runs_with_is_free() {
         let (_parent, root) = storage();
 
-        assert!(!store_in_use(&root.join("mcli")));
+        assert_eq!(store_in_use(&root.join("mcli")), None);
         reconcile(&root).unwrap();
     }
 }
