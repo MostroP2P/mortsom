@@ -161,3 +161,23 @@ async fn a_slash_notice_reads_its_cause_from_the_orders_history() {
     assert_eq!(before, None);
     assert_eq!(after.as_deref(), Some("timeout"));
 }
+
+#[tokio::test]
+async fn a_hand_in_with_no_claim_request_after_it_reads_no_phase() {
+    let (cli, session) = session();
+    cli.ok("bond.add-invoice", json!({"order_id": "o1"}));
+    cli.ok("message.list", json!({"messages": [], "truncated": false}));
+
+    let phase = adapter()
+        .submit_bond_claim_invoice(
+            &device(&session, Actor::Alice),
+            &order(OrderKind::Sell),
+            &Secret::new("lnbcrt1share"),
+        )
+        .await
+        .unwrap_err();
+
+    assert_eq!(phase.category, FailureCategory::AutomationContract);
+    assert!(phase.message.contains("o1"), "{}", phase.message);
+    assert_eq!(cli.commands(), ["bond.add-invoice", "message.list"]);
+}
