@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use tokio::sync::OwnedMutexGuard;
+
 use mortsom_desktop_driver::Platform;
 use mortsom_desktop_driver::storage::{self, ActiveRuntime, ActorStorage};
 
@@ -34,6 +36,11 @@ pub struct CliConfig {
     pub path_env: Option<String>,
 }
 
+/// Clears the marker of an interrupted runtime once no process uses the
+/// actor's store: [`crate::runtime::reconcile`], which scans `/proc` and so
+/// may block.
+type Reconcile = Arc<dyn Fn(&Path) -> Result<(), CliError> + Send + Sync>;
+
 /// One actor's command-line client.
 pub struct CliClient {
     config: CliConfig,
@@ -42,9 +49,12 @@ pub struct CliClient {
     store: Mutex<Store>,
     /// Transcript and standard error, shared with running invocations.
     evidence: Evidence,
-    /// Held for the whole life of an invocation, by the task that runs it:
-    /// a caller that gives up never releases it while a child still runs.
+    /// Held for the whole life of an invocation, by the task that runs it,
+    /// and of a reconciliation, by the blocking task that runs it: a caller
+    /// that gives up never releases it while either still runs.
     serial: Arc<tokio::sync::Mutex<()>>,
+    /// Run on the blocking pool, never on a thread of the runtime.
+    reconcile: Reconcile,
 }
 
 /// The actor's storage as the client holds it.
@@ -90,14 +100,26 @@ impl CliClient {
             store: Mutex::new(Store::default()),
             evidence: Evidence::default(),
             serial: Arc::new(tokio::sync::Mutex::new(())),
+            reconcile: Arc::new(crate::runtime::reconcile),
         }
     }
 
-    /// Refuses a lifecycle change while an invocation still runs.
-    fn idle(&self) -> Result<tokio::sync::MutexGuard<'_, ()>, CliError> {
-        self.serial
-            .try_lock()
-            .map_err(|_| CliError::Storage("an invocation is still running".into()))
+    /// The same client, reconciling an interrupted runtime with `reconcile`.
+    #[cfg(test)]
+    fn reconciling_with(
+        mut self,
+        reconcile: impl Fn(&Path) -> Result<(), CliError> + Send + Sync + 'static,
+    ) -> Self {
+        self.reconcile = Arc::new(reconcile);
+        self
+    }
+
+    /// Refuses a lifecycle change while an invocation, or a reconciliation,
+    /// still runs.
+    fn idle(&self) -> Result<OwnedMutexGuard<()>, CliError> {
+        Arc::clone(&self.serial).try_lock_owned().map_err(|_| {
+            CliError::Storage("an invocation or a reconciliation is still running".into())
+        })
     }
 
     /// Keeps the actor's CLI state in caller-owned storage, so a failed run
@@ -126,13 +148,22 @@ impl CliClient {
 
     /// Opens the storage unless it is open: a relaunch, or a recovery that
     /// reopens retained storage. An open store is left as it is, even while
-    /// an invocation a caller gave up on still runs in it.
-    pub fn ensure_open(&self) -> Result<(), CliError> {
-        let mut store = lock(&self.store);
-        if store.open_root().is_some() {
+    /// an invocation a caller gave up on still runs in it. Recovery first
+    /// reconciles the storage on the blocking pool; a caller that gives up
+    /// leaves the client busy until that ends.
+    pub async fn ensure_open(&self) -> Result<(), CliError> {
+        if self.root().is_some() {
             return Ok(());
         }
-        let _idle = self.idle()?;
+        let idle = self.idle()?;
+        let unopened = lock(&self.store).root.is_none();
+        let _idle = match &self.storage {
+            Some(ActorStorage::Resume(path)) if unopened => {
+                reconciled(Arc::clone(&self.reconcile), path.clone(), idle).await?
+            }
+            _ => idle,
+        };
+        let mut store = lock(&self.store);
         if store.root.is_none() {
             store.root = Some(self.open()?);
         }
@@ -178,17 +209,14 @@ impl CliClient {
         Ok(())
     }
 
+    /// Opens the storage. Retained storage whose runtime never recorded its
+    /// stop is refused: [`Self::ensure_open`] reconciles it first.
     fn open(&self) -> Result<Root, CliError> {
         match &self.storage {
-            Some(storage) => {
-                if let ActorStorage::Resume(path) = storage {
-                    crate::runtime::reconcile(path)?;
-                }
-                storage
-                    .prepare(Platform::Cli)
-                    .map(Root::Retained)
-                    .map_err(storage_error)
-            }
+            Some(storage) => storage
+                .prepare(Platform::Cli)
+                .map(Root::Retained)
+                .map_err(storage_error),
             None => temporary(),
         }
     }
@@ -211,7 +239,7 @@ impl CliClient {
         let process = Arc::clone(&self.process);
         let evidence = self.evidence.clone();
         let timeout = self.config.timeout;
-        let retained = self.storage.is_some();
+        let reconcile = self.storage.is_some().then(|| Arc::clone(&self.reconcile));
         // The child, its reaping, the runtime marker and the record of the
         // outcome live in their own task: a caller that gives up (a scenario
         // deadline) leaves neither a live child nor a marker that would
@@ -219,12 +247,12 @@ impl CliClient {
         // the transcript.
         let task = tokio::spawn(async move {
             let _serial = serial;
-            let active = match retained {
-                true => {
-                    crate::runtime::reconcile(&root)?;
+            let active = match reconcile {
+                Some(reconcile) => {
+                    reconciled(reconcile, root.clone(), ()).await?;
                     Some(ActiveRuntime::begin(&root).map_err(storage_error)?)
                 }
-                false => None,
+                None => None,
             };
             let started = Instant::now();
             let result = process.run(&request, timeout).await;
@@ -277,6 +305,20 @@ impl CliClient {
     }
 }
 
+/// Runs `reconcile` on `root` on the blocking pool, where a scan of `/proc`
+/// that blocks stalls no runtime thread. The blocking task holds `guard`
+/// until it ends, even when the caller gives up, and hands it back.
+async fn reconciled<G: Send + 'static>(
+    reconcile: Reconcile,
+    root: PathBuf,
+    guard: G,
+) -> Result<G, CliError> {
+    let (guard, outcome) = tokio::task::spawn_blocking(move || (guard, reconcile(&root)))
+        .await
+        .map_err(|e| CliError::Storage(format!("the CLI runtime reconciliation failed: {e}")))?;
+    outcome.map(|()| guard)
+}
+
 /// Empties the actor's CLI directories, keeping the storage marker. Storage
 /// whose previous runtime never recorded its stop is left alone.
 fn wipe(root: &Root) -> Result<(), CliError> {
@@ -326,3 +368,7 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 #[path = "client_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "client_reconcile_tests.rs"]
+mod reconcile_tests;

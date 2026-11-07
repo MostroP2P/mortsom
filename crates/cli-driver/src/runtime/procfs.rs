@@ -6,7 +6,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
 use rustix::fs::{major, minor};
-use rustix::process::{getegid, getgroups};
+use rustix::process::getgroups;
 
 /// Whether the procfs at `proc_root` belongs to the PID namespace of the
 /// caller, the process `pid`, and lists every process of the caller's
@@ -86,17 +86,47 @@ fn option<'a>(options: &'a str, name: &str) -> Option<&'a str> {
         .find_map(|option| option.strip_prefix(name))
 }
 
-/// Whether the caller is in the group the initial user namespace numbers
-/// `gid`, as the procfs checks it: its effective group or a supplementary
-/// one. A mount names its group by that number, and the caller's groups are
-/// numbered so only in a user namespace that maps every id to itself;
-/// elsewhere no group counts.
+/// Whether the calling thread is in the group the initial user namespace
+/// numbers `gid`, as the procfs checks it (see [`holds_group`]). A mount
+/// names its group by that number, and the caller's groups are numbered so
+/// only in a user namespace that maps every id to itself; elsewhere no
+/// group counts. The thread's own credentials are the ones the procfs
+/// checks, and `setfsgid` changes them for that thread alone, so they are
+/// read from `/proc/thread-self`; when they cannot be, no group counts.
 pub(super) fn in_group(gid: u32) -> bool {
     let initial = std::fs::read_to_string("/proc/self/gid_map")
         .is_ok_and(|map| maps_every_id_to_itself(&map));
     initial
-        && (getegid().as_raw() == gid
-            || getgroups().is_ok_and(|groups| groups.iter().any(|group| group.as_raw() == gid)))
+        && std::fs::read_to_string("/proc/thread-self/status")
+            .is_ok_and(|status| holds_group(gid, &status, &supplementary_groups()))
+}
+
+/// Whether a thread with this status and these supplementary groups is in
+/// group `gid` as the kernel's `in_group_p` tells it: by its filesystem
+/// group, not its effective one, or by a supplementary group. A status
+/// without a readable filesystem group proves nothing.
+fn holds_group(gid: u32, status: &str, groups: &[u32]) -> bool {
+    filesystem_group(status).is_some_and(|fsgid| fsgid == gid || groups.contains(&gid))
+}
+
+/// The filesystem group, the fourth on a status's `Gid:` line (real,
+/// effective, saved, filesystem).
+fn filesystem_group(status: &str) -> Option<u32> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Gid:"))?
+        .split_whitespace()
+        .nth(3)?
+        .parse()
+        .ok()
+}
+
+/// The calling thread's supplementary groups. Groups that cannot be listed
+/// only leave fewer groups to count.
+fn supplementary_groups() -> Vec<u32> {
+    getgroups()
+        .map(|groups| groups.iter().map(|group| group.as_raw()).collect())
+        .unwrap_or_default()
 }
 
 /// Whether a `gid_map` maps every id to itself, as the initial user
@@ -181,11 +211,38 @@ mod tests {
     }
 
     #[test]
-    fn the_caller_s_effective_group_counts_where_groups_are_numbered_alike() {
+    fn the_filesystem_group_is_the_fourth_on_the_gid_line() {
+        assert_eq!(
+            filesystem_group("Name:\tx\nGid:\t100\t101\t102\t103\nGroups:\t5\n"),
+            Some(103)
+        );
+        for status in ["Name:\tx\n", "Gid:\t100\t101\t102\n", "Gid:\t1\t1\t1\tx\n"] {
+            assert_eq!(filesystem_group(status), None, "{status:?}");
+        }
+    }
+
+    /// The procfs checks a group as the kernel's `in_group_p` does: by the
+    /// thread's filesystem group, which `setfsgid` sets apart from its
+    /// effective one, or by a supplementary group.
+    #[test]
+    fn the_filesystem_group_or_a_supplementary_one_holds_a_group() {
+        let status = "Gid:\t1000\t1000\t1000\t2000\n";
+
+        assert!(holds_group(2000, status, &[]));
+        assert!(!holds_group(1000, status, &[]));
+        assert!(holds_group(3000, status, &[3000]));
+        // Without a readable filesystem group nothing is proved.
+        assert!(!holds_group(3000, "Name:\tx\n", &[3000]));
+    }
+
+    #[test]
+    fn the_caller_s_filesystem_group_counts_where_groups_are_numbered_alike() {
         let initial = std::fs::read_to_string("/proc/self/gid_map")
             .is_ok_and(|map| maps_every_id_to_itself(&map));
+        let status = std::fs::read_to_string("/proc/thread-self/status").unwrap();
+        let fsgid = filesystem_group(&status).unwrap();
 
-        assert_eq!(in_group(rustix::process::getegid().as_raw()), initial);
+        assert_eq!(in_group(fsgid), initial);
     }
 
     /// A fake procfs: `self` names the caller, and `mountinfo` says what

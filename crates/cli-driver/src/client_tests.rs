@@ -6,7 +6,7 @@ use crate::testing::{ScriptedCli, SlowCli, command_of, document};
 use mortsom_common::Secret;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-fn config() -> CliConfig {
+pub(super) fn config() -> CliConfig {
     CliConfig {
         binary: "/opt/mostro-cli".into(),
         node: NodeTarget {
@@ -139,7 +139,7 @@ async fn a_fresh_start_empties_the_store_and_a_relaunch_keeps_it() {
     let root = client.root().unwrap();
     std::fs::write(root.join("mcli").join("mcli.db"), b"identity").unwrap();
 
-    client.ensure_open().unwrap();
+    client.ensure_open().await.unwrap();
     assert!(root.join("mcli").join("mcli.db").exists());
     client.start_fresh().unwrap();
 
@@ -180,7 +180,7 @@ fn protected_recovery_storage_is_never_cleared() {
 
 /// Retained storage of `platform` at `<tempdir>/bob`, with the marker of a
 /// runtime that never recorded its stop.
-fn interrupted(platform: Platform) -> (tempfile::TempDir, PathBuf) {
+pub(super) fn interrupted(platform: Platform) -> (tempfile::TempDir, PathBuf) {
     let parent = tempfile::tempdir().unwrap();
     let root = parent.path().canonicalize().unwrap().join("bob");
     ActorStorage::Fresh(root.clone()).prepare(platform).unwrap();
@@ -197,7 +197,15 @@ async fn recovery_reopens_interrupted_storage_once_no_process_uses_it() {
     let client =
         CliClient::new(config(), cli.clone()).with_storage(ActorStorage::Resume(root.clone()));
 
-    client.ensure_open().unwrap();
+    let opened = client.ensure_open().await;
+    if !crate::runtime::proc_lists_every_process() {
+        // This host's /proc proves no stop (mounted with hidepid, or the
+        // procfs of another PID namespace): the storage stays refused.
+        assert!(matches!(opened, Err(CliError::Storage(_))), "{opened:?}");
+        assert!(mortsom_desktop_driver::storage::ensure_stopped(&root).is_err());
+        return;
+    }
+    opened.unwrap();
     client
         .invoke(Call::local(&["identity", "show"]))
         .await
@@ -208,21 +216,21 @@ async fn recovery_reopens_interrupted_storage_once_no_process_uses_it() {
     mortsom_desktop_driver::storage::ensure_stopped(&root).unwrap();
 }
 
-#[test]
-fn recovery_refuses_another_platform_s_storage_and_keeps_its_marker() {
+#[tokio::test]
+async fn recovery_refuses_another_platform_s_storage_and_keeps_its_marker() {
     let (_parent, root) = interrupted(Platform::Linux);
     let cli = Arc::new(ScriptedCli::default());
     let client = CliClient::new(config(), cli).with_storage(ActorStorage::Resume(root.clone()));
 
-    let error = client.ensure_open().unwrap_err();
+    let error = client.ensure_open().await.unwrap_err();
 
     assert!(matches!(error, CliError::Storage(_)), "{error}");
     assert!(client.root().is_none());
     assert!(mortsom_desktop_driver::storage::ensure_stopped(&root).is_err());
 }
 
-#[test]
-fn recovery_refuses_storage_a_live_process_still_uses() {
+#[tokio::test]
+async fn recovery_refuses_storage_a_live_process_still_uses() {
     let (_parent, root) = interrupted(Platform::Cli);
     // Alive until killed, however long a loaded host takes to scan /proc.
     let mut live = std::process::Command::new("/bin/sh")
@@ -234,7 +242,7 @@ fn recovery_refuses_storage_a_live_process_still_uses() {
     let cli = Arc::new(ScriptedCli::default());
     let client = CliClient::new(config(), cli).with_storage(ActorStorage::Resume(root.clone()));
 
-    let opened = client.ensure_open();
+    let opened = client.ensure_open().await;
     live.kill().unwrap();
     live.wait().unwrap();
 
@@ -276,7 +284,7 @@ async fn a_closed_client_runs_nothing_on_its_retained_storage() {
     assert!(client.root().is_none());
     assert!(cli.seen().is_empty(), "{:?}", cli.seen());
     assert!(root.join("mcli").is_dir());
-    client.ensure_open().unwrap();
+    client.ensure_open().await.unwrap();
     assert_eq!(client.root(), Some(root));
     client
         .invoke(Call::local(&["identity", "show"]))
@@ -293,7 +301,7 @@ async fn reopening_an_open_store_does_not_wait_for_a_running_invocation() {
     }));
     give_up_on_one(&client).await;
 
-    let reopened = client.ensure_open();
+    let reopened = client.ensure_open().await;
 
     assert!(reopened.is_ok(), "{reopened:?}");
 }
