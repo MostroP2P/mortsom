@@ -1885,6 +1885,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "mortsom-cli-driver"
+version = "0.1.1"
+dependencies = [
+ "async-trait",
+ "mortsom-common",
+ "regex",
+ "rustix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "zeroize",
+]
+
+[[package]]
 name = "mortsom-common"
 version = "0.1.1"
 dependencies = [

@@ -34,10 +34,12 @@ like `store_unwritable`, not as a relay failure, and like every `uncertain` it i
 
 A process that cannot start, outlives its deadline (90 s, longer than the CLI's own connection, reply and
 cleanup deadlines put together, after which it is killed and reaped) or is ended by a signal is
-test-infrastructure. A process that exits non-zero without printing a document is a crash of the system
-under test (product), except exit 2 with no document, which is the argument parser refusing what Mortsom
-sent (automation-contract). Standard error and any parser complaint are scrubbed of Lightning invoices
-before they are kept.
+test-infrastructure. However an invocation ends, every descendant still in the CLI's process group is
+killed with it; a descendant that leaves the group is out of Mortsom's reach, and only the deadline bounds
+how long it can hold the output. A process that exits non-zero without
+printing a document is a crash of the system under test (product), except exit 2 with no document, which
+is the argument parser refusing what Mortsom sent (automation-contract). Standard error and any parser
+complaint are scrubbed of Lightning invoices before they are kept.
 
 An `invalid_arguments` from `order add-invoice` counts as the CLI refusing the invoice only with
 `reason: "invalid_invoice"`; any other argument refusal is an automation-contract failure.
