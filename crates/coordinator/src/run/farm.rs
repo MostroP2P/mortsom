@@ -50,7 +50,7 @@ impl DesktopOptions {
     /// Refuses a changed bundle or an artifact outside its owned snapshot.
     pub async fn verify(&self) -> Result<(), String> {
         let contained = match self.platform {
-            Platform::Linux => {
+            Platform::Linux | Platform::Cli => {
                 self.artifact.parent() == Some(self.bundle.root())
                     && self.artifact.file_name().is_some()
             }

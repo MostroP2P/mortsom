@@ -9,14 +9,24 @@
 //! actor's evidence in place of screenshots.
 
 pub mod call;
+pub mod client;
 pub mod envelope;
 pub mod error;
+mod evidence;
 pub mod process;
+pub mod runtime;
+pub mod session;
 pub mod transcript;
 
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
 pub use call::{Call, NodeTarget};
+pub use client::{CliClient, CliConfig};
 pub use envelope::{Envelope, Status, unsigned_of};
 pub use error::{CliError, category_of_code};
 pub use process::{
-    CliProcess, ProcessFailed, ProcessFailure, ProcessOutput, ProcessRequest, TokioCliProcess,
+    CliProcess, EXECUTABLE, ProcessFailed, ProcessFailure, ProcessOutput, ProcessRequest,
+    TokioCliProcess,
 };
+pub use session::CliSession;

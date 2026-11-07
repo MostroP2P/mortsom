@@ -233,6 +233,7 @@ fn artifact_in(bundle: &Path, platform: Platform) -> PathBuf {
     match platform {
         Platform::Linux => bundle.join(LINUX_EXECUTABLE),
         Platform::Web => bundle.to_path_buf(),
+        Platform::Cli => bundle.join("mostro-cli"),
     }
 }
 
@@ -334,6 +335,7 @@ async fn build_artifact(
     let bundle = source.join(match platform {
         Platform::Linux => LINUX_BUNDLE,
         Platform::Web => WEB_BUNDLE,
+        Platform::Cli => return Err("the cli profile is not built as a Flutter app".into()),
     });
     Ok((artifact_in(&bundle, platform), provenance))
 }
@@ -463,6 +465,7 @@ pub fn validate_artifact(
             Ok(())
         }
         Platform::Linux => Err("Linux artifact must be an executable regular file".into()),
+        Platform::Cli => Err("the cli profile is not available yet".into()),
     }
 }
 
@@ -607,6 +610,18 @@ mod tests {
         assert!(web.args.contains(&"--no-web-resources-cdn".into()));
         let linux = build_command(Path::new("/app"), Platform::Linux, "public", 7001, None);
         assert!(!linux.args.iter().any(|arg| arg.contains("web-resources")));
+    }
+
+    /// A journal may record the `cli` runtime before this build can run
+    /// it: its artifact is refused with an error, never a session.
+    #[test]
+    fn a_cli_artifact_is_refused_until_the_cli_profile_is_available() {
+        let artifact = artifact_in(Path::new("/bundle"), Platform::Cli);
+
+        let refused = validate_artifact(Platform::Cli, &artifact, &crate::doctor::RealHost);
+
+        assert_eq!(artifact, Path::new("/bundle/mostro-cli"));
+        assert_eq!(refused, Err("the cli profile is not available yet".into()));
     }
 }
 

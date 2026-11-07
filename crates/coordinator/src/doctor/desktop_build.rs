@@ -70,6 +70,9 @@ pub(super) async fn check(
             .await;
         }
         Platform::Web => check_web(source, host, report).await,
+        // A CLI build needs no Flutter toolchain; `doctor --profile cli`
+        // checks the executable and its discovery instead.
+        Platform::Cli => {}
     }
 }
 
