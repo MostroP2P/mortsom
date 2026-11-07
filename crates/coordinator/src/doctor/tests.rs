@@ -9,6 +9,7 @@ use mortsom_environment::daemon::{DaemonInfo, DaemonProbe, RelayList, RelayProbe
 use mortsom_environment::wallet::{WalletProbe, WalletProbeError};
 use nostr_sdk::prelude::PublicKey;
 
+use super::cli::fake::AnsweringCli;
 use super::*;
 use crate::Config;
 use mortsom_environment::WalletConfig;
@@ -223,7 +224,9 @@ async fn offline_doctor_reports_every_missing_secret_and_tool() {
         &dir.path().join("mortsom.toml"),
         Path::new("/nonexistent/stack"),
         &DesktopDoctorOptions {
-            platform: mortsom_desktop_driver::Platform::Linux,
+            platform: Some(mortsom_desktop_driver::Platform::Linux),
+            profile: None,
+            cli: Default::default(),
             artifact: None,
             source: Default::default(),
             no_network: true,
@@ -231,6 +234,7 @@ async fn offline_doctor_reports_every_missing_secret_and_tool() {
         &host,
         &FakeNet::healthy(),
         &runner,
+        &AnsweringCli::new(""),
     )
     .await;
 
@@ -271,7 +275,9 @@ async fn offline_doctor_passes_on_a_configured_host() {
         &dir.path().join("mortsom.toml"),
         Path::new("/nonexistent/stack"),
         &DesktopDoctorOptions {
-            platform: mortsom_desktop_driver::Platform::Web,
+            platform: Some(mortsom_desktop_driver::Platform::Web),
+            profile: None,
+            cli: Default::default(),
             artifact: Some(PathBuf::from("/prebuilt/web")),
             source: Default::default(),
             no_network: true,
@@ -279,6 +285,7 @@ async fn offline_doctor_passes_on_a_configured_host() {
         &host,
         &FakeNet::healthy(),
         &FakeRunner::default(),
+        &AnsweringCli::new(""),
     )
     .await;
 
@@ -305,7 +312,9 @@ async fn missing_config_file_fails_config_and_skips_network() {
         Path::new("/nonexistent/mortsom.toml"),
         Path::new("/nonexistent/stack"),
         &DesktopDoctorOptions {
-            platform: mortsom_desktop_driver::Platform::Linux,
+            platform: Some(mortsom_desktop_driver::Platform::Linux),
+            profile: None,
+            cli: Default::default(),
             artifact: None,
             source: Default::default(),
             no_network: false,
@@ -313,6 +322,7 @@ async fn missing_config_file_fails_config_and_skips_network() {
         &FakeHost::full(),
         &FakeNet::healthy(),
         &FakeRunner::default(),
+        &AnsweringCli::new(""),
     )
     .await;
 
@@ -593,7 +603,9 @@ async fn desktop_offline_doctor_checks_only_its_platform_and_never_calls_stack()
             Path::new("/nonexistent/config.toml"),
             Path::new("/nonexistent/stack"),
             &DesktopDoctorOptions {
-                platform,
+                platform: Some(platform),
+                profile: None,
+                cli: Default::default(),
                 artifact: None,
                 source: Default::default(),
                 no_network: true,
@@ -601,6 +613,7 @@ async fn desktop_offline_doctor_checks_only_its_platform_and_never_calls_stack()
             &host,
             &net,
             &runner,
+            &AnsweringCli::new(""),
         )
         .await;
         let names: Vec<_> = report.checks.iter().map(|c| c.name.as_str()).collect();
@@ -613,6 +626,9 @@ async fn desktop_offline_doctor_checks_only_its_platform_and_never_calls_stack()
 
 #[path = "desktop_preflight_tests.rs"]
 mod desktop_preflight_tests;
+
+#[path = "profile_tests.rs"]
+mod profile_tests;
 
 /// Web doctor of a host whose `chromium-browser` answers `--version` with
 /// `output`.
@@ -632,7 +648,9 @@ async fn web_doctor_with_browser(output: CommandOutput) -> DoctorReport {
         &dir.path().join("mortsom.toml"),
         Path::new("/nonexistent/stack"),
         &DesktopDoctorOptions {
-            platform: mortsom_desktop_driver::Platform::Web,
+            platform: Some(mortsom_desktop_driver::Platform::Web),
+            profile: None,
+            cli: Default::default(),
             artifact: Some(PathBuf::from("/prebuilt/web")),
             source: Default::default(),
             no_network: true,
@@ -640,6 +658,7 @@ async fn web_doctor_with_browser(output: CommandOutput) -> DoctorReport {
         &host,
         &FakeNet::healthy(),
         &FakeRunner::default(),
+        &AnsweringCli::new(""),
     )
     .await
 }

@@ -11,7 +11,7 @@ mod run_report;
 mod source;
 use maintenance::{accounting_command, cleanup_command, parity_command, publish_command};
 use run::run_command;
-pub use source::{ClientBuild, ClientSelection, SourceOverrides};
+pub use source::{ClientBuild, ClientSelection, SourceOverrides, effective_profile};
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -160,9 +160,13 @@ pub enum Command {
     /// Check prerequisites, secrets, daemon, relay port and wallets. Performs
     /// no payment and creates no order.
     Doctor {
-        /// Client target whose prerequisites are checked.
-        #[arg(long, default_value = "linux")]
-        platform: mortsom_desktop_driver::Platform,
+        /// App platform whose prerequisites are checked (`linux` by
+        /// default). Not with profile `cli`.
+        #[arg(long)]
+        platform: Option<mortsom_desktop_driver::Platform>,
+        /// Client profile, overriding `mobile.profile`: `mobile-v2` or `cli`.
+        #[arg(long, value_name = "PROFILE")]
+        profile: Option<String>,
         /// The build of the profile's client to check: an artifact is
         /// validated instead of the build prerequisites.
         #[command(flatten)]
@@ -475,7 +479,7 @@ pub async fn run(cli: Cli) -> ExitCode {
             rebuild,
             xvfb,
         } => {
-            let client = match select_client(&build) {
+            let client = match select_client(&cli.config, None, &build) {
                 Ok(client) => client,
                 Err(code) => return code,
             };
@@ -504,9 +508,10 @@ pub async fn run(cli: Cli) -> ExitCode {
             no_network,
             json,
             platform,
+            profile,
             build,
         } => {
-            let client = match select_client(&build) {
+            let client = match select_client(&cli.config, profile.as_deref(), &build) {
                 Ok(client) => client,
                 Err(code) => return code,
             };
@@ -529,6 +534,8 @@ pub async fn run(cli: Cli) -> ExitCode {
                 &cli.stack_dir,
                 &crate::doctor::DesktopDoctorOptions {
                     platform,
+                    profile,
+                    cli: client.cli,
                     artifact: client.artifact,
                     source: client.source,
                     no_network,
@@ -536,6 +543,7 @@ pub async fn run(cli: Cli) -> ExitCode {
                 &RealHost,
                 &net,
                 &TokioRunner,
+                &mortsom_cli_driver::TokioCliProcess,
             )
             .await;
             if json {
@@ -558,19 +566,25 @@ pub async fn run(cli: Cli) -> ExitCode {
     }
 }
 
-/// The adapter of the one profile the config loader accepts, `mobile-v2`.
+/// The adapter of the app profile, `mobile-v2`.
 pub fn select_adapter() -> Arc<dyn mortsom_app_contract::AppAdapter> {
     Arc::new(MobileV2Adapter::new())
 }
 
-/// Reads `--artifact`, `--source` and `--ref` for the app; a `--ref`
-/// outside the app's repository is an argument error, reported before
-/// anything starts.
-fn select_client(build: &ClientBuild) -> Result<ClientSelection, ExitCode> {
-    build.for_app().map_err(|error| {
-        eprintln!("error: {error}");
-        ExitCode::from(2)
-    })
+/// Reads `--artifact`, `--source` and `--ref` for the profile the
+/// invocation drives; a `--ref` outside that profile's repository is an
+/// argument error, reported before anything starts.
+fn select_client(
+    config_path: &std::path::Path,
+    profile: Option<&str>,
+    build: &ClientBuild,
+) -> Result<ClientSelection, ExitCode> {
+    build
+        .for_profile(&effective_profile(config_path, profile))
+        .map_err(|error| {
+            eprintln!("error: {error}");
+            ExitCode::from(2)
+        })
 }
 
 async fn run_relay(config_path: &std::path::Path, command: RelayCommand) -> ExitCode {

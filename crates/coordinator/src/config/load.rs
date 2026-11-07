@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use figment::Figment;
 use figment::providers::{Format, Toml};
-use mortsom_common::env_resolve::{ENV_PREFIX, resolve_env_lenient, resolve_env_with};
+use mortsom_common::env_resolve::{ENV_PREFIX, MissingEnv, resolve_env_lenient, resolve_env_with};
 use mortsom_environment::config::ENV_ONLY_KEYS;
 use toml::Value;
 
@@ -155,6 +155,68 @@ pub fn local_overlay_path(path: &Path) -> PathBuf {
         .and_then(|s| s.to_str())
         .unwrap_or("mortsom");
     path.with_file_name(format!("{stem}{LOCAL_OVERLAY_SUFFIX}"))
+}
+
+/// The `mobile.profile` a configuration selects, read without loading it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfiguredProfile {
+    /// The files cannot be read, set no profile, or set one that is not a
+    /// string (the loader refuses that): the default applies.
+    Absent,
+    /// The profile, its own environment reference resolved.
+    Named(String),
+    /// The profile references environment variables that are not set, so
+    /// it names no profile; the loader refuses such a configuration.
+    Unresolved {
+        /// The names that are not set; never a value.
+        names: Vec<String>,
+    },
+}
+
+impl ConfiguredProfile {
+    /// The profile an invocation drives: `flag` (`--profile`) when given,
+    /// else this one, else the default. `Err` holds the names an
+    /// unresolved profile needs, when no flag overrides it.
+    pub fn with_flag(self, flag: Option<&str>) -> Result<String, Vec<String>> {
+        match (flag, self) {
+            (Some(flag), _) => Ok(flag.to_owned()),
+            (None, Self::Named(profile)) => Ok(profile),
+            (None, Self::Absent) => Ok(mortsom_app_contract::config::DEFAULT_PROFILE.to_owned()),
+            (None, Self::Unresolved { names }) => Err(names),
+        }
+    }
+}
+
+/// The `mobile.profile` the configuration at `path` selects, its local
+/// overlay included and its own environment reference resolved from the
+/// process environment, without resolving secrets or validating anything
+/// else.
+pub fn configured_profile(path: &Path) -> ConfiguredProfile {
+    configured_profile_with(path, |name| std::env::var(name).ok())
+}
+
+/// Like [`configured_profile`] with an injectable environment lookup. The
+/// profile's own `env:` reference or `${NAME}` is resolved, as the loader
+/// resolves it; a name it references that is not set leaves it
+/// [`ConfiguredProfile::Unresolved`], never absent. A name set to an empty
+/// value counts as unset whatever `lookup` returns, as doctor and run read
+/// the environment (`RealHost::env`), so every caller agrees on the client.
+pub fn configured_profile_with<F>(path: &Path, lookup: F) -> ConfiguredProfile
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let Some(profile) = read_layered(path)
+        .ok()
+        .and_then(|raw| raw.get("mobile")?.get("profile").cloned())
+    else {
+        return ConfiguredProfile::Absent;
+    };
+    match resolve_env_with(profile, |name| lookup(name).filter(|v| !v.is_empty())) {
+        Ok(value) => value.as_str().map_or(ConfiguredProfile::Absent, |profile| {
+            ConfiguredProfile::Named(profile.to_owned())
+        }),
+        Err(MissingEnv(names)) => ConfiguredProfile::Unresolved { names },
+    }
 }
 
 pub(super) fn read_layered(path: &Path) -> Result<Value, ConfigError> {
@@ -437,6 +499,111 @@ avd_image = \"x\"
         assert_eq!(
             local_overlay_path(Path::new("config/ci.example.toml")),
             PathBuf::from("config/ci.example.local.toml")
+        );
+    }
+
+    fn named(profile: &str) -> ConfiguredProfile {
+        ConfiguredProfile::Named(profile.to_owned())
+    }
+
+    #[test]
+    fn the_configured_profile_reads_the_local_overlay_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("desktop.toml");
+        std::fs::write(&base, "[mobile]\nprofile = \"mobile-v2\"\n").unwrap();
+        assert_eq!(configured_profile(&base), named("mobile-v2"));
+
+        std::fs::write(
+            dir.path().join("desktop.local.toml"),
+            "[mobile]\nprofile = \"cli\"\n",
+        )
+        .unwrap();
+        assert_eq!(configured_profile(&base), named("cli"));
+
+        assert_eq!(
+            configured_profile(&dir.path().join("missing.toml")),
+            ConfiguredProfile::Absent
+        );
+        std::fs::write(&base, "[run]\n").unwrap();
+        std::fs::remove_file(dir.path().join("desktop.local.toml")).unwrap();
+        assert_eq!(configured_profile(&base), ConfiguredProfile::Absent);
+    }
+
+    /// A reference to a set name is resolved as the loader resolves it, so
+    /// `run`, `doctor` and the loaded configuration agree on the profile.
+    /// An unset name leaves it unresolved, where the loader fails: it is
+    /// not the absent profile, whose default would name a client.
+    #[test]
+    fn the_configured_profile_resolves_its_environment_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("desktop.toml");
+        let lookup = |name: &str| (name == "MORTSOM_PROFILE").then(|| "cli".to_owned());
+        for reference in ["env:MORTSOM_PROFILE", "${MORTSOM_PROFILE}"] {
+            std::fs::write(&base, format!("[mobile]\nprofile = \"{reference}\"\n")).unwrap();
+
+            assert_eq!(
+                configured_profile_with(&base, lookup),
+                named("cli"),
+                "{reference}"
+            );
+        }
+
+        for reference in ["env:MORTSOM_UNSET", "${MORTSOM_UNSET}"] {
+            std::fs::write(&base, format!("[mobile]\nprofile = \"{reference}\"\n")).unwrap();
+
+            assert_eq!(
+                configured_profile_with(&base, lookup),
+                ConfiguredProfile::Unresolved {
+                    names: vec!["MORTSOM_UNSET".to_owned()]
+                },
+                "{reference}"
+            );
+        }
+    }
+
+    /// A name set to an empty value is unset, as doctor and run read the
+    /// environment (`RealHost::env`): an empty profile would read as the
+    /// app's, naming a client neither of them checks or drives.
+    #[test]
+    fn a_profile_reference_set_to_an_empty_value_is_unresolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("desktop.toml");
+        let empty = |_: &str| Some(String::new());
+        for reference in ["env:MORTSOM_PROFILE", "${MORTSOM_PROFILE}"] {
+            std::fs::write(&base, format!("[mobile]\nprofile = \"{reference}\"\n")).unwrap();
+
+            assert_eq!(
+                configured_profile_with(&base, empty),
+                ConfiguredProfile::Unresolved {
+                    names: vec!["MORTSOM_PROFILE".to_owned()]
+                },
+                "{reference}"
+            );
+        }
+    }
+
+    /// `--profile` wins over whatever the configuration says, an unset
+    /// reference included; without it, an absent profile is the default
+    /// and an unresolved one names no profile, only the unset names.
+    #[test]
+    fn the_profile_flag_wins_and_an_unresolved_profile_names_its_variables() {
+        let unresolved = || ConfiguredProfile::Unresolved {
+            names: vec!["MORTSOM_PROFILE".to_owned()],
+        };
+
+        assert_eq!(unresolved().with_flag(Some("cli")), Ok("cli".to_owned()));
+        assert_eq!(
+            named("cli").with_flag(Some("mobile-v2")).unwrap(),
+            "mobile-v2"
+        );
+        assert_eq!(named("cli").with_flag(None).unwrap(), "cli");
+        assert_eq!(
+            ConfiguredProfile::Absent.with_flag(None).unwrap(),
+            mortsom_app_contract::config::DEFAULT_PROFILE
+        );
+        assert_eq!(
+            unresolved().with_flag(None),
+            Err(vec!["MORTSOM_PROFILE".to_owned()])
         );
     }
 }

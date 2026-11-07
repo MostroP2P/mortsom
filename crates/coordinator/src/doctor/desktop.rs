@@ -1,6 +1,7 @@
 //! Read-only prerequisites for clients attached to the regtest stack.
 use std::path::{Path, PathBuf};
 
+use mortsom_cli_driver::CliProcess;
 use mortsom_desktop_driver::Platform;
 use mortsom_ui_driver::process::CommandRunner;
 
@@ -9,8 +10,12 @@ use crate::{Config, stack::StackContext};
 
 /// Requirements of one platform-aware diagnostic invocation.
 pub struct DesktopDoctorOptions {
-    /// Linux or Web client target.
-    pub platform: Platform,
+    /// Linux or Web client target; the profile decides when absent.
+    pub platform: Option<Platform>,
+    /// `--profile`, overriding `mobile.profile`.
+    pub profile: Option<String>,
+    /// The mostro-cli to check with profile `cli`.
+    pub cli: crate::mostro_cli_build::CliSelection,
     /// Existing native executable or Web bundle, avoiding source/build checks.
     pub artifact: Option<PathBuf>,
     /// CLI overrides of the configured source mode.
@@ -19,7 +24,8 @@ pub struct DesktopDoctorOptions {
     pub no_network: bool,
 }
 
-/// Checks the selected desktop platform without launching a client or paying.
+/// Checks the selected desktop platform without launching an actor or paying.
+/// With profile `cli`, mostro-cli's discovery runs through `process`.
 pub async fn run_desktop_doctor(
     config_path: &Path,
     stack_dir: &Path,
@@ -27,16 +33,13 @@ pub async fn run_desktop_doctor(
     host: &dyn HostProbe,
     net: &dyn NetProbes,
     runner: &dyn CommandRunner,
+    process: &dyn CliProcess,
 ) -> DoctorReport {
     let mut report = DoctorReport::default();
-    check_tools(
-        options.platform,
-        options.artifact.is_none(),
-        Path::new("Xvfb"),
-        host,
-        &mut report,
-    )
-    .await;
+    // Resolved once, before the tools are checked, since they differ per
+    // client; the client checks below take this answer.
+    let requested = requested_client(config_path, options, host);
+    check_client_tools(&requested, options, host, &mut report).await;
     let stack = if options.no_network {
         None
     } else {
@@ -73,24 +76,9 @@ pub async fn run_desktop_doctor(
         }
     }
     report_config(config_path, &diagnosis, &mut report);
-    if let Some(config) = &diagnosis.config {
-        check_app(
-            config,
-            options.platform,
-            options.artifact.as_deref(),
-            host,
-            &mut report,
-        );
-        if options.artifact.is_none() {
-            super::desktop_build::check(
-                (!config.mobile.source_dir.is_empty())
-                    .then(|| Path::new(&config.mobile.source_dir)),
-                options.platform,
-                host,
-                &mut report,
-            )
-            .await;
-        }
+    // An unresolved client is already the `client` failure.
+    if let (Ok(platform), Some(config)) = (requested, &diagnosis.config) {
+        check_client(config, platform, options, host, process, &mut report).await;
     }
     if options.no_network {
         report.push("network", CheckStatus::Skip, "--no-network");
@@ -110,6 +98,78 @@ pub async fn run_desktop_doctor(
         check.detail = redactor.redact(&check.detail);
     }
     report
+}
+
+/// The client doctor checks: `--profile`, else the configured profile read
+/// through the host's environment (local overlay and its own environment
+/// reference included), on `--platform`'s runtime. A configured reference
+/// to an unset name names no client: the error names the variable.
+fn requested_client(
+    config_path: &Path,
+    options: &DesktopDoctorOptions,
+    host: &dyn HostProbe,
+) -> Result<Platform, String> {
+    let profile = crate::config::configured_profile_with(config_path, |name| host.env(name))
+        .with_flag(options.profile.as_deref())
+        .map_err(|names| {
+            let verb = if names.len() == 1 { "is" } else { "are" };
+            format!(
+                "mobile.profile references {}, which {verb} not set",
+                names.join(", ")
+            )
+        })?;
+    crate::mostro_cli::resolve_client(&profile, None, options.platform)
+        .map(|(_, platform)| platform)
+}
+
+/// The tools of the requested client. A client that does not resolve is
+/// the `client` failure instead: neither client's tools would apply.
+async fn check_client_tools(
+    requested: &Result<Platform, String>,
+    options: &DesktopDoctorOptions,
+    host: &dyn HostProbe,
+    report: &mut DoctorReport,
+) {
+    match requested {
+        Err(error) => report.push("client", CheckStatus::Fail, error.clone()),
+        Ok(Platform::Cli) => super::cli::check_tools(&options.cli, host, report),
+        Ok(platform) => {
+            check_tools(
+                *platform,
+                options.artifact.is_none(),
+                Path::new("Xvfb"),
+                host,
+                report,
+            )
+            .await;
+        }
+    }
+}
+
+/// The client [`requested_client`] resolved: mostro-cli, or the app and
+/// its build on its platform.
+async fn check_client(
+    config: &Config,
+    platform: Platform,
+    options: &DesktopDoctorOptions,
+    host: &dyn HostProbe,
+    process: &dyn CliProcess,
+    report: &mut DoctorReport,
+) {
+    if platform == Platform::Cli {
+        super::cli::check(&options.cli, process, report).await;
+        return;
+    }
+    check_app(config, platform, options.artifact.as_deref(), host, report);
+    if options.artifact.is_none() {
+        super::desktop_build::check(
+            (!config.mobile.source_dir.is_empty()).then(|| Path::new(&config.mobile.source_dir)),
+            platform,
+            host,
+            report,
+        )
+        .await;
+    }
 }
 
 async fn check_tools(
@@ -192,6 +252,8 @@ fn check_tool(tool: &str, variable: Option<&str>, host: &dyn HostProbe, report: 
     }
 }
 
+/// The app checks; reached only once the profile resolved to the app, so
+/// the configured profile is no longer consulted here.
 fn check_app(
     config: &Config,
     platform: Platform,
@@ -199,13 +261,6 @@ fn check_app(
     host: &dyn HostProbe,
     report: &mut DoctorReport,
 ) {
-    if config.mobile.profile != "mobile-v2" {
-        report.push(
-            "app-profile",
-            CheckStatus::Fail,
-            "Linux and Web require mobile-v2",
-        );
-    }
     if let Some(path) = artifact {
         match crate::desktop::validate_artifact(platform, path, host) {
             Ok(()) => report.push(
