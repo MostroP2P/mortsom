@@ -13,16 +13,19 @@ pub async fn load(
     runner: &dyn CommandRunner,
     host: &dyn crate::doctor::HostProbe,
 ) -> Result<(Config, crate::stack::StackSnapshot), String> {
-    load_with_source(config, stack_dir, runner, host, None).await
+    load_with_source(config, stack_dir, runner, host, None, None).await
 }
 
-/// Loads an explicit source selection before configuration resolution and validation.
+/// Loads with an explicit source selection and `--profile` in place of the
+/// configured ones, replaced before configuration resolution and validation
+/// ([`Config::load_with_source`]).
 pub async fn load_with_source(
     config: &Path,
     stack_dir: &Path,
     runner: &dyn CommandRunner,
     host: &dyn crate::doctor::HostProbe,
     source: Option<&crate::config::AppSource>,
+    profile: Option<&str>,
 ) -> Result<(Config, crate::stack::StackSnapshot), String> {
     let stack = StackContext::resolve(stack_dir, runner)
         .await
@@ -31,6 +34,7 @@ pub async fn load_with_source(
         config,
         |name| stack.lookup(name).or_else(|| host.env(name)),
         source,
+        profile,
     )
     .map_err(|e| e.to_string())?;
     stack.configure_relay(&mut config);

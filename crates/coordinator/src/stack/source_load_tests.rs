@@ -71,10 +71,16 @@ async fn run_configuration_replaces_invalid_source_modes_before_loading() {
                 .is_err()
         );
         for selection in selections() {
-            let (config, _) =
-                desktop::load_with_source(&path, dir.path(), &docker, &RealHost, Some(&selection))
-                    .await
-                    .unwrap();
+            let (config, _) = desktop::load_with_source(
+                &path,
+                dir.path(),
+                &docker,
+                &RealHost,
+                Some(&selection),
+                None,
+            )
+            .await
+            .unwrap();
             assert_selection(&config, &selection);
         }
     }
@@ -96,20 +102,56 @@ async fn source_overrides_preserve_caps_credentials_and_other_validation() {
         std::fs::write(dir.path().join("mortsom.local.toml"), invalid).unwrap();
         for selection in selections() {
             assert!(
-                desktop::load_with_source(&path, dir.path(), &docker, &RealHost, Some(&selection),)
-                    .await
-                    .is_err(),
+                desktop::load_with_source(
+                    &path,
+                    dir.path(),
+                    &docker,
+                    &RealHost,
+                    Some(&selection),
+                    None,
+                )
+                .await
+                .is_err(),
                 "{invalid}"
             );
             let diagnosis = crate::Config::diagnose_with_source(
                 &path,
                 |name| context.lookup(name),
                 Some(&selection),
+                None,
             );
             assert!(
                 !diagnosis.problems.is_empty() || !diagnosis.missing_env.is_empty(),
                 "{invalid}"
             );
+        }
+    }
+}
+
+/// `run` loads with `--profile` in place of `mobile.profile`, replaced
+/// before the configuration is resolved and validated: a known flag stands
+/// in for a reference to an unset name or an unknown configured profile.
+/// Without it, or with an unknown flag, the configuration is refused as
+/// before.
+#[tokio::test]
+async fn run_configuration_replaces_the_configured_profile_with_the_flag() {
+    let (dir, docker, path) = ready_config().await;
+    for configured in ["env:MORTSOM_TEST_UNSET_PROFILE", "mobile-v1"] {
+        std::fs::write(
+            dir.path().join("mortsom.local.toml"),
+            format!("[mobile]\nprofile = '{configured}'\n"),
+        )
+        .unwrap();
+        let load = |profile| {
+            desktop::load_with_source(&path, dir.path(), &docker, &RealHost, None, profile)
+        };
+        assert!(load(None).await.is_err(), "{configured}");
+        assert!(load(Some("mobile-v1")).await.is_err(), "{configured}");
+        for flag in ["cli", "mobile-v2"] {
+            let (config, _) = load(Some(flag))
+                .await
+                .unwrap_or_else(|e| panic!("{configured} / {flag}: {e}"));
+            assert_eq!(config.mobile.profile, flag, "{configured}");
         }
     }
 }

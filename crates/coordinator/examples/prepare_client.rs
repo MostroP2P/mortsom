@@ -24,6 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         &TokioRunner,
         &RealHost,
         source.as_ref(),
+        None,
     )
     .await?;
     println!("{platform}: preparing source build against the verified persistent stack");

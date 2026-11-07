@@ -54,16 +54,7 @@ pub async fn run_desktop_doctor(
             }
         }
     };
-    let mut diagnosis = Config::diagnose_with_source(
-        config_path,
-        |name| {
-            stack
-                .as_ref()
-                .and_then(|s| s.lookup(name))
-                .or_else(|| host.env(name))
-        },
-        options.source.selection().as_ref(),
-    );
+    let mut diagnosis = diagnose(config_path, stack.as_ref(), options, host);
     if let (Some(stack), Some(config)) = (&stack, &mut diagnosis.config) {
         stack.configure_relay(config);
         match stack.snapshot().validate_config(config) {
@@ -98,6 +89,27 @@ pub async fn run_desktop_doctor(
         check.detail = redactor.redact(&check.detail);
     }
     report
+}
+
+/// The lenient diagnosis of the configuration, the stack's references
+/// first, with the invocation's source selection and `--profile` in place
+/// of the configured ones, as `run` loads it.
+fn diagnose(
+    config_path: &Path,
+    stack: Option<&StackContext>,
+    options: &DesktopDoctorOptions,
+    host: &dyn HostProbe,
+) -> crate::config::ConfigDiagnosis {
+    Config::diagnose_with_source(
+        config_path,
+        |name| {
+            stack
+                .and_then(|s| s.lookup(name))
+                .or_else(|| host.env(name))
+        },
+        options.source.selection().as_ref(),
+        options.profile.as_deref(),
+    )
 }
 
 /// The client doctor checks: `--profile`, else the configured profile read

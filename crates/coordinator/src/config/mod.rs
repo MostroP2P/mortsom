@@ -3,6 +3,7 @@
 
 mod load;
 mod maintenance;
+mod profile_flag;
 mod publication;
 mod run;
 mod source;

@@ -173,20 +173,11 @@ async fn run_once(
         source,
         xvfb,
     } = selection;
-    let (config, stack) = match crate::desktop::load_with_source(
-        config_path,
-        stack_dir,
-        &TokioRunner,
-        &RealHost,
-        source.selection().as_ref(),
-    )
-    .await
-    {
-        Ok(loaded) => loaded,
-        Err(e) => {
-            return Attempt::Refused(e.to_string());
-        }
-    };
+    let (config, stack) =
+        match load_selected(config_path, stack_dir, &source, profile.as_deref()).await {
+            Ok(loaded) => loaded,
+            Err(error) => return Attempt::Refused(error),
+        };
     // The client is decided before anything is admitted or built. The build
     // flags were already read for the same profile (`cli::select_client`).
     let platform = match crate::mostro_cli::resolve_client(
@@ -296,6 +287,28 @@ async fn run_once(
         },
         Err(RunError::NotStarted(reason)) => Attempt::Refused(reason),
     }
+}
+
+/// The configuration and the stack it is attached to, with the
+/// invocation's source selection and `--profile` in place of the
+/// configured ones before the configuration is resolved and validated
+/// (spec §7): the flag also stands in for an unset reference or an
+/// unknown configured profile.
+async fn load_selected(
+    config_path: &std::path::Path,
+    stack_dir: &std::path::Path,
+    source: &SourceOverrides,
+    profile: Option<&str>,
+) -> Result<(Config, crate::stack::StackSnapshot), String> {
+    crate::desktop::load_with_source(
+        config_path,
+        stack_dir,
+        &TokioRunner,
+        &RealHost,
+        source.selection().as_ref(),
+        profile,
+    )
+    .await
 }
 
 /// The chain of the Mortsom-owned stack in `stack_dir`, which the run was

@@ -279,6 +279,130 @@ async fn the_profile_flag_wins_over_an_unset_profile_reference() {
     assert_no_app_checks(&report);
 }
 
+/// The failing `config` and `env` checks of `report`, as "name: detail".
+fn configuration_failures(report: &DoctorReport) -> Vec<String> {
+    report
+        .checks
+        .iter()
+        .filter(|c| c.status == CheckStatus::Fail)
+        .filter(|c| c.name == "config" || c.name.starts_with("env "))
+        .map(|c| format!("{}: {}", c.name, c.detail))
+        .collect()
+}
+
+/// `--profile` replaces `mobile.profile` before the configuration is
+/// resolved and validated, as `run` loads it: neither an unset reference
+/// nor an unknown configured profile is a configuration failure, and the
+/// flag's client is checked.
+#[tokio::test]
+async fn the_profile_flag_replaces_the_configured_profile_before_diagnosis() {
+    for (configured, flag, checked) in [
+        ("env:MORTSOM_PROFILE", "cli", "mostro-cli-source"),
+        ("mobile-v1", "cli", "mostro-cli-source"),
+        ("env:MORTSOM_PROFILE", "mobile-v2", "flutter"),
+        ("mobile-v1", "mobile-v2", "flutter"),
+    ] {
+        let dir = example_config();
+        configure_profile(&dir, configured);
+
+        let report = doctor(
+            &dir,
+            &options(Some(flag), None),
+            &FakeHost::full(),
+            &AnsweringCli::new(""),
+        )
+        .await;
+
+        let failures = configuration_failures(&report);
+        assert!(failures.is_empty(), "{configured} / {flag}: {failures:?}");
+        assert!(names(&report).contains(&checked), "{configured} / {flag}");
+        assert!(!names(&report).contains(&"client"), "{configured} / {flag}");
+    }
+}
+
+/// Standing in for the configured profile, `--profile cli` still takes no
+/// `--platform`: that is the one `client` failure left.
+#[tokio::test]
+async fn a_platform_with_the_cli_flag_is_still_refused_over_an_unset_reference() {
+    let dir = example_config();
+    configure_profile(&dir, "env:MORTSOM_PROFILE");
+
+    let report = doctor(
+        &dir,
+        &options(Some("cli"), Some(Platform::Linux)),
+        &FakeHost::full(),
+        &AnsweringCli::new(""),
+    )
+    .await;
+
+    let client = status_of(&report, "client");
+    assert_eq!(client.status, CheckStatus::Fail);
+    assert!(client.detail.contains("--platform"), "{}", client.detail);
+    let failures = configuration_failures(&report);
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+/// Without `--profile` the configured profile is diagnosed as before: an
+/// unset reference reports its variable, an unknown profile is a problem.
+#[tokio::test]
+async fn without_the_flag_the_configured_profile_is_still_diagnosed() {
+    for (configured, failure) in [
+        ("env:MORTSOM_PROFILE", "env MORTSOM_PROFILE: not set"),
+        ("mobile-v1", "config: mobile.profile `mobile-v1` is unknown"),
+    ] {
+        let dir = example_config();
+        configure_profile(&dir, configured);
+
+        let report = doctor(
+            &dir,
+            &options(None, None),
+            &FakeHost::full(),
+            &AnsweringCli::new(""),
+        )
+        .await;
+
+        let failures = configuration_failures(&report);
+        assert!(
+            failures.iter().any(|f| f.starts_with(failure)),
+            "{configured}: {failures:?}"
+        );
+    }
+}
+
+/// An unknown `--profile` replaces nothing: it is the `client` failure,
+/// naming the flag's value, never a configuration problem about it, and
+/// the configured profile is diagnosed as without the flag.
+#[tokio::test]
+async fn an_unknown_profile_flag_replaces_nothing_in_the_configuration() {
+    let dir = example_config();
+    configure_profile(&dir, "env:MORTSOM_PROFILE");
+
+    let report = doctor(
+        &dir,
+        &options(Some("mobile-v1"), None),
+        &FakeHost::full(),
+        &AnsweringCli::new(""),
+    )
+    .await;
+
+    let client = status_of(&report, "client");
+    assert_eq!(client.status, CheckStatus::Fail);
+    assert!(
+        client.detail.contains("unknown profile `mobile-v1`"),
+        "{}",
+        client.detail
+    );
+    let failures = configuration_failures(&report);
+    assert!(
+        failures.iter().any(|f| f == "env MORTSOM_PROFILE: not set"),
+        "{failures:?}"
+    );
+    assert!(
+        failures.iter().all(|f| !f.contains("mobile-v1")),
+        "{failures:?}"
+    );
+}
+
 /// `--profile mobile-v2` wins over a configured `cli`, and the app is
 /// checked on Linux by default.
 #[tokio::test]
