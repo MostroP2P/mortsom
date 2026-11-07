@@ -92,6 +92,42 @@ fn default_desktop_artifact_commands_need_neither_exported_runtime_refs_nor_a_st
     assert!(!root.path().join("ci").exists());
 }
 
+/// Writes a fresh run holding one scenario under `profile`, from run-b's
+/// summary with the scenario renamed. Neither fixture run is paired with
+/// it: the fixture names both runs' scenario after a credential path,
+/// which a refusal would print.
+fn single_scenario_run(root: &Path, run: &str, profile: &str, scenario: &str) {
+    let template = root.join("artifacts/run-b/summary.json");
+    let mut summary: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(template).unwrap()).unwrap();
+    summary["run_id"] = run.into();
+    summary["app_profile"] = profile.into();
+    summary["results"][0]["name"] = scenario.into();
+    summary["results"][0]["app_profile"] = profile.into();
+    let dir = root.join("artifacts").join(run);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("summary.json"), summary.to_string()).unwrap();
+}
+
+#[test]
+fn parity_refuses_two_runs_that_share_no_scenario() {
+    // Arrange
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    single_scenario_run(root.path(), "run-c", "mobile-v2", "happy_sell");
+    single_scenario_run(root.path(), "run-d", "cli", "happy_buy");
+
+    // Act / Assert: nothing was compared, so nothing is reported as parity.
+    command(root.path())
+        .args(["parity", "run-c", "run-d"])
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains("share no scenario"))
+        .stdout(predicates::str::is_empty());
+    assert!(!root.path().join("artifacts/parity.json").exists());
+    assert!(!root.path().join("artifacts/parity.md").exists());
+}
+
 #[test]
 fn a_missing_custom_publication_secret_fails_before_creating_the_output() {
     let root = tempfile::tempdir().unwrap();

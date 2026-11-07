@@ -6,6 +6,11 @@
 //! navigation and screens are not compared. A difference is either listed
 //! as intentional (with its reason, from an explicit file) or reported as
 //! a finding.
+//!
+//! Every run holds one scenario (spec §8.1), so the two runs are one
+//! scenario's run under each profile. A scenario counts only when both
+//! summaries carry it; two runs that share none compare nothing and are
+//! refused, never reported as parity.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -123,7 +128,8 @@ pub struct ParityReport {
     pub runs: (String, String),
     /// Profiles compared.
     pub profiles: (String, String),
-    /// Scenarios both runs executed.
+    /// Scenarios both runs executed; never empty, as two runs that share
+    /// none are refused.
     pub scenarios: Vec<ScenarioParity>,
     /// Scenarios only one run executed.
     pub only_in_a: Vec<String>,
@@ -132,8 +138,8 @@ pub struct ParityReport {
     /// Runs whose recovery was abandoned; they can never reach parity.
     #[serde(default)]
     pub abandoned_runs: Vec<String>,
-    /// True when no scenario has an unexplained difference and no run's
-    /// recovery was abandoned.
+    /// True when at least one scenario was compared, none has an
+    /// unexplained difference and no run's recovery was abandoned.
     pub parity: bool,
 }
 
@@ -209,7 +215,10 @@ impl ParityReport {
 }
 
 /// Compares `run_a` and `run_b` under `artifacts_dir`, writing the report
-/// next to them.
+/// next to them. Every run holds one scenario (spec §8.1), so the two runs
+/// are one scenario's run under each profile: a scenario counts only when
+/// both summaries carry it, and two runs that share none are refused,
+/// never reported as parity.
 pub fn compare_runs(
     artifacts_dir: &Path,
     run_a: &str,
@@ -224,37 +233,19 @@ pub fn compare_runs(
             a.summary.app_profile
         ));
     }
-    let names_a: BTreeSet<String> = a.summary.results.iter().map(|r| r.name.clone()).collect();
-    let names_b: BTreeSet<String> = b.summary.results.iter().map(|r| r.name.clone()).collect();
-    let pair = (
-        a.summary.app_profile.as_str(),
-        b.summary.app_profile.as_str(),
-    );
-    let mut scenarios = Vec::new();
-    for name in names_a.intersection(&names_b) {
-        let side_a = side_of(&a, name);
-        let side_b = side_of(&b, name);
-        let differing = differing_aspects(&side_a, &side_b);
-        let (accepted, findings): (Vec<Aspect>, Vec<Aspect>) = differing
-            .into_iter()
-            .partition(|aspect| intentional.iter().any(|i| i.accepts(name, *aspect, pair)));
-        let intentional = accepted
-            .into_iter()
-            .filter_map(|aspect| {
-                intentional
-                    .iter()
-                    .find(|i| i.accepts(name, aspect, pair))
-                    .cloned()
-            })
-            .collect();
-        scenarios.push(ScenarioParity {
-            name: name.clone(),
-            a: side_a,
-            b: side_b,
-            intentional,
-            findings,
-        });
+    let (names_a, names_b) = (scenario_names(&a), scenario_names(&b));
+    if names_a.is_disjoint(&names_b) {
+        return Err(format!(
+            "runs {run_a} and {run_b} share no scenario ({run_a}: {}; {run_b}: {}), so nothing \
+             was compared; give parity the two profiles' runs of one scenario",
+            name_list(&names_a),
+            name_list(&names_b)
+        ));
     }
+    let scenarios: Vec<ScenarioParity> = names_a
+        .intersection(&names_b)
+        .map(|name| compare_scenario(&a, &b, name, intentional))
+        .collect();
     let abandoned_runs: Vec<String> = [(run_a, &a), (run_b, &b)]
         .into_iter()
         .filter(|(_, run)| run.abandoned)
@@ -269,12 +260,70 @@ pub fn compare_runs(
         only_in_a: names_a.difference(&names_b).cloned().collect(),
         only_in_b: names_b.difference(&names_a).cloned().collect(),
     };
-    let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+    write_report(artifacts_dir, &report)?;
+    Ok(report)
+}
+
+/// Names of the scenarios a run's summary carries.
+fn scenario_names(run: &LoadedRun) -> BTreeSet<String> {
+    run.summary.results.iter().map(|r| r.name.clone()).collect()
+}
+
+/// `a, b`, or `none` for a run that carries no scenario.
+fn name_list(names: &BTreeSet<String>) -> String {
+    if names.is_empty() {
+        return "none".to_owned();
+    }
+    names
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// One scenario both runs carry: its two sides, and each differing aspect
+/// either accepted by an entry for this profile pair or a finding.
+fn compare_scenario(
+    a: &LoadedRun,
+    b: &LoadedRun,
+    name: &str,
+    intentional: &[Intentional],
+) -> ScenarioParity {
+    let pair = (
+        a.summary.app_profile.as_str(),
+        b.summary.app_profile.as_str(),
+    );
+    let side_a = side_of(a, name);
+    let side_b = side_of(b, name);
+    let differing = differing_aspects(&side_a, &side_b);
+    let (accepted, findings): (Vec<Aspect>, Vec<Aspect>) = differing
+        .into_iter()
+        .partition(|aspect| intentional.iter().any(|i| i.accepts(name, *aspect, pair)));
+    let intentional = accepted
+        .into_iter()
+        .filter_map(|aspect| {
+            intentional
+                .iter()
+                .find(|i| i.accepts(name, aspect, pair))
+                .cloned()
+        })
+        .collect();
+    ScenarioParity {
+        name: name.to_owned(),
+        a: side_a,
+        b: side_b,
+        intentional,
+        findings,
+    }
+}
+
+/// Writes `parity.json` and `parity.md` under `artifacts_dir`.
+fn write_report(artifacts_dir: &Path, report: &ParityReport) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(report).map_err(|e| e.to_string())?;
     std::fs::write(artifacts_dir.join(PARITY_JSON), json)
         .map_err(|e| format!("cannot write {PARITY_JSON}: {e}"))?;
     std::fs::write(artifacts_dir.join(PARITY_MD), report.render())
-        .map_err(|e| format!("cannot write {PARITY_MD}: {e}"))?;
-    Ok(report)
+        .map_err(|e| format!("cannot write {PARITY_MD}: {e}"))
 }
 
 /// Reads an intentional-differences file (TOML).

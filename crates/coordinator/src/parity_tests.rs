@@ -271,10 +271,87 @@ fn same_profile_and_missing_runs_are_errors() {
 }
 
 #[test]
+fn two_runs_that_share_no_scenario_are_refused_instead_of_reaching_parity() {
+    // Arrange: one scenario's run under each profile, but not the same one.
+    let dir = tempfile::tempdir().unwrap();
+    let states = [("alice", "pending")];
+    for (id, profile, scenario) in [("a", "mobile-v2", "happy_sell"), ("b", "cli", "happy_buy")] {
+        write_run(
+            dir.path(),
+            id,
+            &summary(id, profile, &[(scenario, "passed")]),
+            &timeline(&states, &["pending"], false),
+        );
+    }
+
+    // Act
+    let err = compare_runs(dir.path(), "a", "b", &[]).unwrap_err();
+
+    // Assert: refused with both runs' scenarios, and no report claims parity.
+    assert!(err.contains("share no scenario"), "{err}");
+    assert!(err.contains("(a: happy_sell; b: happy_buy)"), "{err}");
+    assert!(!dir.path().join(PARITY_JSON).exists());
+    assert!(!dir.path().join(PARITY_MD).exists());
+}
+
+#[test]
+fn a_run_that_carries_no_scenario_never_reaches_parity() {
+    // Arrange: a run that ended before its scenario recorded a result.
+    let dir = tempfile::tempdir().unwrap();
+    write_run(dir.path(), "a", &summary("a", "mobile-v2", &[]), "");
+    write_run(
+        dir.path(),
+        "b",
+        &summary("b", "cli", &[("happy_sell", "passed")]),
+        "",
+    );
+
+    // Act
+    let err = compare_runs(dir.path(), "a", "b", &[]).unwrap_err();
+
+    // Assert
+    assert!(err.contains("share no scenario"), "{err}");
+    assert!(err.contains("(a: none; b: happy_sell)"), "{err}");
+    assert!(!dir.path().join(PARITY_JSON).exists());
+    assert!(!dir.path().join(PARITY_MD).exists());
+}
+
+#[test]
+fn a_scenario_only_one_run_carries_is_listed_but_never_compared() {
+    // Arrange: the failed scenario only run `a` carries must not count.
+    let dir = tempfile::tempdir().unwrap();
+    let states = [("alice", "pending")];
+    let results_a = [("happy_sell", "passed"), ("legacy_only", "product")];
+    let results_b = [("happy_sell", "passed")];
+    for (id, profile, results) in [
+        ("a", "mobile-v2", &results_a[..]),
+        ("b", "cli", &results_b[..]),
+    ] {
+        write_run(
+            dir.path(),
+            id,
+            &summary(id, profile, results),
+            &timeline(&states, &["pending"], false),
+        );
+    }
+
+    // Act
+    let report = compare_runs(dir.path(), "a", "b", &[]).unwrap();
+
+    // Assert
+    let compared: Vec<&str> = report.scenarios.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(compared, ["happy_sell"]);
+    assert_eq!(report.only_in_a, ["legacy_only"]);
+    assert!(report.only_in_b.is_empty());
+    assert!(report.parity, "{}", report.render());
+}
+
+#[test]
 fn missing_timeline_is_empty_but_unreadable_timeline_is_an_error() {
     let dir = tempfile::tempdir().unwrap();
-    write_run(dir.path(), "a", &summary("a", "profile-b", &[]), "");
-    write_run(dir.path(), "b", &summary("b", "mobile-v2", &[]), "");
+    let results = [("happy_sell", "passed")];
+    write_run(dir.path(), "a", &summary("a", "profile-b", &results), "");
+    write_run(dir.path(), "b", &summary("b", "mobile-v2", &results), "");
     assert!(compare_runs(dir.path(), "a", "b", &[]).is_ok());
 
     // A timeline path that exists but cannot be read as a file must not
