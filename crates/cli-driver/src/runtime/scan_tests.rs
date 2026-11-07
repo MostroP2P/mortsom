@@ -1,4 +1,4 @@
-//! A fake process table for [`any_process_uses`]: each process is a
+//! A fake process table for [`why_in_use`]: each process is a
 //! directory, and an unreadable file is a directory under that name
 //! (reading it fails, as an inaccessible `environ` does, but not with
 //! "not found"), so the cases hold whoever runs the tests.
@@ -40,7 +40,7 @@ impl Proc {
     }
 
     fn uses_store_as(&self, uid: u32) -> bool {
-        any_process_uses(self.root.path(), Uid::from_raw(uid), Path::new(STORE))
+        why_in_use(self.root.path(), Uid::from_raw(uid), Path::new(STORE)).is_some()
     }
 
     /// A real store directory beside the table's processes, and a second
@@ -54,7 +54,7 @@ impl Proc {
     }
 
     fn uses(&self, store: &Path) -> bool {
-        any_process_uses(self.root.path(), Uid::from_raw(self.operator), store)
+        why_in_use(self.root.path(), Uid::from_raw(self.operator), store).is_some()
     }
 }
 
@@ -157,6 +157,63 @@ fn a_readable_environment_naming_the_store_by_another_path_uses_it() {
     environ(&process, &[&format!("MCLI_DIR={}", alias.display())]);
 
     assert!(table.uses(&store));
+}
+
+/// A path on an unresponsive mount can block a check of it for as long as
+/// the mount hangs: a process naming one counts, by that path, once its
+/// check does not complete in time.
+#[test]
+fn a_path_whose_check_does_not_complete_in_time_counts() {
+    let table = Proc::new();
+    let (store, _) = table.real_store();
+    let process = table.process("4242");
+    environ(&process, &["MCLI_DIR=/mnt/hung/mcli"]);
+    let unanswered = Store::new(&store).checking_paths_with(|_| Err(Incomplete));
+
+    let in_use = scan(
+        table.root.path(),
+        Uid::from_raw(table.operator),
+        &unanswered,
+    );
+
+    assert_eq!(in_use, Some(InUse::Unchecked("/mnt/hung/mcli".into())));
+}
+
+/// Only another absolute path needs a check: the store's own path, a
+/// relative one and another variable are told by their bytes.
+#[test]
+fn only_another_absolute_path_is_checked() {
+    let table = Proc::new();
+    let (store, _) = table.real_store();
+    let process = table.process("4242");
+    environ(
+        &process,
+        &["MCLI_DIR=run/bob/mcli", "OLD_MCLI_DIR=/mnt/hung/mcli"],
+    );
+    let unanswered = Store::new(&store).checking_paths_with(|_| Err(Incomplete));
+
+    let in_use = scan(
+        table.root.path(),
+        Uid::from_raw(table.operator),
+        &unanswered,
+    );
+
+    assert_eq!(in_use, None);
+}
+
+#[test]
+fn a_check_answers_within_its_bound_or_is_incomplete() {
+    let (release, released) = std::sync::mpsc::channel::<()>();
+
+    let answered = bounded(std::time::Duration::from_secs(5), || 7);
+    let unanswered = bounded(std::time::Duration::from_millis(20), move || {
+        released.recv().ok()
+    });
+    // Lets the check left behind end.
+    release.send(()).unwrap();
+
+    assert_eq!(answered, Ok(7));
+    assert_eq!(unanswered, Err(Incomplete));
 }
 
 #[test]
@@ -466,9 +523,8 @@ fn an_unreadable_process_table_proves_nothing() {
     let table = Proc::new();
     let missing = table.root.path().join("no-proc");
 
-    assert!(any_process_uses(
-        &missing,
-        Uid::from_raw(table.operator),
-        Path::new(STORE)
-    ));
+    assert_eq!(
+        why_in_use(&missing, Uid::from_raw(table.operator), Path::new(STORE)),
+        Some(InUse::Process)
+    );
 }

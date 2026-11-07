@@ -695,7 +695,8 @@ The CLI runtime (section 6.3) marks each invocation, not a session: the marker i
 and cleared once it is gone, by a task that outlives a caller that gives up. A marker left by a killed
 coordinator is reconciled by the CLI runtime itself, and only after it checks, through `/proc`, that no
 process of the operator's user that `/proc` shows runs with the actor's `MCLI_DIR` (set to the store's path,
-or to another absolute path to the same directory, as through a bind mount). That needs `/proc` to be the
+or to another absolute path to the same directory, as through a bind mount; a process whose other path cannot
+be checked within a short bound, as on an unresponsive mount, counts). That needs `/proc` to be the
 procfs of Mortsom's own PID namespace, listing every process of the operator's user: a procfs mounted with
 `hidepid=invisible` (while that user is not in its `gid=` group) or `hidepid=ptraceable` leaves out every
 non-dumpable process of that user, and a procfs of another PID namespace shows none of Mortsom's. `/proc`
