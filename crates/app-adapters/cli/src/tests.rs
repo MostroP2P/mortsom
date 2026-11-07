@@ -659,19 +659,6 @@ async fn a_refused_trade_step_keeps_its_category() {
 }
 
 #[tokio::test]
-async fn cancelling_instead_of_paying_cancels_the_order() {
-    let (cli, session) = session();
-    cli.ok("order.cancel", json!({"result": "canceled"}));
-
-    adapter()
-        .cancel_payment(&device(&session, Actor::Bob), &order(OrderKind::Sell))
-        .await
-        .unwrap();
-
-    assert_eq!(cli.commands(), ["order.cancel"]);
-}
-
-#[tokio::test]
 async fn the_cli_has_no_wallet_and_shows_no_actions() {
     let (_, session) = session();
     let device = device(&session, Actor::Alice);
@@ -727,3 +714,6 @@ async fn an_invoice_the_cli_or_the_node_refuses_is_an_answer() {
 
 #[path = "tests_messages.rs"]
 mod message_list;
+
+#[path = "tests_bond.rs"]
+mod bond_flows;

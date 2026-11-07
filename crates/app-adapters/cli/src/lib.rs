@@ -9,6 +9,7 @@
 //! CLI lacks is not claimed, so its scenarios are skipped with a reason.
 
 mod access;
+mod bond;
 mod identity;
 mod memo;
 mod messages;
@@ -23,9 +24,9 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use mortsom_app_contract::{
-    AdapterError, AppAdapter, AppOrderState, AppProfile, CancelOutcome, Capability, CapabilitySet,
-    DeviceContext, Identity, InvoiceSubmission, OrderDraft, OrderReference, PaymentHandoff,
-    PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
+    AdapterError, AppAdapter, AppOrderState, AppProfile, BondClaim, CancelOutcome, Capability,
+    CapabilitySet, DeviceContext, Identity, InvoiceSubmission, OrderDraft, OrderReference,
+    PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };
 use mortsom_common::Secret;
 
@@ -58,6 +59,7 @@ const CAPABILITY_COMMANDS: &[(Capability, &[&str])] = &[
     (Capability::Cancel, &["order.cancel"]),
     (Capability::Dispute, &["dispute.open"]),
     (Capability::Rating, &["order.rate"]),
+    (Capability::Bond, &["bond.add-invoice", "message.list"]),
 ];
 
 /// What the adapter knows about the run and the CLI under test.
@@ -319,6 +321,63 @@ impl AppAdapter for CliAdapter {
         order: &OrderReference,
     ) -> Result<(), AdapterError> {
         trade::open_dispute(device, order).await
+    }
+
+    async fn pay_bond_invoice(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+        path: PaymentPath,
+    ) -> Result<PaymentHandoff, AdapterError> {
+        bond::pay(
+            device,
+            &self.memo,
+            order,
+            path,
+            self.config.message_window,
+            self.poll,
+        )
+        .await
+    }
+
+    async fn decline_bond(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<(), AdapterError> {
+        bond::decline(device, order).await
+    }
+
+    async fn bond_claim(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<Option<BondClaim>, AdapterError> {
+        bond::claim(device, &self.memo, order, self.config.message_window).await
+    }
+
+    async fn submit_bond_claim_invoice(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+        invoice: &Secret,
+    ) -> Result<String, AdapterError> {
+        bond::submit_claim(
+            device,
+            &self.memo,
+            order,
+            invoice,
+            self.config.message_window,
+        )
+        .await
+    }
+
+    async fn bond_slash_notice(
+        &self,
+        device: &DeviceContext<'_>,
+        order: &OrderReference,
+    ) -> Result<Option<String>, AdapterError> {
+        bond::slash_notice(device, order, self.config.message_window).await
     }
 
     async fn cancel_payment(

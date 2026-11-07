@@ -112,6 +112,7 @@ fn remember_request(memo: &Memo, device: &DeviceContext<'_>, order_id: &str, out
         .filter(|s| *s > 0);
     match outcome.text(&["next_step"]) {
         Some(PAY_HOLD) => memo.update(device.actor, order_id, |r| r.hold_invoice = invoice),
+        Some(PAY_BOND) => memo.update(device.actor, order_id, |r| r.bond_invoice = invoice),
         Some(ADD_INVOICE) => memo.update(device.actor, order_id, |r| r.payout_sats = payout),
         _ => {}
     }
@@ -494,7 +495,7 @@ async fn closed_after_refusal(
     }
 }
 
-/// Cancels instead of paying the hold invoice.
+/// Cancels the order instead of paying its hold invoice or bond.
 pub(crate) async fn cancel(
     device: &DeviceContext<'_>,
     order: &OrderReference,
