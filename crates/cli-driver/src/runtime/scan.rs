@@ -24,8 +24,10 @@ pub(super) enum InUse {
     /// What `/proc` shows of a process, or fails to show, ties it to the
     /// store; or the process table cannot be listed.
     Process,
-    /// A process sets the variable to another path whose check did not
-    /// complete within [`PATH_CHECK`]: that path may lead to the store.
+    /// A process sets the variable to another absolute path that could not
+    /// be checked against the store: its check did not complete within
+    /// [`PATH_CHECK`], its metadata could not be read, or the store's own
+    /// could not (see [`Identity`]). That path may lead to the store.
     Unchecked(PathBuf),
 }
 
@@ -35,8 +37,10 @@ pub(super) enum InUse {
 /// A process whose environment can be read uses the store only when the
 /// environment sets that variable to the store's path, byte for byte, or to
 /// another absolute path to the same directory (a bind mount or a symbolic
-/// link); one whose other path cannot be checked within [`PATH_CHECK`]
-/// counts. One whose environment cannot be read (it made itself
+/// link); one whose other path cannot be checked against the store (the
+/// check does not complete within [`PATH_CHECK`], or that path or the
+/// store cannot be read) counts, and one whose path leads nowhere does not.
+/// One whose environment cannot be read (it made itself
 /// non-dumpable, as ssh-agent and gpg-agent do, or its executable is not
 /// readable) proves nothing; it counts when `uid`, the user Mortsom runs
 /// the CLI as, is among its users (see [`runs_as`]) and its first argument
@@ -71,17 +75,19 @@ fn is_pid(name: &OsStr) -> bool {
 /// The variable that names a CLI's store.
 const STORE_VARIABLE: &[u8] = b"MCLI_DIR=";
 
-/// The identity of another path to the store, or [`Incomplete`].
-type PathCheck = fn(&Path) -> Result<Option<(u64, u64)>, Incomplete>;
+/// The identity of another path to the store, or [`Incomplete`] when the
+/// check does not end in time.
+type PathCheck = fn(&Path) -> Result<Identity, Incomplete>;
 
 /// The actor's store as an environment may name it.
 struct Store {
     /// `MCLI_DIR=<path>`, as bytes.
     variable: Vec<u8>,
-    /// The directory's device and inode, when it can be read. The store is
-    /// Mortsom's own, under the root whose marker was just read, so this
-    /// check is not bounded.
-    identity: Option<(u64, u64)>,
+    /// The directory's identity. Unless it is [`Identity::Found`], another
+    /// path that leads to a directory cannot be compared with the store.
+    /// The store is Mortsom's own, under the root whose marker was just
+    /// read, so this check is not bounded.
+    identity: Identity,
     /// How another path is checked.
     check: PathCheck,
 }
@@ -114,27 +120,66 @@ impl Store {
     }
 
     /// Why `var` may set the variable to another absolute path to the
-    /// store's directory, if it may.
+    /// store's directory, if it may: the path leads to it, or whether it
+    /// does cannot be told. A path that leads nowhere does not, nor one that
+    /// leads to another directory while the store's own identity is known;
+    /// a relative one is not checked.
     fn reached_by(&self, var: &[u8]) -> Option<InUse> {
-        let path = var.strip_prefix(STORE_VARIABLE)?;
-        let identity = self.identity.filter(|_| path.starts_with(b"/"))?;
+        let path = var
+            .strip_prefix(STORE_VARIABLE)
+            .filter(|path| path.starts_with(b"/"))?;
         let path = Path::new(OsStr::from_bytes(path));
-        match (self.check)(path) {
-            Ok(found) => (found == Some(identity)).then_some(InUse::Process),
-            Err(Incomplete) => Some(InUse::Unchecked(path.to_path_buf())),
+        match ((self.check)(path), self.identity) {
+            (Ok(Identity::Absent), _) => None,
+            (Ok(found @ Identity::Found(..)), store @ Identity::Found(..)) => {
+                (found == store).then_some(InUse::Process)
+            }
+            // The check did not complete, the path could not be read, or
+            // the store has no identity to compare it with.
+            (Err(Incomplete) | Ok(Identity::Unverified), _)
+            | (Ok(Identity::Found(..)), Identity::Absent | Identity::Unverified) => {
+                Some(InUse::Unchecked(path.to_path_buf()))
+            }
         }
     }
 }
 
-/// The device and inode of the directory at `path`.
-fn identity(path: &Path) -> Option<(u64, u64)> {
-    std::fs::metadata(path)
-        .ok()
-        .map(|meta| (meta.dev(), meta.ino()))
+/// What the metadata of a path tells of the directory it leads to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Identity {
+    /// Its device and inode.
+    Found(u64, u64),
+    /// Nothing is there in this mount namespace: the path, or one of its
+    /// components, does not exist or is not a directory.
+    Absent,
+    /// The metadata could not be read (permission denied, an I/O error, a
+    /// loop of symbolic links): the path may lead anywhere.
+    Unverified,
+}
+
+impl Identity {
+    /// The identity a read of a path's metadata gives. Only a path that is
+    /// not there is [`Identity::Absent`]; any other failure proves nothing.
+    fn of(metadata: std::io::Result<std::fs::Metadata>) -> Self {
+        match metadata {
+            Ok(meta) => Self::Found(meta.dev(), meta.ino()),
+            Err(error)
+                if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) =>
+            {
+                Self::Absent
+            }
+            Err(_) => Self::Unverified,
+        }
+    }
+}
+
+/// The [`Identity`] of the directory at `path`.
+fn identity(path: &Path) -> Identity {
+    Identity::of(std::fs::metadata(path))
 }
 
 /// [`identity`], bounded by [`PATH_CHECK`].
-fn bounded_identity(path: &Path) -> Result<Option<(u64, u64)>, Incomplete> {
+fn bounded_identity(path: &Path) -> Result<Identity, Incomplete> {
     let path = path.to_path_buf();
     bounded(PATH_CHECK, move || identity(&path))
 }

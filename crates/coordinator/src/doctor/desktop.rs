@@ -36,17 +36,9 @@ pub async fn run_desktop_doctor(
     process: &dyn CliProcess,
 ) -> DoctorReport {
     let mut report = DoctorReport::default();
-    // The configured profile counts as much as `--profile`: read it before
-    // the tools are checked, since they differ per client.
-    let configured = crate::config::configured_profile_with(config_path, |name| host.env(name));
-    let requested = crate::mostro_cli::resolve_client(
-        configured
-            .as_deref()
-            .unwrap_or(mortsom_app_contract::config::DEFAULT_PROFILE),
-        options.profile.as_deref(),
-        options.platform,
-    )
-    .map(|(_, platform)| platform);
+    // Resolved once, before the tools are checked, since they differ per
+    // client; the client checks below take this answer.
+    let requested = requested_client(config_path, options, host);
     check_client_tools(&requested, options, host, &mut report).await;
     let stack = if options.no_network {
         None
@@ -85,8 +77,8 @@ pub async fn run_desktop_doctor(
     }
     report_config(config_path, &diagnosis, &mut report);
     // An unresolved client is already the `client` failure.
-    if let (Ok(_), Some(config)) = (&requested, &diagnosis.config) {
-        check_client(config, options, host, process, &mut report).await;
+    if let (Ok(platform), Some(config)) = (requested, &diagnosis.config) {
+        check_client(config, platform, options, host, process, &mut report).await;
     }
     if options.no_network {
         report.push("network", CheckStatus::Skip, "--no-network");
@@ -106,6 +98,28 @@ pub async fn run_desktop_doctor(
         check.detail = redactor.redact(&check.detail);
     }
     report
+}
+
+/// The client doctor checks: `--profile`, else the configured profile read
+/// through the host's environment (local overlay and its own environment
+/// reference included), on `--platform`'s runtime. A configured reference
+/// to an unset name names no client: the error names the variable.
+fn requested_client(
+    config_path: &Path,
+    options: &DesktopDoctorOptions,
+    host: &dyn HostProbe,
+) -> Result<Platform, String> {
+    let profile = crate::config::configured_profile_with(config_path, |name| host.env(name))
+        .with_flag(options.profile.as_deref())
+        .map_err(|names| {
+            let verb = if names.len() == 1 { "is" } else { "are" };
+            format!(
+                "mobile.profile references {}, which {verb} not set",
+                names.join(", ")
+            )
+        })?;
+    crate::mostro_cli::resolve_client(&profile, None, options.platform)
+        .map(|(_, platform)| platform)
 }
 
 /// The tools of the requested client. A client that does not resolve is
@@ -132,30 +146,20 @@ async fn check_client_tools(
     }
 }
 
-/// The client the diagnosed configuration resolves to: mostro-cli, or the
-/// app and its build on its platform.
+/// The client [`requested_client`] resolved: mostro-cli, or the app and
+/// its build on its platform.
 async fn check_client(
     config: &Config,
+    platform: Platform,
     options: &DesktopDoctorOptions,
     host: &dyn HostProbe,
     process: &dyn CliProcess,
     report: &mut DoctorReport,
 ) {
-    let platform = match crate::mostro_cli::resolve_client(
-        &config.mobile.profile,
-        options.profile.as_deref(),
-        options.platform,
-    ) {
-        Err(error) => {
-            report.push("client", CheckStatus::Fail, error);
-            return;
-        }
-        Ok((_, Platform::Cli)) => {
-            super::cli::check(&options.cli, process, report).await;
-            return;
-        }
-        Ok((_, platform)) => platform,
-    };
+    if platform == Platform::Cli {
+        super::cli::check(&options.cli, process, report).await;
+        return;
+    }
     check_app(config, platform, options.artifact.as_deref(), host, report);
     if options.artifact.is_none() {
         super::desktop_build::check(

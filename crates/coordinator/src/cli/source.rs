@@ -84,13 +84,18 @@ impl ClientBuild {
     }
 }
 
-/// The profile a `run` or `doctor` drives: `--profile`, else the
-/// configuration's `mobile.profile` (local overlay included), else the
-/// default.
+/// The profile whose build flags a `run` or `doctor` reads: `--profile`,
+/// else the configuration's `mobile.profile` (local overlay and its own
+/// environment reference included), else the default.
+///
+/// A configured reference to an unset name names no profile; the flags are
+/// then read as the app's, as for an unknown profile. Nothing is built
+/// from them: doctor reports that profile as its `client` failure and the
+/// loader refuses the configuration.
 pub fn effective_profile(config_path: &Path, flag: Option<&str>) -> String {
-    flag.map(str::to_owned)
-        .or_else(|| crate::config::configured_profile(config_path))
-        .unwrap_or_else(|| mortsom_app_contract::config::DEFAULT_PROFILE.to_owned())
+    crate::config::configured_profile(config_path)
+        .with_flag(flag)
+        .unwrap_or_else(|_unset| mortsom_app_contract::config::DEFAULT_PROFILE.to_owned())
 }
 
 /// The app's source, replacing the configured mode: a branch or pull
@@ -225,5 +230,24 @@ mod tests {
             effective_profile(missing, None),
             mortsom_app_contract::config::DEFAULT_PROFILE
         );
+    }
+
+    /// An unset reference names no profile: the build flags are read as
+    /// the app's, unless `--profile` names the client.
+    #[test]
+    fn an_unresolved_profile_reads_the_build_flags_as_the_app_s() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("desktop.toml");
+        std::fs::write(
+            &config,
+            "[mobile]\nprofile = \"env:MORTSOM_TEST_PROFILE_NEVER_SET\"\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            effective_profile(&config, None),
+            mortsom_app_contract::config::DEFAULT_PROFILE
+        );
+        assert_eq!(effective_profile(&config, Some("cli")), "cli");
     }
 }

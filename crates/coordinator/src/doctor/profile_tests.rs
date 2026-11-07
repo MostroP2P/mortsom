@@ -214,6 +214,71 @@ async fn a_configured_profile_from_the_environment_takes_its_checks() {
     assert_no_app_checks(&report);
 }
 
+/// A configured reference to an unset name names no client: it is the one
+/// `client` failure, naming the variable, and neither client's tools nor
+/// checks run, rather than the app's tools under the default profile.
+#[tokio::test]
+async fn an_unset_profile_reference_is_the_only_client_failure() {
+    let dir = example_config();
+    configure_profile(&dir, "env:MORTSOM_PROFILE");
+    let cli = AnsweringCli::new("");
+
+    let report = doctor(&dir, &options(None, None), &FakeHost::full(), &cli).await;
+
+    let names = names(&report);
+    let clients: Vec<_> = report
+        .checks
+        .iter()
+        .filter(|c| c.name == "client")
+        .collect();
+    assert_eq!(clients.len(), 1, "{names:?}");
+    assert_eq!(clients[0].status, CheckStatus::Fail);
+    assert!(
+        clients[0].detail.contains("MORTSOM_PROFILE"),
+        "{}",
+        clients[0].detail
+    );
+    assert!(
+        !clients[0].detail.contains("unknown profile"),
+        "{}",
+        clients[0].detail
+    );
+    for tool in ["docker", "git", "cargo"] {
+        assert!(!names.contains(&tool), "{tool}: {names:?}");
+    }
+    assert!(
+        !names.iter().any(|name| name.starts_with("mostro-cli")),
+        "{names:?}"
+    );
+    assert_no_app_checks(&report);
+    assert!(!report.is_healthy());
+    assert_eq!(cli.calls(), 0);
+}
+
+/// `--profile` wins over a configured reference to an unset name, as over
+/// any configured profile: the flag's client is checked.
+#[tokio::test]
+async fn the_profile_flag_wins_over_an_unset_profile_reference() {
+    let dir = example_config();
+    configure_profile(&dir, "env:MORTSOM_PROFILE");
+
+    let report = doctor(
+        &dir,
+        &options(Some("cli"), None),
+        &FakeHost::full(),
+        &AnsweringCli::new(""),
+    )
+    .await;
+
+    assert_eq!(status_of(&report, "git").status, CheckStatus::Pass);
+    assert_eq!(
+        status_of(&report, "mostro-cli-source").status,
+        CheckStatus::Skip
+    );
+    assert!(!names(&report).contains(&"client"), "{:?}", names(&report));
+    assert_no_app_checks(&report);
+}
+
 /// `--profile mobile-v2` wins over a configured `cli`, and the app is
 /// checked on Linux by default.
 #[tokio::test]
