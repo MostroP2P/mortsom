@@ -59,7 +59,7 @@ An `invalid_arguments` from `order add-invoice` counts as the CLI refusing the i
 | node requests | `message list --order --since <minutes>` | `data.messages[]`: `action`, `next_step` (`pay_hold_invoice`, `add_invoice`, `pay_bond_invoice`, `add_bond_invoice`), `created_at_unix`, `payload.invoice`, `payload.amount`, `payload.order.sats_amount`; `data.truncated` |
 | buyer invoice | `order add-invoice --order --invoice - --yes` | refusals: `node_refused` + `reason`, `invalid_arguments` |
 | fiat sent / release | `order fiat-sent` / `order release --order --yes` | status only |
-| cancel | `order cancel --order --yes` | `data.result`; refusals `node_refused` + `reason` (`order_already_canceled`, `not_allowed_by_status`, `is_not_your_order`), `order_unknown` |
+| cancel | `order cancel --order --yes` | `data.result`; refusals `node_refused` + `reason` (`order_already_canceled`, `not_allowed_by_status`, `is_not_your_order`; `invalid_pubkey` when this side already asked for a cooperative cancel), `order_unknown` |
 | rate | `order rate --order --rating --yes` | status only |
 | dispute | `dispute open --order --yes` | status only |
 | bond claim | `bond add-invoice --order --invoice - --yes` | status only; after the node's newest `add_bond_invoice` request the claim reads `pending`, `submitted` once this actor handed an invoice in, `acknowledged` on `bond-invoice-accepted` and `completed` on `bond-payout-completed` |

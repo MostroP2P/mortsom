@@ -78,8 +78,9 @@ pub struct CliAdapterConfig {
     pub message_window: MessageWindow,
 }
 
-/// The `cli` profile.
-#[derive(Debug, Default)]
+/// The `cli` profile. Built with [`CliAdapter::new`] only: a default would
+/// read node requests without a pause between reads.
+#[derive(Debug)]
 pub struct CliAdapter {
     config: CliAdapterConfig,
     memo: memo::Memo,
