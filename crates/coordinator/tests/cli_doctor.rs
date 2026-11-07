@@ -281,3 +281,103 @@ fn doctor_reads_the_ref_for_the_cli_profile_s_repository() {
         assert!(output.get_output().stdout.is_empty(), "{selection:?}");
     }
 }
+
+/// `doctor --no-network --json` with `mobile.profile` set in the local
+/// overlay of the example configuration, from an empty environment.
+fn doctor_with_configured_profile(profile: &str) -> assert_cmd::assert::Assert {
+    doctor_with_configured_profile_and_env(profile, &[])
+}
+
+/// Like [`doctor_with_configured_profile`], with `env` added to the empty
+/// environment.
+fn doctor_with_configured_profile_and_env(
+    profile: &str,
+    env: &[(&str, &str)],
+) -> assert_cmd::assert::Assert {
+    let dir = tempfile::tempdir().unwrap();
+    let config = example_config(&dir);
+    std::fs::write(
+        dir.path().join("mortsom.local.toml"),
+        format!("[mobile]\nprofile = \"{profile}\"\n"),
+    )
+    .unwrap();
+    Command::cargo_bin("mortsom")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap()])
+        .args(["doctor", "--no-network", "--json"])
+        .env_clear()
+        .env("PATH", "/nonexistent")
+        .envs(env.iter().copied())
+        .assert()
+}
+
+/// The `client` checks of a `doctor --json` report.
+fn client_checks(stdout: &[u8]) -> Vec<serde_json::Value> {
+    let report: serde_json::Value = serde_json::from_slice(stdout).unwrap();
+    report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|check| check["name"] == "client")
+        .cloned()
+        .collect()
+}
+
+/// Without `--profile`, the banner names the client doctor checks: the
+/// configured `cli`, not the default app platform.
+#[test]
+fn doctor_s_banner_names_the_configured_cli_profile() {
+    let output = doctor_with_configured_profile("cli").code(1);
+
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert!(stderr.contains("doctor · cli · "), "{stderr}");
+    assert!(!stderr.contains("doctor · linux"), "{stderr}");
+}
+
+/// A configured reference to an unset name is the one `client` failure,
+/// naming the variable; no client's tools are checked, and the banner
+/// names the profile as unresolved instead of a platform. (The config
+/// section still reports the unset variable as its own check.)
+#[test]
+fn doctor_with_an_unset_profile_reference_has_one_client_failure_and_checks_no_tools() {
+    let output = doctor_with_configured_profile("env:MORTSOM_PROFILE").code(1);
+
+    assert_one_unresolved_client_and_no_tools(&output);
+}
+
+/// Set but empty is unset, for the banner as for doctor: CI interpolating
+/// an undefined variable gives an empty value, and the banner must not
+/// name an app platform doctor is not checking.
+#[test]
+fn doctor_with_a_profile_reference_set_to_an_empty_value_names_no_platform() {
+    let output =
+        doctor_with_configured_profile_and_env("env:MORTSOM_PROFILE", &[("MORTSOM_PROFILE", "")])
+            .code(1);
+
+    assert_one_unresolved_client_and_no_tools(&output);
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert!(!stderr.contains("doctor · linux"), "{stderr}");
+}
+
+/// One `client` failure naming `MORTSOM_PROFILE`, no client's tools
+/// checked, and a banner naming the profile as unresolved.
+fn assert_one_unresolved_client_and_no_tools(output: &assert_cmd::assert::Assert) {
+    let stdout = &output.get_output().stdout;
+    let names = check_names(stdout);
+    for unwanted in ["docker", "git", "cargo", "flutter", "Xvfb"] {
+        assert!(
+            !names.iter().any(|name| name == unwanted),
+            "{unwanted}: {names:?}"
+        );
+    }
+    let clients = client_checks(stdout);
+    assert_eq!(clients.len(), 1, "{names:?}");
+    assert_eq!(clients[0]["status"], "fail", "{}", clients[0]);
+    let detail = clients[0]["detail"].as_str().unwrap();
+    assert!(detail.contains("MORTSOM_PROFILE"), "{detail}");
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert!(
+        stderr.contains("doctor · unresolved profile (MORTSOM_PROFILE not set) · "),
+        "{stderr}"
+    );
+}

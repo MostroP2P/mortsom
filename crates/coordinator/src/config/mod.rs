@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 pub use load::{
-    ConfigDiagnosis, LOCAL_OVERLAY_SUFFIX, configured_profile, configured_profile_with,
+    ConfigDiagnosis, ConfiguredProfile, LOCAL_OVERLAY_SUFFIX, configured_profile,
+    configured_profile_with,
 };
 pub use maintenance::{ArtifactSettings, MaintenanceConfig};
 pub use publication::PublishSettings;

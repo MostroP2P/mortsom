@@ -54,7 +54,24 @@ impl Proc {
     }
 
     fn uses(&self, store: &Path) -> bool {
-        why_in_use(self.root.path(), Uid::from_raw(self.operator), store).is_some()
+        self.why(store).is_some()
+    }
+
+    fn why(&self, store: &Path) -> Option<InUse> {
+        why_in_use(self.root.path(), Uid::from_raw(self.operator), store)
+    }
+
+    /// The scan of the table for `store` as given, its checks included.
+    fn scan_for(&self, store: &Store) -> Option<InUse> {
+        scan(self.root.path(), Uid::from_raw(self.operator), store)
+    }
+
+    /// A path whose metadata no user can read, root included: it runs
+    /// through a symbolic link to itself.
+    fn looping_path(&self) -> PathBuf {
+        let looped = self.root.path().join("loop");
+        std::os::unix::fs::symlink(&looped, &looped).unwrap();
+        looped.join("mcli")
     }
 }
 
@@ -170,11 +187,7 @@ fn a_path_whose_check_does_not_complete_in_time_counts() {
     environ(&process, &["MCLI_DIR=/mnt/hung/mcli"]);
     let unanswered = Store::new(&store).checking_paths_with(|_| Err(Incomplete));
 
-    let in_use = scan(
-        table.root.path(),
-        Uid::from_raw(table.operator),
-        &unanswered,
-    );
+    let in_use = table.scan_for(&unanswered);
 
     assert_eq!(in_use, Some(InUse::Unchecked("/mnt/hung/mcli".into())));
 }
@@ -192,11 +205,7 @@ fn only_another_absolute_path_is_checked() {
     );
     let unanswered = Store::new(&store).checking_paths_with(|_| Err(Incomplete));
 
-    let in_use = scan(
-        table.root.path(),
-        Uid::from_raw(table.operator),
-        &unanswered,
-    );
+    let in_use = table.scan_for(&unanswered);
 
     assert_eq!(in_use, None);
 }
@@ -233,6 +242,101 @@ fn a_readable_environment_naming_another_real_directory_does_not() {
     );
 
     assert!(!table.uses(&store));
+}
+
+/// A path whose metadata cannot be read (permission is denied on the way
+/// to it, or the read fails) may still lead to the store: a process naming
+/// one counts, by that path.
+#[test]
+fn a_path_that_cannot_be_read_counts() {
+    let table = Proc::new();
+    let (store, _) = table.real_store();
+    let process = table.process("4242");
+    environ(&process, &["MCLI_DIR=/mnt/denied/mcli"]);
+    let denied = Store::new(&store).checking_paths_with(|_| Ok(Identity::Unverified));
+
+    let in_use = table.scan_for(&denied);
+
+    assert_eq!(in_use, Some(InUse::Unchecked("/mnt/denied/mcli".into())));
+}
+
+/// The same through the real check, with a path no user can read.
+#[test]
+fn a_path_through_a_loop_of_links_counts() {
+    let table = Proc::new();
+    let (store, _) = table.real_store();
+    let looping = table.looping_path();
+    let process = table.process("4242");
+    environ(&process, &[&format!("MCLI_DIR={}", looping.display())]);
+
+    assert_eq!(table.why(&store), Some(InUse::Unchecked(looping)));
+}
+
+/// A path that leads nowhere (nothing is there, or it passes through a
+/// file) reaches no directory, so it cannot reach the store.
+#[test]
+fn a_path_that_leads_nowhere_does_not() {
+    let table = Proc::new();
+    let (store, _) = table.real_store();
+    let file = table.root.path().join("file");
+    std::fs::write(&file, "").unwrap();
+    for (pid, path) in [
+        ("4242", table.root.path().join("missing/mcli")),
+        ("4243", file.join("mcli")),
+    ] {
+        environ(
+            &table.process(pid),
+            &[&format!("MCLI_DIR={}", path.display())],
+        );
+    }
+
+    assert_eq!(table.why(&store), None);
+}
+
+/// Without the store's own identity there is nothing to compare another
+/// path with: a process naming a path that leads to a directory counts.
+#[test]
+fn a_path_counts_when_the_store_itself_cannot_be_read() {
+    let table = Proc::new();
+    let (_, alias) = table.real_store();
+    let store = table.looping_path();
+    let process = table.process("4242");
+    environ(&process, &[&format!("MCLI_DIR={}", alias.display())]);
+
+    assert_eq!(table.why(&store), Some(InUse::Unchecked(alias)));
+}
+
+/// A store that is not there has no identity either, and a CLI creates its
+/// store when it starts.
+#[test]
+fn a_path_counts_when_the_store_is_not_there() {
+    let table = Proc::new();
+    let (_, alias) = table.real_store();
+    let store = table.root.path().join("state/run/carol/mcli");
+    let process = table.process("4242");
+    environ(&process, &[&format!("MCLI_DIR={}", alias.display())]);
+
+    assert_eq!(table.why(&store), Some(InUse::Unchecked(alias)));
+}
+
+/// Only a path that is not there, or that passes through something that is
+/// not a directory, is absent; any other failure to read it proves nothing.
+#[test]
+fn only_a_path_that_is_not_there_is_absent() {
+    for absent in [Errno::NOENT, Errno::NOTDIR] {
+        assert_eq!(
+            Identity::of(Err(errno(absent))),
+            Identity::Absent,
+            "{absent:?}"
+        );
+    }
+    for other in [Errno::ACCESS, Errno::PERM, Errno::IO, Errno::LOOP] {
+        assert_eq!(
+            Identity::of(Err(errno(other))),
+            Identity::Unverified,
+            "{other:?}"
+        );
+    }
 }
 
 /// A path is bytes: one that is not UTF-8 is matched as it is, not as its
