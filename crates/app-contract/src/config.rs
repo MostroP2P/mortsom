@@ -8,14 +8,16 @@ use serde::{Deserialize, Serialize};
 
 /// Default application profile (spec §12.2).
 pub const DEFAULT_PROFILE: &str = "mobile-v2";
+/// The mostro-cli profile (spec §6.3).
+pub const CLI_PROFILE: &str = "cli";
 /// Profiles Mortsom knows how to drive.
-pub const KNOWN_PROFILES: &[&str] = &["mobile-v2"];
+pub const KNOWN_PROFILES: &[&str] = &[DEFAULT_PROFILE, CLI_PROFILE];
 
 /// `[mobile]` section.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MobileConfig {
-    /// Named application profile: `mobile-v2`.
+    /// Named client profile: `mobile-v2` (the app) or `cli` (mostro-cli).
     #[serde(default = "default_profile")]
     pub profile: String,
     /// Explicit local checkout; empty selects managed upstream source.
@@ -101,6 +103,16 @@ mod tests {
         assert_eq!(config.profile, DEFAULT_PROFILE);
         assert!(config.order_expiry_secs.is_none());
         assert!(errors_of(&config).is_empty());
+    }
+
+    #[test]
+    fn cli_profile_is_known() {
+        let config = MobileConfig {
+            profile: CLI_PROFILE.into(),
+            ..valid()
+        };
+
+        assert!(errors_of(&config).is_empty(), "{:?}", errors_of(&config));
     }
 
     #[test]

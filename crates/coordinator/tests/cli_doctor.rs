@@ -179,3 +179,105 @@ fn doctor_source_overrides_replace_invalid_configured_modes_before_diagnosis() {
         }
     }
 }
+
+/// The names of the checks in a `doctor --json` report.
+fn check_names(stdout: &[u8]) -> Vec<String> {
+    let report: serde_json::Value = serde_json::from_slice(stdout).unwrap();
+    report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|check| check["name"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+#[test]
+fn doctor_with_profile_cli_checks_the_cli_and_not_the_app() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = example_config(&dir);
+
+    let output = Command::cargo_bin("mortsom")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap()])
+        .args(["doctor", "--profile", "cli", "--no-network", "--json"])
+        .env_clear()
+        .env("PATH", "/nonexistent")
+        .assert()
+        .failure();
+
+    let names = check_names(&output.get_output().stdout);
+    for wanted in [
+        "docker",
+        "git",
+        "cargo",
+        "mostro-cli-source",
+        "mostro-cli-commands",
+    ] {
+        assert!(
+            names.iter().any(|name| name == wanted),
+            "{wanted}: {names:?}"
+        );
+    }
+    for unwanted in ["flutter", "Xvfb", "client"] {
+        assert!(
+            !names.iter().any(|name| name == unwanted),
+            "{unwanted}: {names:?}"
+        );
+    }
+}
+
+#[test]
+fn doctor_refuses_a_platform_with_the_cli_profile_in_the_client_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = example_config(&dir);
+
+    let output = Command::cargo_bin("mortsom")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap()])
+        .args(["doctor", "--profile", "cli", "--platform", "linux"])
+        .args(["--no-network", "--json"])
+        .env_clear()
+        .env("PATH", "/nonexistent")
+        .assert()
+        .code(1);
+
+    let names = check_names(&output.get_output().stdout);
+    assert!(names.iter().any(|name| name == "client"), "{names:?}");
+    assert!(!names.iter().any(|name| name == "Xvfb"), "{names:?}");
+}
+
+/// `--ref` names a branch or pull request of the profile's repository,
+/// whether `--profile` or the configuration (through the environment)
+/// selects `cli`: an app pull request is refused before any check runs.
+#[test]
+fn doctor_reads_the_ref_for_the_cli_profile_s_repository() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = example_config(&dir);
+    let app_pull = "https://github.com/MostroP2P/app/pull/1";
+    let flagged: [&str; 2] = ["--profile", "cli"];
+    let configured: [&str; 0] = [];
+    std::fs::write(
+        dir.path().join("mortsom.local.toml"),
+        "[mobile]\nprofile = \"${MORTSOM_PROFILE}\"\n",
+    )
+    .unwrap();
+    for (selection, profile) in [(&flagged[..], "mobile-v2"), (&configured[..], "cli")] {
+        let output = Command::cargo_bin("mortsom")
+            .unwrap()
+            .args(["--config", config.to_str().unwrap(), "doctor"])
+            .args(selection)
+            .args(["--ref", app_pull, "--no-network"])
+            .env_clear()
+            .env("PATH", "/nonexistent")
+            .env("MORTSOM_PROFILE", profile)
+            .assert()
+            .code(2);
+
+        let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+        assert!(
+            stderr.contains("--ref: invalid mostro-cli selector"),
+            "{selection:?}: {stderr}"
+        );
+        assert!(output.get_output().stdout.is_empty(), "{selection:?}");
+    }
+}

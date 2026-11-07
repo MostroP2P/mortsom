@@ -1952,6 +1952,7 @@ dependencies = [
  "lightning-invoice",
  "mortsom-adapter-mobile-v2",
  "mortsom-app-contract",
+ "mortsom-cli-driver",
  "mortsom-common",
  "mortsom-desktop-driver",
  "mortsom-environment",

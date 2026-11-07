@@ -44,6 +44,18 @@ pub fn render(detail: &str, style: Style) -> String {
     out
 }
 
+/// The client an invocation names: the CLI profile, or the app platform
+/// (Linux unless another is given).
+fn client_label(
+    platform: Option<mortsom_desktop_driver::Platform>,
+    profile: Option<&str>,
+) -> String {
+    match profile {
+        Some(crate::mostro_cli::PROFILE) => crate::mostro_cli::PROFILE.to_owned(),
+        _ => platform.unwrap_or_default().to_string(),
+    }
+}
+
 /// What the banner's third line says, from the parsed arguments alone.
 ///
 /// Pure and total: no config is loaded and no registry consulted, so the
@@ -69,7 +81,12 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
         }
         // The one command that reads no config at all.
         Command::List { .. } => "list · every scenario in the registry".to_owned(),
-        Command::Doctor { platform, .. } => format!("doctor · {platform} · {config}"),
+        Command::Doctor {
+            platform, profile, ..
+        } => format!(
+            "doctor · {} · {config}",
+            client_label(*platform, profile.as_deref())
+        ),
         // The run id alone would not say which artifact tree was searched:
         // it is a directory under the config's `artifacts_dir`.
         Command::Cleanup { run, .. } => format!("cleanup · run {run} · {config}"),
@@ -224,7 +241,8 @@ mod tests {
         let commands = [
             a_run(&[], None),
             Command::Doctor {
-                platform: mortsom_desktop_driver::Platform::Web,
+                platform: Some(mortsom_desktop_driver::Platform::Web),
+                profile: None,
                 build: Default::default(),
                 no_network: false,
                 json: false,
@@ -271,7 +289,8 @@ mod tests {
         // Arrange / Act
         let web = caption(
             &Command::Doctor {
-                platform: mortsom_desktop_driver::Platform::Web,
+                platform: Some(mortsom_desktop_driver::Platform::Web),
+                profile: None,
                 build: Default::default(),
                 no_network: false,
                 json: false,
@@ -282,6 +301,25 @@ mod tests {
 
         // Assert
         assert!(web.starts_with("doctor · web · "), "{web}");
+    }
+
+    #[test]
+    fn doctor_names_the_cli_profile_instead_of_a_platform() {
+        // Arrange / Act
+        let cli = caption(
+            &Command::Doctor {
+                platform: None,
+                profile: Some("cli".into()),
+                build: Default::default(),
+                no_network: false,
+                json: false,
+            },
+            &config(),
+            &stack_dir(),
+        );
+
+        // Assert
+        assert_eq!(cli, "doctor · cli · config/desktop.example.toml");
     }
 
     /// `stack` reads no config: it acts on the stack directory. Naming the

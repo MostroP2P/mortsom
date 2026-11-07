@@ -157,6 +157,33 @@ pub fn local_overlay_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{stem}{LOCAL_OVERLAY_SUFFIX}"))
 }
 
+/// The `mobile.profile` the configuration at `path` selects, its local
+/// overlay included and its own environment reference resolved from the
+/// process environment, without resolving secrets or validating anything
+/// else. `None` when the files cannot be read, no profile is set, or a name
+/// it references is not set.
+pub fn configured_profile(path: &Path) -> Option<String> {
+    configured_profile_with(path, |name| std::env::var(name).ok())
+}
+
+/// Like [`configured_profile`] with an injectable environment lookup. The
+/// profile's own `env:` reference or `${NAME}` is resolved, as the loader
+/// resolves it; `None` when a name it references is not set.
+pub fn configured_profile_with<F>(path: &Path, lookup: F) -> Option<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let profile = read_layered(path)
+        .ok()?
+        .get("mobile")?
+        .get("profile")?
+        .clone();
+    resolve_env_with(profile, lookup)
+        .ok()?
+        .as_str()
+        .map(str::to_owned)
+}
+
 pub(super) fn read_layered(path: &Path) -> Result<Value, ConfigError> {
     if !path.exists() {
         return Err(ConfigError::Read {
@@ -438,6 +465,48 @@ avd_image = \"x\"
             local_overlay_path(Path::new("config/ci.example.toml")),
             PathBuf::from("config/ci.example.local.toml")
         );
+    }
+
+    #[test]
+    fn the_configured_profile_reads_the_local_overlay_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("desktop.toml");
+        std::fs::write(&base, "[mobile]\nprofile = \"mobile-v2\"\n").unwrap();
+        assert_eq!(configured_profile(&base).as_deref(), Some("mobile-v2"));
+
+        std::fs::write(
+            dir.path().join("desktop.local.toml"),
+            "[mobile]\nprofile = \"cli\"\n",
+        )
+        .unwrap();
+        assert_eq!(configured_profile(&base).as_deref(), Some("cli"));
+
+        assert_eq!(configured_profile(&dir.path().join("missing.toml")), None);
+        std::fs::write(&base, "[run]\n").unwrap();
+        std::fs::remove_file(dir.path().join("desktop.local.toml")).unwrap();
+        assert_eq!(configured_profile(&base), None);
+    }
+
+    /// A reference to a set name is resolved as the loader resolves it, so
+    /// `run`, `doctor` and the loaded configuration agree on the profile.
+    /// An unset name gives no profile, where the loader fails.
+    #[test]
+    fn the_configured_profile_resolves_its_environment_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("desktop.toml");
+        let lookup = |name: &str| (name == "MORTSOM_PROFILE").then(|| "cli".to_owned());
+        for reference in ["env:MORTSOM_PROFILE", "${MORTSOM_PROFILE}"] {
+            std::fs::write(&base, format!("[mobile]\nprofile = \"{reference}\"\n")).unwrap();
+
+            assert_eq!(
+                configured_profile_with(&base, lookup).as_deref(),
+                Some("cli"),
+                "{reference}"
+            );
+        }
+
+        std::fs::write(&base, "[mobile]\nprofile = \"env:MORTSOM_UNSET\"\n").unwrap();
+        assert_eq!(configured_profile_with(&base, lookup), None);
     }
 }
 

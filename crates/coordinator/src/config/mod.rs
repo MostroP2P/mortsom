@@ -15,7 +15,9 @@ use mortsom_environment::{MostroConfig, RelayConfig, WalletsConfig};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub use load::{ConfigDiagnosis, LOCAL_OVERLAY_SUFFIX};
+pub use load::{
+    ConfigDiagnosis, LOCAL_OVERLAY_SUFFIX, configured_profile, configured_profile_with,
+};
 pub use maintenance::{ArtifactSettings, MaintenanceConfig};
 pub use publication::PublishSettings;
 pub use run::{MAX_RUN_SPEND_CEILING_SATS, RunConfig};
