@@ -4,6 +4,137 @@ Notable changes to Mortsom, generated from the commit history. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
 project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-11-07
+
+### Features
+
+- Bond screens and payout claims in the app contract ([6590cbf](https://github.com/MostroP2P/mortsom/commit/6590cbfeb4b1cc507d4b0e91d1d6f6b2c46841b9))
+- Drive app v2's pay-bond and claim screens ([1347e49](https://github.com/MostroP2P/mortsom/commit/1347e4958fcbfd4973fd3873a6372b484db000fb))
+- Bond actions, policy and recovery rules ([653c0df](https://github.com/MostroP2P/mortsom/commit/653c0df9f91205ec5e0b0b51a7297b07fc7eb1b7))
+- Let the run's solver slash bonds in a ruling ([fc86c1d](https://github.com/MostroP2P/mortsom/commit/fc86c1db558eaa82ef5c9968b40674bbcad88fb4))
+- Stack up --bond, checked at stack up and before every run ([4332099](https://github.com/MostroP2P/mortsom/commit/4332099a2f57f39bb6b672f65a033a55f1205309))
+- The anti-abuse bond scenario family ([7d67ca0](https://github.com/MostroP2P/mortsom/commit/7d67ca0bd83a61b3e7c73900ccfcf428882cc630))
+- Refuse to start a run while the daemon is in maintenance mode ([f96f72d](https://github.com/MostroP2P/mortsom/commit/f96f72d18dda727763b4dc5743904c1a9c60933f))
+- Let a session refuse element calls and expose a command line ([66fd09d](https://github.com/MostroP2P/mortsom/commit/66fd09d927b6c40b6e9570d2b854708705a63f67))
+- Add the offered-actions, order-expiry and invoice-check capabilities ([fbe3f9a](https://github.com/MostroP2P/mortsom/commit/fbe3f9ae9c6ed4fc49ecf407a9bb46ba6569c9b5))
+- Add the mostro-cli process boundary ([aad3498](https://github.com/MostroP2P/mortsom/commit/aad34984752a1cc4e02b55afc1f4f7d2c1b3adf6))
+- Classify an unsaved order as an environment failure ([3d680a1](https://github.com/MostroP2P/mortsom/commit/3d680a1d68df9cc641e1634d9410f18a69e8eb0c))
+- Add the CLI session and the cli platform ([d366d41](https://github.com/MostroP2P/mortsom/commit/d366d412f959970c645a501c52609c0827c42993))
+- Add the cli adapter, driving mostro-cli without bonds ([5ab66bf](https://github.com/MostroP2P/mortsom/commit/5ab66bf52addc7c3349c8090ea44d138816fa390))
+- Treat a truncated message list as inconclusive in the cli adapter ([1c8fb44](https://github.com/MostroP2P/mortsom/commit/1c8fb446b761f395d3b0ce0a761a957213822a60))
+- Make the cli adapter's message list window a parameter ([12a64fc](https://github.com/MostroP2P/mortsom/commit/12a64fc65ae2b3a3cc092abbd61ee824c4188b16))
+- Drive the bond flows in the cli adapter ([f87e34d](https://github.com/MostroP2P/mortsom/commit/f87e34d6c0f618f6575539b80f2e0c6bac3abdfa))
+- Check the cli profile with doctor --profile cli ([c0785e8](https://github.com/MostroP2P/mortsom/commit/c0785e8ee3f16ba05a412d47dd94439fb348d04f))
+- Run the cli profile with run --profile cli and recover its actors ([7f53195](https://github.com/MostroP2P/mortsom/commit/7f531958195a3477f37872ddac7906fb848b5063))
+- Scope intentional differences to profiles ([3220c1a](https://github.com/MostroP2P/mortsom/commit/3220c1ac37de55bde9eca10e8706ce48ec388e3a))
+
+### Bug fixes
+
+- Review round 1 ([390b2e1](https://github.com/MostroP2P/mortsom/commit/390b2e1084ac6b698f0aef1aa12fd14212ac71e4))
+- Blame a failure on the environment while the daemon drains ([0ba0ceb](https://github.com/MostroP2P/mortsom/commit/0ba0ceb78b0b384cbedabb5560f898b8f25c84ec))
+- Keep the owned stack's chain tip fresh before each run ([4ed1508](https://github.com/MostroP2P/mortsom/commit/4ed150810e1cf0772a9206dc00ed6617d9ac11bb))
+- Review round 1 ([0779344](https://github.com/MostroP2P/mortsom/commit/0779344d6d69193debe90af13f57b4b4cf91d9a9))
+- Review round 1 ([d2f71c1](https://github.com/MostroP2P/mortsom/commit/d2f71c1b9b0b0166752cdad74e3c1561c471abce))
+- Review round 1 ([126e548](https://github.com/MostroP2P/mortsom/commit/126e5482faabda3fe55530718f175e55d0b475a4))
+- Review round 2 ([3949419](https://github.com/MostroP2P/mortsom/commit/394941911857d61f0c57c646eae1a130a820c231))
+- Review round 3 ([546e64c](https://github.com/MostroP2P/mortsom/commit/546e64cb224bb14bfcc9bce9babe2b0922644205))
+- Review round 4 ([6fb273e](https://github.com/MostroP2P/mortsom/commit/6fb273ea985ef5ed3fb6c4c686a088d8cba9d84a))
+- Review round 1 ([9597fc9](https://github.com/MostroP2P/mortsom/commit/9597fc93e85e291b8bbc3d4c38293fb66770b27b))
+- Wait for a control the app has not enabled yet before tapping it ([29a99ef](https://github.com/MostroP2P/mortsom/commit/29a99efea171f942c319e67b6c8c7150eac4e043))
+- Review round 1 ([0d55414](https://github.com/MostroP2P/mortsom/commit/0d55414159a59202f006d7c2815e24068934aa1c))
+- Wait out a trade screen still loading before judging payments ([a9f7601](https://github.com/MostroP2P/mortsom/commit/a9f7601afdfe1931674ded9549fcb2cacd2ba816))
+- Wipe the whole invoice line and derive uncertain categories ([b1f75de](https://github.com/MostroP2P/mortsom/commit/b1f75de67aa4d1fc32e4b01054c1491015f9a761))
+- End an invocation's descendants with it ([05be465](https://github.com/MostroP2P/mortsom/commit/05be46535594a9d51136989a2932ecfe6df99a04))
+- Redact overlapping secret matches from the original text ([12076ad](https://github.com/MostroP2P/mortsom/commit/12076ad197602e97858fa0679d6c1674b22e4620))
+- Scrub the error object and failure text in transcripts ([9361adf](https://github.com/MostroP2P/mortsom/commit/9361adf2c30e98fba4dcea063a6879ab94996de0))
+- Mask the --invoice= form and invoices under any flag ([9e0f6ee](https://github.com/MostroP2P/mortsom/commit/9e0f6eeddd282061fcc42163deaa81251209c3b2))
+- Redact every string nested under a secret key ([9c3aaca](https://github.com/MostroP2P/mortsom/commit/9c3aaca61beee6a56fcd4357f0c73063f461c75a))
+- Match invoices that follow a word character ([cd2e117](https://github.com/MostroP2P/mortsom/commit/cd2e117a519f47d006f9d3cec23a49f3801163a9))
+- Redact invoices used as object keys ([3de4132](https://github.com/MostroP2P/mortsom/commit/3de4132d1ed904cfd8bf8e158bf5393fe07d1cb4))
+- Recognize secret keys and secrets whatever their case ([97d0387](https://github.com/MostroP2P/mortsom/commit/97d0387d7db6032f26cd7b125f4b6b0076a5b27a))
+- Clear a runtime marker only on CLI storage ([b2674b2](https://github.com/MostroP2P/mortsom/commit/b2674b2b06ddb38b03b82f7ae168d7f49dba041f))
+- Scrub what the CLI says before it reaches a report ([525c20e](https://github.com/MostroP2P/mortsom/commit/525c20e5110e9bf5132e7c567d5cdb5911f42454))
+- Run nothing once closed, and terminate only on a stop ([f341519](https://github.com/MostroP2P/mortsom/commit/f3415193230fd384a1c960f67aa8fba7c60c83c6))
+- Say the command succeeded when its marker outlives it ([a0be95e](https://github.com/MostroP2P/mortsom/commit/a0be95e3a5f3d5f3fb7cc307a32d673de4882310))
+- Keep a key the CLI wrote when an invoice key is renamed ([6877c11](https://github.com/MostroP2P/mortsom/commit/6877c11fb15a9e0ea8a573210edcffeb8431ff48))
+- Keep a key the CLI wrote when a scrubbed key is renamed ([0b18c49](https://github.com/MostroP2P/mortsom/commit/0b18c497cfbecafb50e50fd5c0a57d079fea22e3))
+- Fail closed when a process of the operator hides its environment ([3834800](https://github.com/MostroP2P/mortsom/commit/38348000e8c456c4966b8a34336cd841277c0670))
+- Scrub a process failure of the invocation's secrets ([fc34b27](https://github.com/MostroP2P/mortsom/commit/fc34b27dd58799b6ad6e6cb4c4deb4ef8e97f6a0))
+- Fail closed when /proc hides a process of the operator ([b0bedd9](https://github.com/MostroP2P/mortsom/commit/b0bedd90501206faf0037542e425c0d1cdbc0b9f))
+- Judge an exited thread-group leader by its live threads ([3ad0769](https://github.com/MostroP2P/mortsom/commit/3ad07695a34379e1087949fdc4c73e452838482e))
+- Recognize the store through another path to it ([2423435](https://github.com/MostroP2P/mortsom/commit/2423435080cc61460c5bf5cd8739cd5e7ecc3243))
+- Scrub a refusal's code of the invocation's secrets ([046af15](https://github.com/MostroP2P/mortsom/commit/046af1558e7bdbd3eb45e3c56c5ec8d7fd693697))
+- Check the filesystem group for the procfs exemption ([2d7ac18](https://github.com/MostroP2P/mortsom/commit/2d7ac187bf81157c8696e2da473e83b9b1dd7d51))
+- Bound the check of another path to the store ([fc9e165](https://github.com/MostroP2P/mortsom/commit/fc9e165709442826b7089a57e037d9d3b609e9af))
+- Reconcile the CLI runtime off the async runtime ([374201b](https://github.com/MostroP2P/mortsom/commit/374201b6be998ea7d76ddf3fa87174539a1187eb))
+- Read a standing cooperative cancel only from the node's refusal ([07352df](https://github.com/MostroP2P/mortsom/commit/07352df6175a986d3c7a54c920f14b1aa1b45e46))
+- Count a store path whose identity cannot be verified ([4d833df](https://github.com/MostroP2P/mortsom/commit/4d833df4fcfc693b8e479c312972c9905a6222dc))
+- Read no claim phase when no request shows after a hand-in ([9fefd45](https://github.com/MostroP2P/mortsom/commit/9fefd4545c641ea9344a7beaf4a3cdec6e814ece))
+- Fail only the client check for an unset profile reference ([f562b9e](https://github.com/MostroP2P/mortsom/commit/f562b9e1a4f738019cb869078fa4340abbf87a56))
+- Name the profile doctor checks in its caption ([6bdb3aa](https://github.com/MostroP2P/mortsom/commit/6bdb3aa41b29928a7f486371b61a0a3cb2a78dfb))
+- Read an empty profile reference as unset, as doctor does ([1609cd5](https://github.com/MostroP2P/mortsom/commit/1609cd5c6a68f7a07872d9593e91edb251fff708))
+- Keep a row a truncated list keeps from resolving a submission ([c40837c](https://github.com/MostroP2P/mortsom/commit/c40837c4aed8b33beee2a895e15f1081915c8617))
+- Take a row and its proof from one read of the owned orders ([8cc8374](https://github.com/MostroP2P/mortsom/commit/8cc83740ff7ae8c59e234e3573a727d013ef3600))
+- Reconcile a CLI actor's marker before abandonment removes its storage ([cd10290](https://github.com/MostroP2P/mortsom/commit/cd1029008df99bb7f4322c64770525113727d0b6))
+- Let --profile replace mobile.profile before resolution ([c50ea90](https://github.com/MostroP2P/mortsom/commit/c50ea9093b0e4454cdc4f1eb443d177614429aab))
+- Refuse two runs that share no scenario ([3a87c2c](https://github.com/MostroP2P/mortsom/commit/3a87c2ce892e1f6b9e6c02f5d167fbb11b128519))
+- Compare nothing for a scenario both runs skipped ([6f5aeb0](https://github.com/MostroP2P/mortsom/commit/6f5aeb05f8cff7eb215070ce40c6f95660b231fd))
+- Refuse unknown keys in the intentional-differences file ([e0581bb](https://github.com/MostroP2P/mortsom/commit/e0581bbaf1a112f81162d665f218449f7c79787d))
+- Run the bond tag on a bonded stack and say how parity loads accepted differences ([e6ec687](https://github.com/MostroP2P/mortsom/commit/e6ec6870536bc205578ed31679d43a89885bec89))
+
+### Performance
+
+- Record where a run's time goes ([85563b6](https://github.com/MostroP2P/mortsom/commit/85563b6418822b35df0357be3adb2451cd677ca6))
+- Never reopen a trade the app no longer lists ([44780cb](https://github.com/MostroP2P/mortsom/commit/44780cb8be10eff87144bab34a23f9cb719242da))
+- Bootstrap Alice and Bob at the same time ([6edda3f](https://github.com/MostroP2P/mortsom/commit/6edda3f78180a2e139adf99b442cfff646242ae1))
+- Walk the accessibility tree with overlapping D-Bus calls ([8cb1329](https://github.com/MostroP2P/mortsom/commit/8cb1329f8f8c7640e8c1447f1a63bd99778d1b81))
+- Shorten the stack's daemon clocks to what the catalogue needs ([2e3f6da](https://github.com/MostroP2P/mortsom/commit/2e3f6da5af272ef00d85825fdc0837ce3a37b92d))
+- Build a managed app revision with the bindings it commits ([c39f585](https://github.com/MostroP2P/mortsom/commit/c39f58513e5ebfe175a964fcac9edeb9a45c36ba))
+
+### Refactoring
+
+- Select the app build with --artifact, --source and --ref ([2b02e42](https://github.com/MostroP2P/mortsom/commit/2b02e42ee0e94f7b5dfe21de16102db3f236cd17))
+- Take the CLI storage layout from desktop-driver ([25dce50](https://github.com/MostroP2P/mortsom/commit/25dce50eb1680f67894f3b18f27a2539b0e199e8))
+- Move the process scan into its own module ([32448b4](https://github.com/MostroP2P/mortsom/commit/32448b446ab2f7369b0c4f3f190687593ff96f86))
+- Move the parity tests beside the module ([0d3c949](https://github.com/MostroP2P/mortsom/commit/0d3c94970fbf6b10cc12cfc15329ed6ea0dc5103))
+
+### Documentation
+
+- The bond family in the spec, README, runbook, handoff and ledger ([8cf57a8](https://github.com/MostroP2P/mortsom/commit/8cf57a8d3047fcff5d3a6eceeb655f0425837bcd))
+- A run keeps the owned stack's chain tip fresh ([a6e3f3e](https://github.com/MostroP2P/mortsom/commit/a6e3f3e3f6d4c370227da8f0abf55b4598b86cd6))
+- An unpaid taker bond never moves the order off pending ([e57f947](https://github.com/MostroP2P/mortsom/commit/e57f947043b29bf5165e3147a12c58cd5415ed17))
+- Specify the cli profile and its mostro-cli contract ([324f926](https://github.com/MostroP2P/mortsom/commit/324f92643ec8dd418d21a6eca2c6f57ffbbfec3b))
+- Tighten the cli contract after review ([96180e2](https://github.com/MostroP2P/mortsom/commit/96180e275eafb2ec40f38c4098666e3f9f742704))
+- Say how long a killed invocation waits for its output ([697d461](https://github.com/MostroP2P/mortsom/commit/697d46100f36242a22b4e9a0aeb8d9effb3fb2d9))
+- Name the order a capped message window leaves unresolved ([f4a6243](https://github.com/MostroP2P/mortsom/commit/f4a6243157c1a9b37ebf732afcbf66f34bcfa5c2))
+- Replace the logo with mortsom.png and polish the README ([bef1000](https://github.com/MostroP2P/mortsom/commit/bef1000231fc2efc8d9ac32d633692b9d16dcea5))
+- Name the bond claim's phases and the actions the cli adapter reads ([aad283d](https://github.com/MostroP2P/mortsom/commit/aad283d79612cb3e87823eeec3b8e875a72f6cef))
+- Correct the CLI deadline, evidence and /proc refusal notes ([d271ba9](https://github.com/MostroP2P/mortsom/commit/d271ba9a6b704144cb1cf9f4157ed49c42d046aa))
+- Keep the build-flag conflict next to its flags in section 7 ([6bfdb65](https://github.com/MostroP2P/mortsom/commit/6bfdb6566296af8a2eccce5e401163b5e1d9c3f2))
+- Describe the mostro-cli e2e workflow and per-profile parity ([08aa9ff](https://github.com/MostroP2P/mortsom/commit/08aa9ff5eda27c0896ef9ccf49dd7120c0a800e1))
+
+### Testing
+
+- Bound only the rendezvous in the concurrent bootstrap test ([d4ad28b](https://github.com/MostroP2P/mortsom/commit/d4ad28ba5edb4c7790bf79cea848dbcaae4735d3))
+- Require procfs where the process tests read it ([49b0e66](https://github.com/MostroP2P/mortsom/commit/49b0e6629f37d3851f36688a754806ad15e9f8df))
+- Keep the live store user alive until the test kills it ([16a78e6](https://github.com/MostroP2P/mortsom/commit/16a78e66555c6558e9b9881aff17a42d81db043f))
+- Cover the standard-error cap, every screen control and the cli refusal ([f79fe1c](https://github.com/MostroP2P/mortsom/commit/f79fe1c68b15b530704d20af141ebc7fd71099e1))
+- Check a hidden environment only where the host hides it ([9c0206d](https://github.com/MostroP2P/mortsom/commit/9c0206d9a18f62acaab4a09498980a7924897129))
+- Check a refusal where /proc cannot prove a stop ([d131ea7](https://github.com/MostroP2P/mortsom/commit/d131ea7542b2fd3cf5739a7150615b863d251990))
+- Pin that run and recovery refuse a cli configuration until run drives it ([174695c](https://github.com/MostroP2P/mortsom/commit/174695c9704d7f14f3babe2e3e13fdfca7c35721))
+- Reconcile a CLI marker off the async runtime ([5d4fd8f](https://github.com/MostroP2P/mortsom/commit/5d4fd8ff2a10a6c5fd90f94ff1cbb503883fedae))
+- Pin the client the run caption names ([653939b](https://github.com/MostroP2P/mortsom/commit/653939b90eb118920aeac9222326dc3ac2fd01e2))
+- Pin profile scoping through compare_runs ([b1483ef](https://github.com/MostroP2P/mortsom/commit/b1483ef2a451da370287ca37f5a311e1891cff3c))
+
+### Build and CI
+
+- Let CodeRabbit review pull requests stacked on other branches ([4c5a862](https://github.com/MostroP2P/mortsom/commit/4c5a86206060a19ffd5fcee256d5be29a2f904f9))
+- Run mostro-cli end to end by hand and nightly ([472b2ee](https://github.com/MostroP2P/mortsom/commit/472b2eeebdcf00d18610e2936fba82c1066c1ae5))
+- Harden the mostro-cli e2e workflow ([9f5f72c](https://github.com/MostroP2P/mortsom/commit/9f5f72ccd0d6f7e2599d5a937ba35b8955a10c21))
+
+### Miscellaneous
+
+- License Mortsom under AGPL-3.0-or-later ([5004933](https://github.com/MostroP2P/mortsom/commit/5004933dd6c5bdc03b40bb2504d54fa3269694cb))
 ## [0.1.1] - 2026-10-16
 
 ### Features
@@ -300,6 +431,7 @@ project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Pinned runner image, PR device checks, secured integration smoke, mainnet canary and runbook ([5cc78f2](https://github.com/MostroP2P/mortsom/commit/5cc78f2382408a6bb565e526a18cf434dca6adb8))
 - Install protoc for the LND client and make Android device checks manual ([5c764ba](https://github.com/MostroP2P/mortsom/commit/5c764bab46dec58ff40e57a5748be8322a313501))
 - Gate the release tag on a green CI run of the same commit ([9eedcb5](https://github.com/MostroP2P/mortsom/commit/9eedcb5805aeea2a4c2f15b7e472759f237ea6d6))
+- Let the publish job read the CI run it waits for ([ba8bfd3](https://github.com/MostroP2P/mortsom/commit/ba8bfd31c1e35151fe95d5eb85d2405fbf329c50))
 
 ### Miscellaneous
 
