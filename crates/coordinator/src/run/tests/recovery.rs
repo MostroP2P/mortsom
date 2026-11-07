@@ -809,3 +809,6 @@ async fn resumed_payout_pending_waits_for_completion_without_attempting_cancella
 
 #[path = "recovery_payments.rs"]
 mod payments;
+
+#[path = "recovery_discovery.rs"]
+mod discovery;

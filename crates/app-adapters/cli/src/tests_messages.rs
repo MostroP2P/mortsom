@@ -262,6 +262,58 @@ async fn a_row_a_truncated_list_cannot_judge_stays_listed_and_reads_inconclusive
     assert_eq!(listed.category, FailureCategory::Relay);
 }
 
+/// The row a truncated list keeps is listed without proof: it is no proof
+/// that an order submission produced it. A row the node reports is proven,
+/// so is one a complete list shows parked on a live bond request, and one a
+/// complete list shows gone is not listed at all. One read answers both.
+#[tokio::test]
+async fn only_a_row_a_truncated_list_keeps_is_unproven() {
+    let (cli, session) = session();
+    let bond = json!({"action": "pay-bond-invoice", "next_step": "pay_bond_invoice",
+        "payload": {"kind": "payment_request", "invoice": "not-a-bolt11", "amount": null, "order": null}});
+    cli.ok("order.sync", json!({"adopted": []}));
+    cli.ok(
+        "order.mine",
+        json!({"orders": [{"id": "o1"}, {"id": "old"}, {"id": "gone"}, {"id": "parked"}]}),
+    );
+    cli.ok(
+        "order.info",
+        json!({"orders": [{"id": "o1", "status": "active"}],
+            "not_returned": ["old", "gone", "parked"]}),
+    );
+    cli.ok("message.list", json!({"messages": [], "truncated": true}));
+    cli.ok("message.list", json!({"messages": [], "truncated": false}));
+    cli.ok(
+        "message.list",
+        json!({"messages": [bond], "truncated": false}),
+    );
+
+    let rows = adapter()
+        .owned_orders_with_proof(&device(&session, Actor::Alice))
+        .await
+        .unwrap();
+
+    let row = |id: &str, proven| OwnedOrder {
+        id: id.into(),
+        proven,
+    };
+    assert_eq!(
+        rows,
+        [row("o1", true), row("old", false), row("parked", true)]
+    );
+    assert_eq!(
+        cli.commands(),
+        [
+            "order.sync",
+            "order.mine",
+            "order.info",
+            "message.list",
+            "message.list",
+            "message.list"
+        ]
+    );
+}
+
 #[tokio::test]
 async fn a_take_parked_on_its_bond_is_not_read_from_a_truncated_list() {
     let (cli, session) = session();

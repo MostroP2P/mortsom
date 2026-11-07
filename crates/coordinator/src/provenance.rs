@@ -109,6 +109,44 @@ impl BuildProvenance {
         })
     }
 
+    /// Captures a mostro-cli checkout and its Rust tools before its build.
+    pub async fn begin_cli(source: &Path, host: &dyn HostProbe) -> Result<Self, String> {
+        let identity = source_identity(source, host).await?;
+        let version = manifest_version(source, "Cargo.toml", host).await?;
+        let mut tools = BTreeMap::new();
+        for tool in ["rustc", "cargo"] {
+            tools.insert(
+                tool.into(),
+                tool_version(source, tool, &["--version"], host).await?,
+            );
+        }
+        Ok(Self {
+            origin: ArtifactOrigin::Source,
+            remote_selection: None,
+            source_before: Some(identity),
+            source_after: None,
+            app_version: Some(version),
+            tools,
+            commands: Vec::new(),
+        })
+    }
+
+    /// As [`Self::finish`], for a mostro-cli checkout.
+    pub async fn finish_cli(&mut self, source: &Path, host: &dyn HostProbe) -> Result<(), String> {
+        let after = source_identity(source, host).await?;
+        if self
+            .source_before
+            .as_ref()
+            .is_none_or(|before| before.revision != after.revision)
+            || self.app_version.as_deref()
+                != Some(manifest_version(source, "Cargo.toml", host).await?.as_str())
+        {
+            return Err("mostro-cli revision or version changed during the build".into());
+        }
+        self.source_after = Some(after);
+        Ok(())
+    }
+
     /// Refuses a checkout/version change and records the final dirty state.
     pub async fn finish(&mut self, source: &Path, host: &dyn HostProbe) -> Result<(), String> {
         let after = source_identity(source, host).await?;
@@ -167,7 +205,16 @@ async fn source_identity(source: &Path, host: &dyn HostProbe) -> Result<SourceId
 }
 
 async fn package_version(source: &Path, host: &dyn HostProbe) -> Result<String, String> {
-    let manifest = source.join("rust/Cargo.toml");
+    manifest_version(source, "rust/Cargo.toml", host).await
+}
+
+/// The version of the package whose manifest is `relative` to `source`.
+async fn manifest_version(
+    source: &Path,
+    relative: &str,
+    host: &dyn HostProbe,
+) -> Result<String, String> {
+    let manifest = source.join(relative);
     let manifest = manifest.to_str().ok_or("manifest path must be UTF-8")?;
     let raw = output(
         source,

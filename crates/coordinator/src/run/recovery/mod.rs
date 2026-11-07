@@ -62,15 +62,18 @@ pub(super) fn prepare(
         run,
         std::time::Duration::from_secs(config.mostro.health_timeout_secs),
     )?);
-    let executable = (desktop.platform == mortsom_desktop_driver::Platform::Linux)
-        .then(|| {
-            desktop
-                .artifact
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(str::to_owned)
-        })
-        .flatten();
+    let executable = matches!(
+        desktop.platform,
+        mortsom_desktop_driver::Platform::Linux | mortsom_desktop_driver::Platform::Cli
+    )
+    .then(|| {
+        desktop
+            .artifact
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(str::to_owned)
+    })
+    .flatten();
     let journal = Arc::new(FileJournal::create(
         &base,
         RecoveryManifest {
@@ -142,6 +145,11 @@ pub(super) fn journal(options: &DesktopOptions) -> Arc<dyn RecoveryJournal> {
     }
 }
 
+/// Registers for cleanup every order an actor's client lists that the
+/// actor's started submission did not know, and attributes each one the
+/// client proves the actor's to that submission. A row the client lists
+/// without proof is cleaned up too, but proves no submission: it stays open
+/// for the relay audit or the operator.
 pub(super) async fn discover(ctx: &Context, journal: &FileJournal) -> Result<(), String> {
     let history = journal.snapshot();
     for event in history
@@ -156,21 +164,40 @@ pub(super) async fn discover(ctx: &Context, journal: &FileJournal) -> Result<(),
         else {
             continue;
         };
-        let session = ctx.actor(*actor).map_err(|e| e.to_string())?;
-        let ids = ctx
-            .adapter
-            .owned_orders(&session.device(ctx.ui_timeout))
-            .await
-            .map_err(|e| e.to_string())?;
-        for id in ids.into_iter().filter(|id| !known_orders.contains(id)) {
-            let order = mortsom_app_contract::OrderReference::new(id);
+        for (order, proven) in new_orders(ctx, *actor, known_orders).await? {
             ctx.cleanup.register(*actor, &order);
-            if !history.events.iter().any(|event| matches!(event, RecoveryEvent::OrderFound { order: known, .. } if known.id == order.id)) {
+            if proven && !history.events.iter().any(|event| matches!(event, RecoveryEvent::OrderFound { order: known, .. } if known.id == order.id)) {
                 journal.record(RecoveryEvent::OrderFound { actor: *actor, order })?;
             }
         }
     }
     Ok(())
+}
+
+/// The orders `actor`'s client lists that `known_orders` does not hold,
+/// each with whether the client proves it the actor's. Both come from one
+/// read: a later read that no longer lists a row says nothing of its proof.
+async fn new_orders(
+    ctx: &Context,
+    actor: Actor,
+    known_orders: &[String],
+) -> Result<Vec<(mortsom_app_contract::OrderReference, bool)>, String> {
+    let session = ctx.actor(actor).map_err(|e| e.to_string())?;
+    let listed = ctx
+        .adapter
+        .owned_orders_with_proof(&session.device(ctx.ui_timeout))
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(listed
+        .into_iter()
+        .filter(|row| !known_orders.contains(&row.id))
+        .map(|row| {
+            (
+                mortsom_app_contract::OrderReference::new(row.id),
+                row.proven,
+            )
+        })
+        .collect())
 }
 
 /// Started submissions that no later order discovery or operator statement

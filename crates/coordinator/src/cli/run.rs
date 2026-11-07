@@ -78,8 +78,13 @@ pub(super) struct RunSelection {
     pub preserve_legacy_recovery: Vec<mortsom_common::RunId>,
     pub scenarios: Vec<String>,
     pub tag: Option<String>,
-    pub platform: mortsom_desktop_driver::Platform,
+    /// `--platform`; the profile decides when it is absent.
+    pub platform: Option<mortsom_desktop_driver::Platform>,
+    /// `--profile`, overriding `mobile.profile`.
+    pub profile: Option<String>,
     pub artifact: Option<PathBuf>,
+    /// The CLI to drive with profile `cli`.
+    pub cli: crate::mostro_cli_build::CliSelection,
     pub policy: crate::build_cache::Policy,
     pub xvfb: PathBuf,
     pub source: SourceOverrides,
@@ -93,7 +98,9 @@ impl RunSelection {
             scenarios: vec![name.to_owned()],
             tag: None,
             platform: self.platform,
+            profile: self.profile.clone(),
             artifact: self.artifact.clone(),
+            cli: self.cli.clone(),
             policy: self.policy,
             xvfb: self.xvfb.clone(),
             source: self.source.clone(),
@@ -159,24 +166,29 @@ async fn run_once(
         scenarios,
         tag,
         platform,
+        profile,
         artifact,
+        cli,
         policy,
         source,
         xvfb,
     } = selection;
-    let (config, stack) = match crate::desktop::load_with_source(
-        config_path,
-        stack_dir,
-        &TokioRunner,
-        &RealHost,
-        source.selection().as_ref(),
+    let (config, stack) =
+        match load_selected(config_path, stack_dir, &source, profile.as_deref()).await {
+            Ok(loaded) => loaded,
+            Err(error) => return Attempt::Refused(error),
+        };
+    // The client is decided before anything is admitted or built. The build
+    // flags were already read for the same profile (`cli::select_client`).
+    let platform = match crate::mostro_cli::resolve_client(
+        &config.mobile.profile,
+        profile.as_deref(),
+        platform,
     )
-    .await
+    .map(|(_, platform)| platform)
     {
-        Ok(loaded) => loaded,
-        Err(e) => {
-            return Attempt::Refused(e.to_string());
-        }
+        Ok(platform) => platform,
+        Err(error) => return Attempt::Refused(error),
     };
     let recovery_isolation = match super::isolation::admit(
         &preserve_legacy_recovery,
@@ -207,7 +219,10 @@ async fn run_once(
         }
     };
     let desktop = match prepared
-        .get_or_prepare(fingerprint, || {
+        .get_or_prepare(fingerprint, || async {
+            if platform == mortsom_desktop_driver::Platform::Cli {
+                return crate::mostro_cli_build::prepare(&config, &cli).await;
+            }
             crate::desktop::prepare(
                 &config,
                 platform,
@@ -217,6 +232,7 @@ async fn run_once(
                 &TokioRunner,
                 &RealHost,
             )
+            .await
         })
         .await
     {
@@ -226,7 +242,10 @@ async fn run_once(
         }
     };
     let docker = DockerCli::default();
-    let adapter = select_adapter();
+    let adapter = match adapter_for(&desktop, &config).await {
+        Ok(adapter) => adapter,
+        Err(error) => return Attempt::Refused(error),
+    };
     let env = |name: &str| std::env::var(name).ok();
     let wallets = wallet_factory;
     let net = RealNet::with_daemon_timeout(std::time::Duration::from_secs(
@@ -268,6 +287,28 @@ async fn run_once(
         },
         Err(RunError::NotStarted(reason)) => Attempt::Refused(reason),
     }
+}
+
+/// The configuration and the stack it is attached to, with the
+/// invocation's source selection and `--profile` in place of the
+/// configured ones before the configuration is resolved and validated
+/// (spec §7): the flag also stands in for an unset reference or an
+/// unknown configured profile.
+async fn load_selected(
+    config_path: &std::path::Path,
+    stack_dir: &std::path::Path,
+    source: &SourceOverrides,
+    profile: Option<&str>,
+) -> Result<(Config, crate::stack::StackSnapshot), String> {
+    crate::desktop::load_with_source(
+        config_path,
+        stack_dir,
+        &TokioRunner,
+        &RealHost,
+        source.selection().as_ref(),
+        profile,
+    )
+    .await
 }
 
 /// The chain of the Mortsom-owned stack in `stack_dir`, which the run was

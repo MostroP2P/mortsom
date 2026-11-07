@@ -10,7 +10,7 @@ pub mod error;
 pub mod states;
 pub mod types;
 
-pub use adapter::{AppAdapter, DeviceContext};
+pub use adapter::{AppAdapter, DeviceContext, OwnedOrder};
 pub use capabilities::{Capability, CapabilitySet};
 pub use config::MobileConfig;
 pub use error::AdapterError;

@@ -61,3 +61,22 @@ async fn rows_that_arrive_after_the_first_read_are_listed() {
 
     assert_eq!(orders, vec!["o1".to_owned()]);
 }
+
+/// The app lists only what its node shows: every row it lists is proven.
+#[tokio::test]
+async fn every_row_the_app_lists_is_proven() {
+    let ui = trades_app(&["trades.item.o1"]).await;
+
+    let orders = adapter()
+        .owned_orders_with_proof(&device(&ui))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        orders,
+        vec![mortsom_app_contract::OwnedOrder {
+            id: "o1".into(),
+            proven: true
+        }]
+    );
+}

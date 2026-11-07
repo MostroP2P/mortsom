@@ -95,3 +95,33 @@ fn malformed_or_conflicting_source_selectors_stop_before_environment_or_fetch() 
         assert!(!artifacts);
     }
 }
+
+/// `--ref` names a branch or pull request of the profile's repository: with
+/// profile `cli`, an app pull request is refused before anything starts.
+#[test]
+fn the_ref_is_read_for_the_profile_s_repository() {
+    let root = tempfile::tempdir().unwrap();
+    let output = cargo_bin_cmd!("mortsom")
+        .current_dir(root.path())
+        .env_clear()
+        .env("HOME", root.path())
+        .env("PATH", "/missing-tools")
+        .args([
+            "run",
+            "--profile",
+            "cli",
+            "--ref",
+            "https://github.com/MostroP2P/app/pull/1",
+            "happy_sell",
+        ])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&output.stderr);
+
+    assert_eq!(output.status.code(), Some(2), "{text}");
+    assert!(
+        text.contains("--ref: invalid mostro-cli selector"),
+        "{text}"
+    );
+    assert!(!root.path().join("artifacts").exists());
+}

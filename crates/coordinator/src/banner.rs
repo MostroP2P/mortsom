@@ -63,9 +63,9 @@ fn client_label(
 }
 
 /// What the banner's third line says, from the parsed arguments and, for
-/// `doctor`, the profile it checks, read from the process environment
-/// through doctor's own lookup ([`RealHost`]'s `env`, where an empty value
-/// is unset), so the caption and the report agree on the client.
+/// `run` and `doctor`, the profile they drive or check, read from the
+/// process environment through their own lookup ([`RealHost`]'s `env`,
+/// where an empty value is unset), so the caption names their client.
 pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
     caption_with(command, config, stack_dir, |name| RealHost.env(name))
 }
@@ -75,9 +75,9 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
 /// Total: no config is loaded or validated and no registry consulted, so
 /// the banner is printed before anything can fail. A command that dies on
 /// a missing environment variable has still said which config it read.
-/// `doctor` reads only `mobile.profile` (local overlay and its own
-/// environment reference included), as doctor reads it; files that cannot
-/// be read give the default profile here and fail doctor's config check.
+/// `run` and `doctor` read only `mobile.profile` (local overlay and its
+/// own environment reference included), as both commands read it; files
+/// that cannot be read give the default profile here and fail later.
 fn caption_with<F>(command: &Command, config_path: &Path, stack_dir: &Path, lookup: F) -> String
 where
     F: Fn(&str) -> Option<String>,
@@ -86,6 +86,7 @@ where
     match command {
         Command::Run {
             platform,
+            profile,
             scenarios,
             tag,
             ..
@@ -97,7 +98,10 @@ where
             } else {
                 "every scenario".to_owned()
             };
-            format!("run · {selection} · {platform} · {config}")
+            let profile = crate::config::configured_profile_with(config_path, lookup)
+                .with_flag(profile.as_deref());
+            let client = client_label(*platform, &profile);
+            format!("run · {selection} · {client} · {config}")
         }
         // The one command that reads no config at all.
         Command::List { .. } => "list · every scenario in the registry".to_owned(),
@@ -154,7 +158,8 @@ mod tests {
     fn a_run(scenarios: &[&str], tag: Option<&str>) -> Command {
         Command::Run {
             preserve_legacy_recovery: Vec::new(),
-            platform: mortsom_desktop_driver::Platform::Linux,
+            platform: None,
+            profile: None,
             build: Default::default(),
             rebuild: false,
             xvfb: PathBuf::from("Xvfb"),
@@ -473,6 +478,64 @@ mod tests {
 
         // Assert
         assert!(!caption.contains("value-from-the-environment"), "{caption}");
+    }
+
+    fn a_run_of(platform: Option<Platform>, profile: Option<&str>) -> Command {
+        match a_run(&[], None) {
+            Command::Run {
+                preserve_legacy_recovery,
+                build,
+                rebuild,
+                xvfb,
+                scenarios,
+                tag,
+                ..
+            } => Command::Run {
+                preserve_legacy_recovery,
+                platform,
+                profile: profile.map(str::to_owned),
+                build,
+                rebuild,
+                xvfb,
+                scenarios,
+                tag,
+            },
+            _ => unreachable!(),
+        }
+    }
+
+    /// `run` drives the profile doctor checks: the flag, else the configured
+    /// one (its reference resolved, an empty value unset), else the default.
+    #[test]
+    fn a_run_names_the_client_it_drives_as_doctor_does() {
+        // Arrange
+        let dir = tempfile::tempdir().unwrap();
+        let config = configured(&dir, "cli");
+        let shown = |label: &str| format!("run · every scenario · {label} · {}", config.display());
+
+        // Act / Assert
+        let configured_cli = caption_with(&a_run_of(None, None), &config, &stack_dir(), unset);
+        assert_eq!(configured_cli, shown("cli"));
+        let flag = caption_with(
+            &a_run_of(None, Some("mobile-v2")),
+            &config,
+            &stack_dir(),
+            unset,
+        );
+        assert_eq!(flag, shown("linux"));
+        configured(&dir, "env:MORTSOM_PROFILE");
+        for lookup in [unset as fn(&str) -> Option<String>, |_| Some(String::new())] {
+            let unresolved = caption_with(
+                &a_run_of(Some(Platform::Web), None),
+                &config,
+                &stack_dir(),
+                lookup,
+            );
+            assert_eq!(
+                unresolved,
+                shown("unresolved profile (MORTSOM_PROFILE not set)")
+            );
+        }
     }
 
     /// `stack` reads no config: it acts on the stack directory. Naming the

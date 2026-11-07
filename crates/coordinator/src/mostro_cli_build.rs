@@ -3,14 +3,26 @@
 //! `MostroP2P/mostro-cli` fetched and built here. Without a selection the
 //! `main` branch is built, so ordinary runs exercise the CLI as it ships.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
+use mortsom_ui_driver::process::{Command, CommandRunner, TokioRunner, run_ok};
+
+use crate::Config;
+use crate::doctor::{HostProbe, RealHost};
 use crate::git_source::{self, Upstream};
+use crate::provenance::BuildProvenance;
+use crate::run::DesktopOptions;
 
 /// The only repository accepted by remote CLI selectors.
 pub const REPOSITORY: &str = "https://github.com/MostroP2P/mostro-cli.git";
 /// Ignored workspace directory for the CLI's object cache and checkouts.
 pub const WORK_DIR: &str = ".mortsom/mostro-cli";
+/// Cargo's target directory, shared by every CLI build so a repeated or
+/// nearby commit compiles incrementally.
+pub const TARGET_DIR: &str = ".mortsom/mostro-cli/target";
+/// How long one release build may take.
+const BUILD_TIMEOUT: Duration = Duration::from_secs(45 * 60);
 
 /// The mostro-cli upstream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +56,81 @@ impl CliSelection {
     pub fn is_empty(&self) -> bool {
         self.cli_artifact.is_none() && self.cli_ref.is_none() && self.cli_source.is_none()
     }
+}
+
+/// Prepares the run's CLI build from the selection.
+pub async fn prepare(config: &Config, selection: &CliSelection) -> Result<DesktopOptions, String> {
+    if let Some(executable) = &selection.cli_artifact {
+        let executable = executable
+            .canonicalize()
+            .map_err(|e| format!("mostro-cli executable {}: {e}", executable.display()))?;
+        return crate::mostro_cli::prepare(config, &executable, BuildProvenance::prebuilt()).await;
+    }
+    let target = std::env::current_dir()
+        .map_err(|e| e.to_string())?
+        .join(TARGET_DIR);
+    if let Some(source) = &selection.cli_source {
+        let source = source
+            .canonicalize()
+            .map_err(|e| format!("mostro-cli checkout {}: {e}", source.display()))?;
+        let (executable, provenance) = build(&source, &target, &TokioRunner, &RealHost).await?;
+        return crate::mostro_cli::prepare(config, &executable, provenance).await;
+    }
+    let selector = selection.cli_ref.clone().unwrap_or_else(Selector::main);
+    let fetched = git_source::prepare(&selector, &TokioRunner)
+        .await
+        .map_err(|e| e.to_string())?;
+    let (executable, mut provenance) =
+        build(&fetched.path, &target, &TokioRunner, &RealHost).await?;
+    if provenance
+        .source_before
+        .as_ref()
+        .is_none_or(|identity| identity.revision != fetched.selection.revision || identity.dirty)
+    {
+        return Err("managed mostro-cli source changed before the build".into());
+    }
+    provenance.remote_selection = Some(fetched.selection.clone());
+    crate::mostro_cli::prepare(config, &executable, provenance).await
+}
+
+/// The release build of the `mostro-cli` binary in `source`.
+pub fn build_command(source: &Path, target: &Path) -> Command {
+    let chdir = format!("--chdir={}", source.display());
+    let mut args = vec![chdir.as_str()];
+    args.extend(RECORDED);
+    Command::new("env", &args).env("CARGO_TARGET_DIR", &target.display().to_string())
+}
+
+/// The build command as provenance records it: never the checkout path.
+const RECORDED: [&str; 6] = [
+    "cargo",
+    "build",
+    "--release",
+    "--locked",
+    "--bin",
+    "mostro-cli",
+];
+
+/// Builds `source` and returns the executable with its provenance.
+async fn build(
+    source: &Path,
+    target: &Path,
+    runner: &dyn CommandRunner,
+    host: &dyn HostProbe,
+) -> Result<(PathBuf, BuildProvenance), String> {
+    let mut provenance = BuildProvenance::begin_cli(source, host).await?;
+    tracing::info!("building mostro-cli");
+    let started = std::time::Instant::now();
+    let outcome = run_ok(runner, &build_command(source, target), BUILD_TIMEOUT).await;
+    let elapsed = started.elapsed();
+    match &outcome {
+        Ok(_) => tracing::info!(?elapsed, "mostro-cli build finished"),
+        Err(_) => tracing::warn!(?elapsed, "mostro-cli build failed"),
+    }
+    outcome.map_err(|e| mortsom_common::Redactor::default().redact(&e.to_string()))?;
+    provenance.commands = vec![RECORDED.iter().map(|s| (*s).to_owned()).collect()];
+    provenance.finish_cli(source, host).await?;
+    Ok((target.join("release").join("mostro-cli"), provenance))
 }
 
 #[cfg(test)]
@@ -81,5 +168,49 @@ mod tests {
             ..CliSelection::default()
         };
         assert!(!selected.is_empty());
+    }
+
+    #[test]
+    fn the_build_is_locked_and_records_no_checkout_path() {
+        let command = build_command(Path::new("/src/cli"), Path::new("/t"));
+
+        assert_eq!(command.args[0], "--chdir=/src/cli");
+        assert_eq!(&command.args[1..], RECORDED);
+        assert_eq!(command.env["CARGO_TARGET_DIR"], "/t");
+    }
+
+    /// A managed checkout lives under Mortsom's own repository; Cargo must
+    /// not take it for an undeclared member of Mortsom's workspace, or every
+    /// `--ref` build fails before it starts.
+    #[test]
+    fn a_managed_checkout_is_not_part_of_mortsoms_workspace() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let managed = repository.join(WORK_DIR);
+        std::fs::create_dir_all(&managed).unwrap();
+        let checkout = tempfile::Builder::new()
+            .prefix("build-test-")
+            .tempdir_in(&managed)
+            .unwrap();
+        let source = checkout.path().join("source");
+        std::fs::create_dir_all(source.join("src")).unwrap();
+        std::fs::write(
+            source.join("Cargo.toml"),
+            "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(source.join("src/main.rs"), "fn main() {}\n").unwrap();
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+
+        let output = std::process::Command::new(cargo)
+            .current_dir(&source)
+            .args(["metadata", "--no-deps", "--format-version=1", "--offline"])
+            .output()
+            .unwrap();
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
