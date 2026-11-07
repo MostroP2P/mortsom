@@ -1,0 +1,103 @@
+# End-to-end smoke of mostro-cli (profile `cli`, spec §6.3) against a
+# regtest stack this job builds itself: worthless sats and no secrets, so it
+# runs on GitHub-hosted runners. By hand for any mostro-cli branch or pull
+# request, and nightly against the CLI's `main`.
+name: mostro-cli e2e
+
+on:
+  workflow_dispatch:
+    inputs:
+      cli_ref:
+        description: mostro-cli branch or https://github.com/MostroP2P/mostro-cli/pull/<number>
+        required: false
+        default: main
+      tag:
+        description: Scenario tag to run
+        required: false
+        default: smoke
+  schedule:
+    - cron: "17 4 * * *"
+
+concurrency:
+  group: mortsom-cli-e2e
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    name: cli profile (${{ inputs.cli_ref || 'main' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      # Through the environment, never interpolated into a script.
+      CLI_REF: ${{ inputs.cli_ref || 'main' }}
+      TAG: ${{ inputs.tag || 'smoke' }}
+      MORTSOM: ./target/release/mortsom
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The job builds and runs an arbitrary mostro-cli ref; nothing
+          # after checkout needs Mortsom's token.
+          persist-credentials: false
+      # The LND gRPC client (fedimint-tonic-lnd) compiles its protobuf
+      # definitions at build time and needs the protoc binary on the host.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Only the nightly run (the CLI's `main`) saves the cache; a
+          # dispatched run of an arbitrary ref restores it and never writes.
+          save-if: ${{ github.event_name == 'schedule' }}
+      - name: Build Mortsom
+        run: cargo build --release --locked -p mortsom-coordinator --bin mortsom
+      - name: Regtest stack
+        # The bond family needs a bonded daemon, and every other family is
+        # skipped on one.
+        run: |
+          if [ "$TAG" = bond ]; then
+            $MORTSOM stack up --bond
+          else
+            $MORTSOM stack up
+          fi
+      - name: Preflight
+        run: $MORTSOM doctor --profile cli --ref "$CLI_REF"
+      - name: Run
+        run: $MORTSOM run --profile cli --ref "$CLI_REF" --tag "$TAG"
+      - name: Require an executed scenario
+        # A run whose every scenario was skipped tested nothing.
+        run: |
+          shopt -s nullglob
+          summaries=(artifacts/*/summary.json)
+          executed=0
+          if [ ${#summaries[@]} -gt 0 ]; then
+            executed=$(jq -s '[.[].results[]? | select(.outcome.outcome != "skipped")] | length' "${summaries[@]}")
+          fi
+          if [ "$executed" -eq 0 ]; then
+            echo "::error::no scenario of tag $TAG executed: every one was skipped, or none ran"
+            exit 1
+          fi
+      - name: Cleanup what the run may have left
+        if: always()
+        run: |
+          for run in $(ls -1 artifacts 2>/dev/null | grep -v '^\.' | grep -v '^accounting'); do
+            $MORTSOM cleanup "$run" || true
+          done
+      - name: Publish sanitized evidence
+        if: always()
+        run: |
+          mkdir -p bundle
+          for run in $(ls -1 artifacts 2>/dev/null | grep -v '^\.' | grep -v '^accounting'); do
+            $MORTSOM publish "$run" --out "bundle/$run" --screenshots none || true
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mostro-cli-e2e-evidence
+          path: bundle
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Stack down
+        if: always()
+        run: $MORTSOM stack down || true

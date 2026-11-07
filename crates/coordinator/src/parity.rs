@@ -6,6 +6,12 @@
 //! navigation and screens are not compared. A difference is either listed
 //! as intentional (with its reason, from an explicit file) or reported as
 //! a finding.
+//!
+//! Every run holds one scenario (spec §8.1), so the two runs are one
+//! scenario's run under each profile. A scenario counts only when both
+//! summaries carry it and at least one run executed it: a scenario both
+//! runs skipped compares nothing. Two runs left with nothing to compare
+//! are refused, never reported as parity.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -41,8 +47,10 @@ pub enum Aspect {
     Contract,
 }
 
-/// One accepted difference.
+/// One accepted difference. An unknown key is an error: a misspelt
+/// `profiles` would otherwise accept the difference between every pair.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Intentional {
     /// Scenario name.
     pub scenario: String,
@@ -50,10 +58,27 @@ pub struct Intentional {
     pub aspect: Aspect,
     /// The product decision behind it.
     pub reason: String,
+    /// Profiles the difference is accepted between: it applies only when
+    /// both compared profiles are listed. Empty applies to any pair.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<String>,
 }
 
-/// File listing intentional differences.
+impl Intentional {
+    /// Whether this entry accepts `aspect` of `scenario` between `profiles`.
+    pub fn accepts(&self, scenario: &str, aspect: Aspect, profiles: (&str, &str)) -> bool {
+        self.scenario == scenario
+            && self.aspect == aspect
+            && (self.profiles.is_empty()
+                || [profiles.0, profiles.1]
+                    .iter()
+                    .all(|p| self.profiles.iter().any(|listed| listed == p)))
+    }
+}
+
+/// File listing intentional differences; an unknown key is an error.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IntentionalFile {
     /// Entries.
     #[serde(default)]
@@ -107,7 +132,8 @@ pub struct ParityReport {
     pub runs: (String, String),
     /// Profiles compared.
     pub profiles: (String, String),
-    /// Scenarios both runs executed.
+    /// Scenarios both runs carry, less those both skipped; never empty, as
+    /// two runs left with nothing to compare are refused.
     pub scenarios: Vec<ScenarioParity>,
     /// Scenarios only one run executed.
     pub only_in_a: Vec<String>,
@@ -116,8 +142,8 @@ pub struct ParityReport {
     /// Runs whose recovery was abandoned; they can never reach parity.
     #[serde(default)]
     pub abandoned_runs: Vec<String>,
-    /// True when no scenario has an unexplained difference and no run's
-    /// recovery was abandoned.
+    /// True when at least one scenario was compared, none has an
+    /// unexplained difference and no run's recovery was abandoned.
     pub parity: bool,
 }
 
@@ -193,7 +219,10 @@ impl ParityReport {
 }
 
 /// Compares `run_a` and `run_b` under `artifacts_dir`, writing the report
-/// next to them.
+/// next to them. Every run holds one scenario (spec §8.1), so the two runs
+/// are one scenario's run under each profile: a scenario counts only when
+/// both summaries carry it and at least one run executed it, and two runs
+/// left with nothing to compare are refused, never reported as parity.
 pub fn compare_runs(
     artifacts_dir: &Path,
     run_a: &str,
@@ -208,36 +237,12 @@ pub fn compare_runs(
             a.summary.app_profile
         ));
     }
-    let names_a: BTreeSet<String> = a.summary.results.iter().map(|r| r.name.clone()).collect();
-    let names_b: BTreeSet<String> = b.summary.results.iter().map(|r| r.name.clone()).collect();
-    let mut scenarios = Vec::new();
-    for name in names_a.intersection(&names_b) {
-        let side_a = side_of(&a, name);
-        let side_b = side_of(&b, name);
-        let differing = differing_aspects(&side_a, &side_b);
-        let (accepted, findings): (Vec<Aspect>, Vec<Aspect>) =
-            differing.into_iter().partition(|aspect| {
-                intentional
-                    .iter()
-                    .any(|i| i.scenario == *name && i.aspect == *aspect)
-            });
-        let intentional = accepted
-            .into_iter()
-            .filter_map(|aspect| {
-                intentional
-                    .iter()
-                    .find(|i| i.scenario == *name && i.aspect == aspect)
-                    .cloned()
-            })
-            .collect();
-        scenarios.push(ScenarioParity {
-            name: name.clone(),
-            a: side_a,
-            b: side_b,
-            intentional,
-            findings,
-        });
-    }
+    let split = split_scenarios((run_a, &a), (run_b, &b))?;
+    let scenarios: Vec<ScenarioParity> = split
+        .compared
+        .iter()
+        .map(|name| compare_scenario(&a, &b, name, intentional))
+        .collect();
     let abandoned_runs: Vec<String> = [(run_a, &a), (run_b, &b)]
         .into_iter()
         .filter(|(_, run)| run.abandoned)
@@ -249,15 +254,127 @@ pub fn compare_runs(
         parity: abandoned_runs.is_empty() && scenarios.iter().all(|s| s.findings.is_empty()),
         abandoned_runs,
         scenarios,
+        only_in_a: split.only_in_a,
+        only_in_b: split.only_in_b,
+    };
+    write_report(artifacts_dir, &report)?;
+    Ok(report)
+}
+
+/// The two runs' scenarios, by name: those compared and those only one
+/// run carries.
+struct Split {
+    compared: BTreeSet<String>,
+    only_in_a: Vec<String>,
+    only_in_b: Vec<String>,
+}
+
+/// Splits the scenarios of runs `a` and `b`. A scenario both runs carry is
+/// compared unless both skipped it (skipped on one side only is a real
+/// difference). Two runs left with nothing to compare, because they share
+/// no scenario or both skipped every one they share, are refused.
+fn split_scenarios(
+    (run_a, a): (&str, &LoadedRun),
+    (run_b, b): (&str, &LoadedRun),
+) -> Result<Split, String> {
+    let (names_a, names_b) = (scenario_names(a), scenario_names(b));
+    if names_a.is_disjoint(&names_b) {
+        return Err(format!(
+            "runs {run_a} and {run_b} share no scenario ({run_a}: {}; {run_b}: {}), so nothing \
+             was compared; give parity the two profiles' runs of one scenario",
+            name_list(&names_a),
+            name_list(&names_b)
+        ));
+    }
+    let (both_skipped, compared): (BTreeSet<String>, BTreeSet<String>) = names_a
+        .intersection(&names_b)
+        .cloned()
+        .partition(|name| skipped(a, name) && skipped(b, name));
+    if compared.is_empty() {
+        return Err(format!(
+            "the scenarios runs {run_a} and {run_b} share were all skipped in both runs ({}), so \
+             nothing was compared; give parity the two profiles' runs of a scenario at least one \
+             of them executed",
+            name_list(&both_skipped)
+        ));
+    }
+    Ok(Split {
+        compared,
         only_in_a: names_a.difference(&names_b).cloned().collect(),
         only_in_b: names_b.difference(&names_a).cloned().collect(),
-    };
-    let json = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+    })
+}
+
+/// Names of the scenarios a run's summary carries.
+fn scenario_names(run: &LoadedRun) -> BTreeSet<String> {
+    run.summary.results.iter().map(|r| r.name.clone()).collect()
+}
+
+/// Whether the run recorded `scenario` as skipped (the result `side_of`
+/// reads).
+fn skipped(run: &LoadedRun, scenario: &str) -> bool {
+    run.summary
+        .results
+        .iter()
+        .find(|r| r.name == scenario)
+        .is_some_and(|r| matches!(r.outcome, Outcome::Skipped { .. }))
+}
+
+/// `a, b`, or `none` for a run that carries no scenario.
+fn name_list(names: &BTreeSet<String>) -> String {
+    if names.is_empty() {
+        return "none".to_owned();
+    }
+    names
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// One scenario both runs carry: its two sides, and each differing aspect
+/// either accepted by an entry for this profile pair or a finding.
+fn compare_scenario(
+    a: &LoadedRun,
+    b: &LoadedRun,
+    name: &str,
+    intentional: &[Intentional],
+) -> ScenarioParity {
+    let pair = (
+        a.summary.app_profile.as_str(),
+        b.summary.app_profile.as_str(),
+    );
+    let side_a = side_of(a, name);
+    let side_b = side_of(b, name);
+    let differing = differing_aspects(&side_a, &side_b);
+    let (accepted, findings): (Vec<Aspect>, Vec<Aspect>) = differing
+        .into_iter()
+        .partition(|aspect| intentional.iter().any(|i| i.accepts(name, *aspect, pair)));
+    let intentional = accepted
+        .into_iter()
+        .filter_map(|aspect| {
+            intentional
+                .iter()
+                .find(|i| i.accepts(name, aspect, pair))
+                .cloned()
+        })
+        .collect();
+    ScenarioParity {
+        name: name.to_owned(),
+        a: side_a,
+        b: side_b,
+        intentional,
+        findings,
+    }
+}
+
+/// Writes `parity.json` and `parity.md` under `artifacts_dir`.
+fn write_report(artifacts_dir: &Path, report: &ParityReport) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(report).map_err(|e| e.to_string())?;
     std::fs::write(artifacts_dir.join(PARITY_JSON), json)
         .map_err(|e| format!("cannot write {PARITY_JSON}: {e}"))?;
     std::fs::write(artifacts_dir.join(PARITY_MD), report.render())
-        .map_err(|e| format!("cannot write {PARITY_MD}: {e}"))?;
-    Ok(report)
+        .map_err(|e| format!("cannot write {PARITY_MD}: {e}"))
 }
 
 /// Reads an intentional-differences file (TOML).
@@ -443,301 +560,5 @@ fn differing_aspects(a: &Side, b: &Side) -> Vec<Aspect> {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-
-    fn summary(run_id: &str, profile: &str, outcomes: &[(&str, &str)]) -> String {
-        let results: Vec<String> = outcomes
-            .iter()
-            .map(|(name, outcome)| {
-                let o = match *outcome {
-                    "passed" => r#"{"outcome": "passed"}"#.to_owned(),
-                    "contract" => r#"{"outcome": "failed", "category": "automation-contract", "message": "id missing"}"#.to_owned(),
-                    other => format!(r#"{{"outcome": "failed", "category": "{other}", "message": "x"}}"#),
-                };
-                format!(
-                    r#"{{"name": "{name}", "app_profile": "{profile}", "app_version": "1", "outcome": {o}, "attempts": 1, "duration": {{"secs": 1, "nanos": 0}}}}"#
-                )
-            })
-            .collect();
-        format!(
-            r#"{{"run_id": "{run_id}", "lane": "ci", "command": "run", "app_profile": "{profile}", "app_version": "1",
-  "mainnet_cleared": true, "relay": null, "actors": [], "results": [{}], "checks": {{"checks": []}},
-  "cleanup": {{"entries": [], "unresolved": ["o2"]}}, "budget": null, "farm_teardown": [], "relay_teardown": null, "passed": true}}"#,
-            results.join(",")
-        )
-    }
-
-    fn entry(kind: TimelineKind, actor: Option<&str>, summary: &str) -> TimelineEntry {
-        TimelineEntry {
-            at_ms: 1,
-            kind,
-            actor: actor.map(str::to_owned),
-            summary: summary.into(),
-            artifact: None,
-        }
-    }
-
-    fn timeline(states: &[(&str, &str)], relay: &[&str], wallet: bool) -> String {
-        let mut entries = vec![entry(
-            TimelineKind::Step,
-            None,
-            "scenario happy_sell attempt 1 started",
-        )];
-        entries.push(entry(
-            TimelineKind::Step,
-            Some("alice"),
-            "created Sell order o1",
-        ));
-        for (actor, state) in states {
-            entries.push(entry(
-                TimelineKind::UiState,
-                Some(actor),
-                &format!("order o1 shows {state} (`raw|label`)"),
-            ));
-        }
-        for state in relay {
-            entries.push(entry(
-                TimelineKind::Assertion,
-                None,
-                &format!("relay: order o1 is {state}"),
-            ));
-        }
-        if wallet {
-            entries.push(entry(
-                TimelineKind::Wallet,
-                Some("bob"),
-                "wallet: 1000 sats settled for order o1",
-            ));
-        }
-        entries.push(entry(
-            TimelineKind::Step,
-            None,
-            "scenario other attempt 1 started",
-        ));
-        entries.push(entry(
-            TimelineKind::UiState,
-            Some("alice"),
-            "order o2 shows cancelled (`x`)",
-        ));
-        serde_json::to_string(&entries).unwrap()
-    }
-
-    fn write_run(dir: &Path, id: &str, summary_json: &str, timeline_json: &str) {
-        let run = dir.join(id);
-        std::fs::create_dir_all(&run).unwrap();
-        std::fs::write(run.join(files::SUMMARY), summary_json).unwrap();
-        if !timeline_json.is_empty() {
-            std::fs::write(run.join(files::TIMELINE_JSON), timeline_json).unwrap();
-        }
-    }
-
-    #[test]
-    fn an_abandoned_recovery_never_reaches_parity() {
-        let dir = tempfile::tempdir().unwrap();
-        let states = [("alice", "pending")];
-        for (id, profile) in [("a", "profile-b"), ("b", "mobile-v2")] {
-            write_run(
-                dir.path(),
-                id,
-                &summary(id, profile, &[("happy_sell", "passed")]),
-                &timeline(&states, &["pending"], false),
-            );
-        }
-        assert!(compare_runs(dir.path(), "a", "b", &[]).unwrap().parity);
-
-        crate::recovery_abandon::write_test_artifact(&dir.path().join("b"));
-        let accepted = [Intentional {
-            scenario: "happy_sell".into(),
-            aspect: Aspect::Cleanup,
-            reason: "accepting it changes nothing".into(),
-        }];
-        let report = compare_runs(dir.path(), "a", "b", &accepted).unwrap();
-        assert!(!report.parity);
-        assert_eq!(report.abandoned_runs, vec!["b".to_owned()]);
-        assert!(report.scenarios[0].b.recovery_abandoned);
-        assert!(report.render().contains("ABANDONED recovery"));
-        let findings = compare_runs(dir.path(), "a", "b", &[]).unwrap();
-        assert_eq!(findings.scenarios[0].findings, vec![Aspect::Cleanup]);
-    }
-
-    #[test]
-    fn the_result_line_names_abandonment_when_it_is_the_only_reason() {
-        let dir = tempfile::tempdir().unwrap();
-        let states = [("alice", "pending")];
-        for (id, profile) in [("a", "profile-b"), ("b", "mobile-v2")] {
-            write_run(
-                dir.path(),
-                id,
-                &summary(id, profile, &[("happy_sell", "passed")]),
-                &timeline(&states, &["pending"], false),
-            );
-        }
-        crate::recovery_abandon::write_test_artifact(&dir.path().join("b"));
-        let accepted = [Intentional {
-            scenario: "happy_sell".into(),
-            aspect: Aspect::Cleanup,
-            reason: "accepted".into(),
-        }];
-
-        let only_abandonment = compare_runs(dir.path(), "a", "b", &accepted)
-            .unwrap()
-            .render();
-        let with_findings = compare_runs(dir.path(), "a", "b", &[]).unwrap().render();
-
-        assert!(only_abandonment.contains("result: FINDINGS (a run's recovery was abandoned"));
-        assert!(!only_abandonment.contains("unexplained differences"));
-        assert!(with_findings.contains("result: FINDINGS (unexplained differences above)"));
-    }
-
-    #[test]
-    fn a_prepared_or_unreadable_abandonment_record_never_reaches_parity() {
-        for corrupt in [false, true] {
-            let dir = tempfile::tempdir().unwrap();
-            let states = [("alice", "pending")];
-            for (id, profile) in [("a", "profile-b"), ("b", "mobile-v2")] {
-                write_run(
-                    dir.path(),
-                    id,
-                    &summary(id, profile, &[("happy_sell", "passed")]),
-                    &timeline(&states, &["pending"], false),
-                );
-            }
-            crate::recovery_abandon::write_incomplete_test_artifacts(
-                &dir.path().join("b"),
-                corrupt,
-            );
-
-            let report = compare_runs(dir.path(), "a", "b", &[]).unwrap();
-
-            assert!(!report.parity, "corrupt={corrupt}");
-            assert_eq!(report.abandoned_runs, vec!["b".to_owned()]);
-        }
-    }
-
-    #[test]
-    fn identical_journeys_reach_parity_and_differences_become_findings_or_intentional() {
-        let dir = tempfile::tempdir().unwrap();
-        let states = [
-            ("alice", "pending"),
-            ("alice", "taken"),
-            ("bob", "taken"),
-            ("alice", "active"),
-            ("bob", "completed"),
-        ];
-        write_run(
-            dir.path(),
-            "a",
-            &summary(
-                "a",
-                "profile-b",
-                &[
-                    ("happy_sell", "passed"),
-                    ("other", "passed"),
-                    ("legacy_only", "passed"),
-                ],
-            ),
-            &timeline(&states, &["pending", "active", "success"], true),
-        );
-        write_run(
-            dir.path(),
-            "b",
-            &summary(
-                "b",
-                "mobile-v2",
-                &[("happy_sell", "passed"), ("other", "contract")],
-            ),
-            &timeline(&states, &["pending", "active", "success"], true),
-        );
-
-        let report = compare_runs(dir.path(), "a", "b", &[]).unwrap();
-        assert_eq!(report.only_in_a, vec!["legacy_only".to_owned()]);
-        let happy = report
-            .scenarios
-            .iter()
-            .find(|s| s.name == "happy_sell")
-            .unwrap();
-        assert!(happy.findings.is_empty(), "{happy:?}");
-        assert_eq!(
-            happy.a.unresolved_orders, 0,
-            "o2 belongs to another scenario"
-        );
-        assert_eq!(
-            report
-                .scenarios
-                .iter()
-                .find(|s| s.name == "other")
-                .unwrap()
-                .a
-                .unresolved_orders,
-            1
-        );
-        assert_eq!(
-            happy.a.state_path["alice"],
-            vec!["pending", "taken", "active"]
-        );
-        assert_eq!(happy.a.relay_path, vec!["pending", "active", "success"]);
-        assert!(happy.a.wallet_settled && happy.b.wallet_settled);
-        let other = report.scenarios.iter().find(|s| s.name == "other").unwrap();
-        assert!(other.findings.contains(&Aspect::Outcome));
-        assert!(other.findings.contains(&Aspect::Contract));
-        assert!(!report.parity);
-        assert!(dir.path().join(PARITY_MD).is_file());
-
-        let intentional = vec![
-            Intentional {
-                scenario: "other".into(),
-                aspect: Aspect::Outcome,
-                reason: "v2 lacks the id on purpose".into(),
-            },
-            Intentional {
-                scenario: "other".into(),
-                aspect: Aspect::Contract,
-                reason: "same".into(),
-            },
-        ];
-        let report = compare_runs(dir.path(), "a", "b", &intentional).unwrap();
-        assert!(report.parity, "{}", report.render());
-        assert!(report.render().contains("v2 lacks the id on purpose"));
-    }
-
-    #[test]
-    fn same_profile_and_missing_runs_are_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        write_run(dir.path(), "a", &summary("a", "profile-b", &[]), "");
-        write_run(dir.path(), "b", &summary("b", "profile-b", &[]), "");
-        assert!(
-            compare_runs(dir.path(), "a", "b", &[])
-                .unwrap_err()
-                .contains("both runs use profile")
-        );
-        assert!(compare_runs(dir.path(), "a", "nope", &[]).is_err());
-    }
-
-    #[test]
-    fn missing_timeline_is_empty_but_unreadable_timeline_is_an_error() {
-        let dir = tempfile::tempdir().unwrap();
-        write_run(dir.path(), "a", &summary("a", "profile-b", &[]), "");
-        write_run(dir.path(), "b", &summary("b", "mobile-v2", &[]), "");
-        assert!(compare_runs(dir.path(), "a", "b", &[]).is_ok());
-
-        // A timeline path that exists but cannot be read as a file must not
-        // silently compare as an empty timeline.
-        std::fs::create_dir(dir.path().join("b").join(files::TIMELINE_JSON)).unwrap();
-        let err = compare_runs(dir.path(), "a", "b", &[]).unwrap_err();
-        assert!(err.contains(files::TIMELINE_JSON), "{err}");
-    }
-
-    #[test]
-    fn intentional_file_parses() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("parity.toml");
-        std::fs::write(
-            &path,
-            "[[intentional]]\nscenario = \"happy_sell\"\naspect = \"state-path\"\nreason = \"v2 shows pending-rating after success\"\n",
-        )
-        .unwrap();
-        let list = load_intentional(&path).unwrap();
-        assert_eq!(list[0].aspect, Aspect::StatePath);
-    }
-}
+#[path = "parity_tests.rs"]
+mod tests;

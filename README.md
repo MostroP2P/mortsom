@@ -386,6 +386,16 @@ capability the CLI does not offer (rating without `order rate`, `pending_order_e
 is skipped with the reason. Each step keeps `cli.jsonl`, the sanitized transcript of the invocations it
 made, instead of a screenshot.
 
+The `mostro-cli e2e` workflow runs a scenario tag (smoke by default) by hand for any CLI branch or pull
+request (`cli_ref` takes `https://github.com/MostroP2P/mostro-cli/pull/<number>`) and nightly against
+`main`. It needs no secrets: the stack is regtest, built by the job. mostro-cli's own pull requests do
+not run it yet: to test one you have reviewed, dispatch Mortsom's `mostro-cli e2e` workflow with the
+pull request's URL as `cli_ref` (the job builds and runs that pull request's code).
+
+`mortsom parity <mobile-v2 run> <cli run> --intentional config/parity-intentional.toml` compares the two
+clients on shared scenarios. Accepted differences go in that file, scoped to the pair with
+`profiles = ["mobile-v2", "cli"]`; without `--intentional`, no difference is accepted.
+
 ## What it tests
 
 Scenarios are grouped in families. Each scenario carries its family name as a tag; `smoke` cuts across

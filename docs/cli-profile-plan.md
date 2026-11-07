@@ -1,7 +1,6 @@
 # Plan: the `cli` client profile (mostro-cli)
 
-Status: specified; the implementation lands in PRs 5-12 of the stack that
-replaces #107 (the results below come from #107's tree, ef807d4).
+Status: implemented, 2026-11-06.
 Base: Mortsom `main` (9dbe627), mostro-cli `main` (6cff9b5).
 
 ## Progress
@@ -120,9 +119,9 @@ tag, with intentional differences scoped to profiles. Every run holds one
 scenario (spec §8.1), so a tagged batch yields one run ID per scenario and
 profile, and the command compares exactly two runs: each scenario's
 mobile-v2 run is paired with its cli run, and the pair counts only when both
-reports carry that scenario. Two runs that share no scenario compare nothing;
-`compare_runs` reports that as parity today, and this phase makes it a
-failure.
+reports carry that scenario. Two runs that share no scenario, or whose
+shared scenarios both runs skipped, compare nothing: `mortsom parity` refuses
+them (exit 2) and writes no report.
 
 ## Requests to mostro-cli
 
