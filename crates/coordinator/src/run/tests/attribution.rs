@@ -327,11 +327,15 @@ async fn a_probe_that_fails_once_attributes_nothing_and_says_nothing() {
         "{}",
         reported.timeline
     );
-    assert!(
-        !reported.log.contains("attributed to the stack"),
-        "{}",
-        reported.log
-    );
+    // `run.log` hangs off one process-wide sink, so a test running beside
+    // this one can write its own attribution into this file: only a line
+    // naming this scenario counts.
+    let attributed_here = reported
+        .log
+        .lines()
+        .filter(|line| line.contains("attributed to the stack"))
+        .any(|line| line.contains("scenario=zz_runner_relay_blips"));
+    assert!(!attributed_here, "{}", reported.log);
 }
 
 #[tokio::test]
