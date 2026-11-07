@@ -160,7 +160,8 @@ pub fn local_overlay_path(path: &Path) -> PathBuf {
 /// The `mobile.profile` a configuration selects, read without loading it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfiguredProfile {
-    /// The files cannot be read or set no profile: the default applies.
+    /// The files cannot be read, set no profile, or set one that is not a
+    /// string (the loader refuses that): the default applies.
     Absent,
     /// The profile, its own environment reference resolved.
     Named(String),
@@ -197,7 +198,9 @@ pub fn configured_profile(path: &Path) -> ConfiguredProfile {
 /// Like [`configured_profile`] with an injectable environment lookup. The
 /// profile's own `env:` reference or `${NAME}` is resolved, as the loader
 /// resolves it; a name it references that is not set leaves it
-/// [`ConfiguredProfile::Unresolved`], never absent.
+/// [`ConfiguredProfile::Unresolved`], never absent. A name set to an empty
+/// value counts as unset whatever `lookup` returns, as doctor and run read
+/// the environment (`RealHost::env`), so every caller agrees on the client.
 pub fn configured_profile_with<F>(path: &Path, lookup: F) -> ConfiguredProfile
 where
     F: Fn(&str) -> Option<String>,
@@ -208,7 +211,7 @@ where
     else {
         return ConfiguredProfile::Absent;
     };
-    match resolve_env_with(profile, lookup) {
+    match resolve_env_with(profile, |name| lookup(name).filter(|v| !v.is_empty())) {
         Ok(value) => value.as_str().map_or(ConfiguredProfile::Absent, |profile| {
             ConfiguredProfile::Named(profile.to_owned())
         }),
@@ -552,6 +555,27 @@ avd_image = \"x\"
                 configured_profile_with(&base, lookup),
                 ConfiguredProfile::Unresolved {
                     names: vec!["MORTSOM_UNSET".to_owned()]
+                },
+                "{reference}"
+            );
+        }
+    }
+
+    /// A name set to an empty value is unset, as doctor and run read the
+    /// environment (`RealHost::env`): an empty profile would read as the
+    /// app's, naming a client neither of them checks or drives.
+    #[test]
+    fn a_profile_reference_set_to_an_empty_value_is_unresolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("desktop.toml");
+        let empty = |_: &str| Some(String::new());
+        for reference in ["env:MORTSOM_PROFILE", "${MORTSOM_PROFILE}"] {
+            std::fs::write(&base, format!("[mobile]\nprofile = \"{reference}\"\n")).unwrap();
+
+            assert_eq!(
+                configured_profile_with(&base, empty),
+                ConfiguredProfile::Unresolved {
+                    names: vec!["MORTSOM_PROFILE".to_owned()]
                 },
                 "{reference}"
             );

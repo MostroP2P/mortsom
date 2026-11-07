@@ -17,6 +17,7 @@
 use std::path::Path;
 
 use crate::cli::{Command, StackAction};
+use crate::doctor::{HostProbe, RealHost};
 use crate::style::{self, INDENT, Style};
 
 /// Three lines of block art, the tagline, and what this invocation is.
@@ -62,9 +63,11 @@ fn client_label(
 }
 
 /// What the banner's third line says, from the parsed arguments and, for
-/// `doctor`, the profile it checks, read from the process environment.
+/// `doctor`, the profile it checks, read from the process environment
+/// through doctor's own lookup ([`RealHost`]'s `env`, where an empty value
+/// is unset), so the caption and the report agree on the client.
 pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
-    caption_with(command, config, stack_dir, |name| std::env::var(name).ok())
+    caption_with(command, config, stack_dir, |name| RealHost.env(name))
 }
 
 /// Like [`caption`] with an injectable environment lookup.
@@ -433,8 +436,31 @@ mod tests {
         );
     }
 
-    /// The caption reads only the profile: a value its reference resolves
-    /// to is never printed, whatever it is.
+    /// A reference set to an empty value is unset, as doctor reads it
+    /// (`RealHost::env`): doctor checks no client, so the caption claims no
+    /// platform. CI interpolating an undefined variable gives this value.
+    #[test]
+    fn doctor_names_a_profile_reference_set_to_an_empty_value_as_unresolved() {
+        // Arrange
+        let dir = tempfile::tempdir().unwrap();
+        let config = configured(&dir, "env:MORTSOM_PROFILE");
+        let empty = |_: &str| Some(String::new());
+
+        // Act
+        let caption = caption_with(&a_doctor(None, None), &config, &stack_dir(), empty);
+
+        // Assert
+        assert_eq!(
+            caption,
+            format!(
+                "doctor · unresolved profile (MORTSOM_PROFILE not set) · {}",
+                config.display()
+            )
+        );
+    }
+
+    /// The caption never echoes the value a profile reference resolves to:
+    /// it prints only `cli` or a platform name.
     #[test]
     fn doctor_never_prints_what_the_profile_reference_resolves_to() {
         // Arrange
