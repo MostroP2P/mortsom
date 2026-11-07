@@ -45,24 +45,41 @@ pub fn render(detail: &str, style: Style) -> String {
 }
 
 /// The client an invocation names: the CLI profile, or the app platform
-/// (Linux unless another is given).
+/// (Linux unless another is given). A profile whose environment reference
+/// is unset names no client, so no platform is claimed: the label says the
+/// profile is unresolved and names the variables, never a value.
 fn client_label(
     platform: Option<mortsom_desktop_driver::Platform>,
-    profile: Option<&str>,
+    profile: &Result<String, Vec<String>>,
 ) -> String {
     match profile {
-        Some(crate::mostro_cli::PROFILE) => crate::mostro_cli::PROFILE.to_owned(),
-        _ => platform.unwrap_or_default().to_string(),
+        Ok(profile) if profile == crate::mostro_cli::PROFILE => {
+            crate::mostro_cli::PROFILE.to_owned()
+        }
+        Ok(_) => platform.unwrap_or_default().to_string(),
+        Err(names) => format!("unresolved profile ({} not set)", names.join(", ")),
     }
 }
 
-/// What the banner's third line says, from the parsed arguments alone.
-///
-/// Pure and total: no config is loaded and no registry consulted, so the
-/// banner is printed before anything can fail. A command that dies on a
-/// missing environment variable has still said which config it read.
+/// What the banner's third line says, from the parsed arguments and, for
+/// `doctor`, the profile it checks, read from the process environment.
 pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
-    let config = config.display();
+    caption_with(command, config, stack_dir, |name| std::env::var(name).ok())
+}
+
+/// Like [`caption`] with an injectable environment lookup.
+///
+/// Total: no config is loaded or validated and no registry consulted, so
+/// the banner is printed before anything can fail. A command that dies on
+/// a missing environment variable has still said which config it read.
+/// `doctor` reads only `mobile.profile` (local overlay and its own
+/// environment reference included), as doctor reads it; files that cannot
+/// be read give the default profile here and fail doctor's config check.
+fn caption_with<F>(command: &Command, config_path: &Path, stack_dir: &Path, lookup: F) -> String
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let config = config_path.display();
     match command {
         Command::Run {
             platform,
@@ -83,10 +100,11 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
         Command::List { .. } => "list · every scenario in the registry".to_owned(),
         Command::Doctor {
             platform, profile, ..
-        } => format!(
-            "doctor · {} · {config}",
-            client_label(*platform, profile.as_deref())
-        ),
+        } => {
+            let profile = crate::config::configured_profile_with(config_path, lookup)
+                .with_flag(profile.as_deref());
+            format!("doctor · {} · {config}", client_label(*platform, &profile))
+        }
         // The run id alone would not say which artifact tree was searched:
         // it is a directory under the config's `artifacts_dir`.
         Command::Cleanup { run, .. } => format!("cleanup · run {run} · {config}"),
@@ -116,8 +134,10 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use mortsom_desktop_driver::Platform;
     use std::path::PathBuf;
 
     fn config() -> PathBuf {
@@ -320,6 +340,113 @@ mod tests {
 
         // Assert
         assert_eq!(cli, "doctor · cli · config/desktop.example.toml");
+    }
+
+    fn a_doctor(platform: Option<Platform>, profile: Option<&str>) -> Command {
+        Command::Doctor {
+            platform,
+            profile: profile.map(str::to_owned),
+            build: Default::default(),
+            no_network: false,
+            json: false,
+        }
+    }
+
+    /// Writes a configuration naming `profile` in `dir`.
+    fn configured(dir: &tempfile::TempDir, profile: &str) -> PathBuf {
+        let path = dir.path().join("desktop.toml");
+        std::fs::write(&path, format!("[mobile]\nprofile = \"{profile}\"\n")).unwrap();
+        path
+    }
+
+    fn unset(_: &str) -> Option<String> {
+        None
+    }
+
+    /// Without `--profile`, doctor checks the configured profile, so the
+    /// caption names it: written out, or through its environment reference.
+    #[test]
+    fn doctor_names_a_configured_cli_profile() {
+        // Arrange
+        let dir = tempfile::tempdir().unwrap();
+        let config = configured(&dir, "cli");
+        let set = |name: &str| (name == "MORTSOM_PROFILE").then(|| "cli".to_owned());
+
+        // Act
+        let written = caption_with(&a_doctor(None, None), &config, &stack_dir(), unset);
+        configured(&dir, "env:MORTSOM_PROFILE");
+        let referenced = caption_with(&a_doctor(None, None), &config, &stack_dir(), set);
+
+        // Assert
+        let expected = format!("doctor · cli · {}", config.display());
+        assert_eq!(written, expected);
+        assert_eq!(referenced, expected);
+    }
+
+    /// `--profile` wins over the configured profile, as it does in doctor,
+    /// an unset environment reference included.
+    #[test]
+    fn the_doctor_profile_flag_wins_over_the_configured_profile() {
+        // Arrange
+        let dir = tempfile::tempdir().unwrap();
+        let config = configured(&dir, "cli");
+
+        // Act
+        let app = caption_with(
+            &a_doctor(None, Some("mobile-v2")),
+            &config,
+            &stack_dir(),
+            unset,
+        );
+        configured(&dir, "env:MORTSOM_PROFILE");
+        let cli = caption_with(&a_doctor(None, Some("cli")), &config, &stack_dir(), unset);
+
+        // Assert
+        assert_eq!(app, format!("doctor · linux · {}", config.display()));
+        assert_eq!(cli, format!("doctor · cli · {}", config.display()));
+    }
+
+    /// A configured reference to an unset name names no client, and doctor
+    /// checks none: the caption claims no platform, `--platform` included,
+    /// and names the profile as unresolved with the variable, never a value.
+    #[test]
+    fn doctor_names_an_unresolved_configured_profile_without_a_platform() {
+        // Arrange
+        let dir = tempfile::tempdir().unwrap();
+        let config = configured(&dir, "env:MORTSOM_PROFILE");
+
+        // Act
+        let caption = caption_with(
+            &a_doctor(Some(Platform::Web), None),
+            &config,
+            &stack_dir(),
+            unset,
+        );
+
+        // Assert
+        assert_eq!(
+            caption,
+            format!(
+                "doctor · unresolved profile (MORTSOM_PROFILE not set) · {}",
+                config.display()
+            )
+        );
+    }
+
+    /// The caption reads only the profile: a value its reference resolves
+    /// to is never printed, whatever it is.
+    #[test]
+    fn doctor_never_prints_what_the_profile_reference_resolves_to() {
+        // Arrange
+        let dir = tempfile::tempdir().unwrap();
+        let config = configured(&dir, "env:MORTSOM_PROFILE");
+        let value = |_: &str| Some("value-from-the-environment".to_owned());
+
+        // Act
+        let caption = caption_with(&a_doctor(None, None), &config, &stack_dir(), value);
+
+        // Assert
+        assert!(!caption.contains("value-from-the-environment"), "{caption}");
     }
 
     /// `stack` reads no config: it acts on the stack directory. Naming the

@@ -301,8 +301,20 @@ fn doctor_with_configured_profile(profile: &str) -> assert_cmd::assert::Assert {
         .assert()
 }
 
+/// Without `--profile`, the banner names the client doctor checks: the
+/// configured `cli`, not the default app platform.
+#[test]
+fn doctor_s_banner_names_the_configured_cli_profile() {
+    let output = doctor_with_configured_profile("cli").code(1);
+
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert!(stderr.contains("doctor · cli · "), "{stderr}");
+    assert!(!stderr.contains("doctor · linux"), "{stderr}");
+}
+
 /// A configured reference to an unset name is the one `client` failure,
-/// naming the variable; no client's tools are checked.
+/// naming the variable; no client's tools are checked, and the banner
+/// names the profile as unresolved instead of a platform.
 #[test]
 fn doctor_with_an_unset_profile_reference_fails_only_the_client_check() {
     let output = doctor_with_configured_profile("env:MORTSOM_PROFILE").code(1);
@@ -333,5 +345,10 @@ fn doctor_with_an_unset_profile_reference_fails_only_the_client_check() {
             .unwrap()
             .contains("MORTSOM_PROFILE"),
         "{client}"
+    );
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert!(
+        stderr.contains("doctor · unresolved profile (MORTSOM_PROFILE not set) · "),
+        "{stderr}"
     );
 }
