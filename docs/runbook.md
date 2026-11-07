@@ -100,8 +100,8 @@ whatever config or artifact directory is selected.
 
 A killed coordinator leaves an active-runtime marker. Do not delete the marker, reset the stack or remove
 the private directory to bypass the refusal: reconcile the owned client processes first. A `cli` profile
-actor reconciles its own marker on the next `cleanup`, once no `mostro-cli` process runs with its
-`MCLI_DIR`; if `cleanup` reports that a process still uses the actor's store, find it with
+actor reconciles its own marker on the next `cleanup` or `recovery abandon`, once no `mostro-cli` process
+runs with its `MCLI_DIR`; if `cleanup` reports that a process still uses the actor's store, find it with
 `pgrep -a mostro-cli`, let it finish or stop it, and run `cleanup` again. A stack mismatch
 or missing protected files also refuses cleanup; keep the original stack available. `stack down` discards
 the environment and is never proof of cancellation or refund. While a journal is pending and its stack
