@@ -129,6 +129,32 @@ fn parity_refuses_two_runs_that_share_no_scenario() {
 }
 
 #[test]
+fn parity_refuses_two_runs_that_both_skipped_their_shared_scenario() {
+    // Arrange: both profiles skipped the one scenario they share.
+    let root = tempfile::tempdir().unwrap();
+    fixture(root.path());
+    for (run, profile) in [("run-c", "mobile-v2"), ("run-d", "cli")] {
+        single_scenario_run(root.path(), run, profile, "happy_sell");
+        let path = root.path().join("artifacts").join(run).join("summary.json");
+        let mut summary: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        summary["results"][0]["outcome"] =
+            serde_json::json!({"outcome": "skipped", "reason": "not offered"});
+        std::fs::write(&path, summary.to_string()).unwrap();
+    }
+
+    // Act / Assert
+    command(root.path())
+        .args(["parity", "run-c", "run-d"])
+        .assert()
+        .code(2)
+        .stderr(predicates::str::contains("all skipped in both runs"))
+        .stdout(predicates::str::is_empty());
+    assert!(!root.path().join("artifacts/parity.json").exists());
+    assert!(!root.path().join("artifacts/parity.md").exists());
+}
+
+#[test]
 fn a_missing_custom_publication_secret_fails_before_creating_the_output() {
     let root = tempfile::tempdir().unwrap();
     fixture(root.path());

@@ -9,8 +9,9 @@
 //!
 //! Every run holds one scenario (spec §8.1), so the two runs are one
 //! scenario's run under each profile. A scenario counts only when both
-//! summaries carry it; two runs that share none compare nothing and are
-//! refused, never reported as parity.
+//! summaries carry it and at least one run executed it: a scenario both
+//! runs skipped compares nothing. Two runs left with nothing to compare
+//! are refused, never reported as parity.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -128,8 +129,8 @@ pub struct ParityReport {
     pub runs: (String, String),
     /// Profiles compared.
     pub profiles: (String, String),
-    /// Scenarios both runs executed; never empty, as two runs that share
-    /// none are refused.
+    /// Scenarios both runs carry, less those both skipped; never empty, as
+    /// two runs left with nothing to compare are refused.
     pub scenarios: Vec<ScenarioParity>,
     /// Scenarios only one run executed.
     pub only_in_a: Vec<String>,
@@ -217,8 +218,8 @@ impl ParityReport {
 /// Compares `run_a` and `run_b` under `artifacts_dir`, writing the report
 /// next to them. Every run holds one scenario (spec §8.1), so the two runs
 /// are one scenario's run under each profile: a scenario counts only when
-/// both summaries carry it, and two runs that share none are refused,
-/// never reported as parity.
+/// both summaries carry it and at least one run executed it, and two runs
+/// left with nothing to compare are refused, never reported as parity.
 pub fn compare_runs(
     artifacts_dir: &Path,
     run_a: &str,
@@ -233,17 +234,10 @@ pub fn compare_runs(
             a.summary.app_profile
         ));
     }
-    let (names_a, names_b) = (scenario_names(&a), scenario_names(&b));
-    if names_a.is_disjoint(&names_b) {
-        return Err(format!(
-            "runs {run_a} and {run_b} share no scenario ({run_a}: {}; {run_b}: {}), so nothing \
-             was compared; give parity the two profiles' runs of one scenario",
-            name_list(&names_a),
-            name_list(&names_b)
-        ));
-    }
-    let scenarios: Vec<ScenarioParity> = names_a
-        .intersection(&names_b)
+    let split = split_scenarios((run_a, &a), (run_b, &b))?;
+    let scenarios: Vec<ScenarioParity> = split
+        .compared
+        .iter()
         .map(|name| compare_scenario(&a, &b, name, intentional))
         .collect();
     let abandoned_runs: Vec<String> = [(run_a, &a), (run_b, &b)]
@@ -257,16 +251,70 @@ pub fn compare_runs(
         parity: abandoned_runs.is_empty() && scenarios.iter().all(|s| s.findings.is_empty()),
         abandoned_runs,
         scenarios,
-        only_in_a: names_a.difference(&names_b).cloned().collect(),
-        only_in_b: names_b.difference(&names_a).cloned().collect(),
+        only_in_a: split.only_in_a,
+        only_in_b: split.only_in_b,
     };
     write_report(artifacts_dir, &report)?;
     Ok(report)
 }
 
+/// The two runs' scenarios, by name: those compared and those only one
+/// run carries.
+struct Split {
+    compared: BTreeSet<String>,
+    only_in_a: Vec<String>,
+    only_in_b: Vec<String>,
+}
+
+/// Splits the scenarios of runs `a` and `b`. A scenario both runs carry is
+/// compared unless both skipped it (skipped on one side only is a real
+/// difference). Two runs left with nothing to compare, because they share
+/// no scenario or both skipped every one they share, are refused.
+fn split_scenarios(
+    (run_a, a): (&str, &LoadedRun),
+    (run_b, b): (&str, &LoadedRun),
+) -> Result<Split, String> {
+    let (names_a, names_b) = (scenario_names(a), scenario_names(b));
+    if names_a.is_disjoint(&names_b) {
+        return Err(format!(
+            "runs {run_a} and {run_b} share no scenario ({run_a}: {}; {run_b}: {}), so nothing \
+             was compared; give parity the two profiles' runs of one scenario",
+            name_list(&names_a),
+            name_list(&names_b)
+        ));
+    }
+    let (both_skipped, compared): (BTreeSet<String>, BTreeSet<String>) = names_a
+        .intersection(&names_b)
+        .cloned()
+        .partition(|name| skipped(a, name) && skipped(b, name));
+    if compared.is_empty() {
+        return Err(format!(
+            "the scenarios runs {run_a} and {run_b} share were all skipped in both runs ({}), so \
+             nothing was compared; give parity the two profiles' runs of a scenario at least one \
+             of them executed",
+            name_list(&both_skipped)
+        ));
+    }
+    Ok(Split {
+        compared,
+        only_in_a: names_a.difference(&names_b).cloned().collect(),
+        only_in_b: names_b.difference(&names_a).cloned().collect(),
+    })
+}
+
 /// Names of the scenarios a run's summary carries.
 fn scenario_names(run: &LoadedRun) -> BTreeSet<String> {
     run.summary.results.iter().map(|r| r.name.clone()).collect()
+}
+
+/// Whether the run recorded `scenario` as skipped (the result `side_of`
+/// reads).
+fn skipped(run: &LoadedRun, scenario: &str) -> bool {
+    run.summary
+        .results
+        .iter()
+        .find(|r| r.name == scenario)
+        .is_some_and(|r| matches!(r.outcome, Outcome::Skipped { .. }))
 }
 
 /// `a, b`, or `none` for a run that carries no scenario.

@@ -7,6 +7,7 @@ fn summary(run_id: &str, profile: &str, outcomes: &[(&str, &str)]) -> String {
         .map(|(name, outcome)| {
             let o = match *outcome {
                 "passed" => r#"{"outcome": "passed"}"#.to_owned(),
+                "skipped" => r#"{"outcome": "skipped", "reason": "not offered"}"#.to_owned(),
                 "contract" => r#"{"outcome": "failed", "category": "automation-contract", "message": "id missing"}"#.to_owned(),
                 other => format!(r#"{{"outcome": "failed", "category": "{other}", "message": "x"}}"#),
             };
@@ -344,6 +345,75 @@ fn a_scenario_only_one_run_carries_is_listed_but_never_compared() {
     assert_eq!(report.only_in_a, ["legacy_only"]);
     assert!(report.only_in_b.is_empty());
     assert!(report.parity, "{}", report.render());
+}
+
+/// Writes runs `a` (mobile-v2) and `b` (cli) with the same journey and
+/// the given results.
+fn write_pair(dir: &Path, results_a: &[(&str, &str)], results_b: &[(&str, &str)]) {
+    let states = [("alice", "pending")];
+    for (id, profile, results) in [("a", "mobile-v2", results_a), ("b", "cli", results_b)] {
+        write_run(
+            dir,
+            id,
+            &summary(id, profile, results),
+            &timeline(&states, &["pending"], false),
+        );
+    }
+}
+
+#[test]
+fn two_runs_that_both_skipped_their_only_shared_scenario_are_refused() {
+    // Arrange: each profile skipped the scenario, so neither ran it.
+    let dir = tempfile::tempdir().unwrap();
+    let skipped = [("happy_sell", "skipped")];
+    write_pair(dir.path(), &skipped, &skipped);
+
+    // Act
+    let err = compare_runs(dir.path(), "a", "b", &[]).unwrap_err();
+
+    // Assert: refused like two runs that share no scenario, and no report.
+    assert!(err.contains("all skipped in both runs"), "{err}");
+    assert!(err.contains("(happy_sell)"), "{err}");
+    assert!(!dir.path().join(PARITY_JSON).exists());
+    assert!(!dir.path().join(PARITY_MD).exists());
+}
+
+#[test]
+fn a_scenario_both_runs_skipped_is_left_out_and_the_rest_is_compared() {
+    // Arrange
+    let dir = tempfile::tempdir().unwrap();
+    let results = [("happy_sell", "passed"), ("other", "skipped")];
+    write_pair(dir.path(), &results, &results);
+
+    // Act
+    let report = compare_runs(dir.path(), "a", "b", &[]).unwrap();
+
+    // Assert: only the scenario a run executed is compared.
+    let compared: Vec<&str> = report.scenarios.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(compared, ["happy_sell"]);
+    assert!(report.only_in_a.is_empty() && report.only_in_b.is_empty());
+    assert!(report.parity, "{}", report.render());
+    assert!(!report.render().contains("| other |"));
+}
+
+#[test]
+fn a_scenario_skipped_on_one_side_only_is_still_a_finding() {
+    // Arrange
+    let dir = tempfile::tempdir().unwrap();
+    write_pair(
+        dir.path(),
+        &[("happy_sell", "skipped")],
+        &[("happy_sell", "passed")],
+    );
+
+    // Act
+    let report = compare_runs(dir.path(), "a", "b", &[]).unwrap();
+
+    // Assert
+    assert_eq!(report.scenarios.len(), 1);
+    assert_eq!(report.scenarios[0].a.outcome, "skipped");
+    assert_eq!(report.scenarios[0].findings, vec![Aspect::Outcome]);
+    assert!(!report.parity);
 }
 
 #[test]
