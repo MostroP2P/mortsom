@@ -1,16 +1,48 @@
-# Mortsom
+<p align="center">
+  <img src="./mortsom.png" alt="Mortsom logo: a green creature inspecting a phone through a magnifying glass" width="220">
+</p>
 
-End-to-end test harness for the Mostro app v2. It drives two real copies of the app, Alice and Bob, through a
-complete Lightning trade against a local regtest stack, and proves the trade from the outside: what each
-user saw, what the daemon published and what each wallet actually paid or received.
+<h1 align="center">Mortsom</h1>
+
+<p align="center">
+  <strong>Black-box, end-to-end test harness for the Mostro app v2.</strong><br>
+  Two real clients, one real Lightning trade, proven from the outside.
+</p>
+
+<p align="center">
+  <a href="https://github.com/MostroP2P/mortsom/actions/workflows/ci.yml"><img src="https://github.com/MostroP2P/mortsom/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0--or--later-blue" alt="License: AGPL-3.0-or-later"></a>
+  <img src="https://img.shields.io/badge/rust-1.89%2B-orange?logo=rust" alt="Rust 1.89 or later">
+  <img src="https://img.shields.io/badge/platforms-Linux%20%7C%20Web-brightgreen" alt="Platforms: Linux and Web">
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#requirements">Requirements</a> ·
+  <a href="#stack">Stack</a> ·
+  <a href="#what-it-tests">What it tests</a> ·
+  <a href="#reading-results">Reading results</a> ·
+  <a href="#commands">Commands</a> ·
+  <a href="spec.md">Spec</a>
+</p>
+
+---
+
+Mortsom drives two real copies of the app, Alice and Bob, through a complete Lightning trade against a local
+regtest stack, and proves the trade from the outside:
+
+- **What each user saw**: screenshots and accessibility trees from both clients, step by step.
+- **What the daemon published**: the run's own events on the Nostr relay.
+- **What each wallet actually paid or received**: the hold and the payout, each settled exactly once.
 
 Clients run on **Linux** (default) or **Web**, both built from the same Flutter source. [spec.md](spec.md) is
 normative; this file is the operator guide.
 
 ## Status
 
-Accepted live cells: **Linux 2/2, Web 2/2**. Web required app v2 changes (IndexedDB stores and store initialisation on the web) that are merged
-upstream as MostroP2P/app#408; build the clients from the app's `main`. See [docs/acceptance-ledger.md](docs/acceptance-ledger.md) for every attempt and
+Accepted live cells: **Linux 2/2, Web 2/2**. Web required app v2 changes (IndexedDB stores and store
+initialisation on the web) that are merged upstream as MostroP2P/app#408; build the clients from the app's
+`main`. See [docs/acceptance-ledger.md](docs/acceptance-ledger.md) for every attempt and
 [docs/HANDOFF.md](docs/HANDOFF.md) for the current plan.
 
 The regtest stack is Mortsom's own: `mortsom stack up` builds it from nothing with Docker and Git (it fetches
@@ -95,18 +127,19 @@ sudo apt-get install build-essential git curl unzip xz-utils zip protobuf-compil
   xvfb dbus gnome-keyring at-spi2-core imagemagick python3
 ```
 
-Mortsom's LND client compiles its protobuf definitions at build time, and they use proto3 `optional`
-fields, which need `protoc` 3.15 or later. Ubuntu and Pop!_OS 22.04 package 3.12, and the build then
-stops in `fedimint-tonic-lnd` with `This file contains proto3 optional fields, but
---experimental_allow_proto3_optional was not set`. Install a release from
-[protocolbuffers/protobuf](https://github.com/protocolbuffers/protobuf/releases) and put its `protoc`
-first on `PATH`, or point `PROTOC` at it for the build:
-
-```sh
-PROTOC=/path/to/protoc/bin/protoc cargo build -p mortsom-coordinator --bin mortsom
-```
-
-`mortsom doctor` cannot check this: it is part of the harness that needs `protoc` to compile.
+> [!IMPORTANT]
+> Mortsom's LND client compiles its protobuf definitions at build time, and they use proto3 `optional`
+> fields, which need `protoc` 3.15 or later. Ubuntu and Pop!_OS 22.04 package 3.12, and the build then
+> stops in `fedimint-tonic-lnd` with `This file contains proto3 optional fields, but
+> --experimental_allow_proto3_optional was not set`. Install a release from
+> [protocolbuffers/protobuf](https://github.com/protocolbuffers/protobuf/releases) and put its `protoc`
+> first on `PATH`, or point `PROTOC` at it for the build:
+>
+> ```sh
+> PROTOC=/path/to/protoc/bin/protoc cargo build -p mortsom-coordinator --bin mortsom
+> ```
+>
+> `mortsom doctor` cannot check this: it is part of the harness that needs `protoc` to compile.
 
 Install [Rust with rustup](https://www.rust-lang.org/tools/install),
 [Flutter](https://docs.flutter.dev/install) and [Docker Engine with Compose](https://docs.docker.com/engine/install/)
@@ -161,9 +194,12 @@ state_timeout_secs = 90
 settle_timeout_secs = 120
 ```
 
-Caps are mandatory. Secrets are `env:` references resolved in memory; never paste macaroons, keys or
-credentials into TOML. `*.local.toml`, `mortsom.toml`, `.env*`, `.mortsom/` and `artifacts/` are gitignored. A config also
-merges its optional `<name>.local.toml` overlay.
+> [!WARNING]
+> Caps are mandatory. Secrets are `env:` references resolved in memory; never paste macaroons, keys or
+> credentials into TOML. `*.local.toml`, `mortsom.toml`, `.env*`, `.mortsom/` and `artifacts/` are
+> gitignored.
+
+A config also merges its optional `<name>.local.toml` overlay.
 
 ## Stack
 
@@ -182,8 +218,11 @@ harnesses can run on one machine at the same time with their default ports.
 `stack up` builds `mostrod` from the current `main` of [MostroP2P/mostro](https://github.com/MostroP2P/mostro),
 starts the chain, nodes and relay, funds the nodes, opens one balanced channel from each actor to Carol, mints a
 daemon identity for this stack, starts the daemon as your user and waits for its info event on the relay. It
-is re-runnable: funded wallets and open channels are left alone. Every `up` mints a new daemon identity, after
-which both clients must be rebuilt, so do not run it before every scenario.
+is re-runnable: funded wallets and open channels are left alone.
+
+> [!TIP]
+> Every `up` mints a new daemon identity, after which both clients must be rebuilt, so do not run it before
+> every scenario.
 
 The daemon comes from exactly one of three sources, all recorded in `public.json`, the stack fingerprint,
 `stack status` and run artifacts:
@@ -379,11 +418,12 @@ holds for him: `payout_fails_then_replaced` (Bob withdraws his payout invoice be
 daemon settles the escrow, fails to pay, retries as it declares and asks for a new invoice, which Bob hands
 in; only the replacement settles), `payout_invoice_below_expiry_floor` (an invoice shorter than the
 declared floor is refused, by the app before sending it or, while it cannot judge yet, by the daemon; a
-proper one the app calls `valid` is then accepted; no payment) and `payout_slots_capped_per_destination` (one more funded trade than the declared
-per-destination cap, each paying out to a hold invoice Bob never settles; the daemon dispatches up to the
-cap and holds the next payout back until Bob settles one, then every trade completes). The limits come
-from `stack/limits.toml` (`payout_invoice_min_expiry_secs`, `max_inflight_payouts_per_destination`); the
-app must carry the `invoice.error` readout and route the daemon's replacement request to the invoice form.
+proper one the app calls `valid` is then accepted; no payment) and `payout_slots_capped_per_destination`
+(one more funded trade than the declared per-destination cap, each paying out to a hold invoice Bob never
+settles; the daemon dispatches up to the cap and holds the next payout back until Bob settles one, then
+every trade completes). The limits come from `stack/limits.toml` (`payout_invoice_min_expiry_secs`,
+`max_inflight_payouts_per_destination`); the app must carry the `invoice.error` readout and route the
+daemon's replacement request to the invoice form.
 
 Anti-abuse bonds, on a stack built with `./target/debug/mortsom stack up --bond --replace`, whose daemon
 asks both sides for a bond (`stack/mostro-bond.tpl.toml`: one percent of the order, never under 1000 sats,
@@ -444,19 +484,19 @@ A submission the app never listed (a failure before or right after the create ta
 daemon's order events on the relay for the run's window. The run itself performs that audit after the
 scenario, even when the app is stuck on a screen from which its trade list cannot be read, and repeats it
 after the configured quiet window: when the relay shows no order the journal does not already know across
-that interval, the run records that the submission produced nothing and
-releases its own profiles, so no cleanup is needed. A retained journal gets the same audit from cleanup,
-taken again after the retained clients ran. When the relay does show
-candidates, cleanup lists them with the exact commands: name the order with `--attribute-order alice=<order-id>`,
-or state `alice=none` when the daemon created none. An id must have been published in the window and not be
-known before the submission, and `none` is refused while any unknown order from that window is still open.
+that interval, the run records that the submission produced nothing and releases its own profiles, so no
+cleanup is needed. A retained journal gets the same audit from cleanup, taken again after the retained
+clients ran. When the relay does show candidates, cleanup lists them with the exact commands: name the
+order with `--attribute-order alice=<order-id>`, or state `alice=none` when the daemon created none. An id
+must have been published in the window and not be known before the submission, and `none` is refused while
+any unknown order from that window is still open.
 
 Recovery reopens the same Alice and Bob identities from protected storage under
 `$HOME/.local/state/mortsom/recovery/<run-id>`, cancels through ordinary UI controls and deletes the profiles
 only after verified resolution. It never creates a new identity, retries a payment or releases escrow. A new
-run is refused by default while a journal is unresolved, and `stack up`/`stack down` are refused while a journal's stack
-still exists. A journal whose Mortsom-owned regtest stack was destroyed can only be closed with
-`recovery abandon <run-id> --reason stack-destroyed --confirm-run <run-id>`, which preserves evidence and
+run is refused by default while a journal is unresolved, and `stack up`/`stack down` are refused while a
+journal's stack still exists. A journal whose Mortsom-owned regtest stack was destroyed can only be closed
+with `recovery abandon <run-id> --reason stack-destroyed --confirm-run <run-id>`, which preserves evidence and
 leaves the run failed: nothing is verified. Details and failure categories are in
 [docs/runbook.md](docs/runbook.md).
 
@@ -505,12 +545,12 @@ says so; set to a checkout without the registry, it fails. CI checks out the app
 MORTSOM_APP_CHECKOUT=../appv2 cargo test -p mortsom-adapter-mobile-v2 selectors_match_the_v2_app_contract
 ```
 
-Everything in this repository is written in English. Read [AGENTS.md](AGENTS.md) and [spec.md](spec.md)
-before contributing.
+> [!NOTE]
+> Everything in this repository is written in English. Read [AGENTS.md](AGENTS.md) and [spec.md](spec.md)
+> before contributing.
 
-Releases are cut with `cargo release`, from `main` directly or from a
-`release/vX.Y.Z` branch when the bump should be reviewed first; the changelog,
-the tag and the GitHub release follow from it. See
+Releases are cut with `cargo release`, from `main` directly or from a `release/vX.Y.Z` branch when the bump
+should be reviewed first; the changelog, the tag and the GitHub release follow from it. See
 [docs/releasing.md](docs/releasing.md).
 
 ## License
