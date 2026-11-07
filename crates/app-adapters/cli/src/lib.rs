@@ -188,6 +188,18 @@ impl AppAdapter for CliAdapter {
         .await
     }
 
+    async fn unproven_orders(
+        &self,
+        device: &DeviceContext<'_>,
+    ) -> Result<Vec<String>, AdapterError> {
+        orders::unproven(
+            device,
+            self.offers("order.sync"),
+            self.config.message_window,
+        )
+        .await
+    }
+
     async fn create_order(
         &self,
         device: &DeviceContext<'_>,

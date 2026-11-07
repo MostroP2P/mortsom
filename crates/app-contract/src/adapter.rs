@@ -75,6 +75,17 @@ pub trait AppAdapter: Send + Sync {
             "own-order discovery is not supported",
         ))
     }
+    /// The orders of [`Self::owned_orders`] the client lists without proof
+    /// that they are still the actor's: rows it cannot judge, kept because
+    /// dropping one would read an unproven absence as the order closing.
+    /// Such a row proves no order submission. An app lists only what its
+    /// node shows, so by default there is none.
+    async fn unproven_orders(
+        &self,
+        _device: &DeviceContext<'_>,
+    ) -> Result<Vec<String>, AdapterError> {
+        Ok(Vec::new())
+    }
     /// Creates a fixed-price order.
     async fn create_order(
         &self,

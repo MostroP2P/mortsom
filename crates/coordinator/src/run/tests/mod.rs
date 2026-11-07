@@ -423,6 +423,9 @@ struct FakeAdapter {
     reopened_dropped: Mutex<usize>,
     /// My Trades cannot be read at all: the list proves nothing either way.
     unreadable_list: bool,
+    /// Listed orders the client keeps without proof that they are the
+    /// actor's (the CLI's rows a truncated message list cannot judge).
+    unproven: Vec<String>,
     /// App v2 shows `loading` while it reloads a trade (live, 2026-10-20,
     /// `full_trade_with_rating`): Alice's reads of her screen, numbered from
     /// zero, that fall in this range show that instead of the order's state.
@@ -465,6 +468,7 @@ impl FakeAdapter {
             dropped: Mutex::new(Vec::new()),
             reopened_dropped: Mutex::new(0),
             unreadable_list: false,
+            unproven: Vec::new(),
             maker_screen_loading: None,
             onboarding_meets: None,
             slow_onboarding: None,
@@ -574,6 +578,9 @@ impl AppAdapter for FakeAdapter {
             .filter(|id| !dropped.contains(id))
             .cloned()
             .collect())
+    }
+    async fn unproven_orders(&self, _: &DeviceContext<'_>) -> Result<Vec<String>, AdapterError> {
+        Ok(self.unproven.clone())
     }
     async fn configure_nwc(
         &self,

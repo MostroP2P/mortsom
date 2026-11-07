@@ -307,6 +307,38 @@ pub(crate) async fn owned(
     sync: bool,
     window: MessageWindow,
 ) -> Result<Vec<String>, AdapterError> {
+    let rows = owned_rows(device, sync, window).await?;
+    Ok(rows.into_iter().map(|row| row.id).collect())
+}
+
+/// The ids [`owned`] lists without proof: rows the node no longer reports
+/// that only a truncated list keeps (see [`still_reported`]).
+pub(crate) async fn unproven(
+    device: &DeviceContext<'_>,
+    sync: bool,
+    window: MessageWindow,
+) -> Result<Vec<String>, AdapterError> {
+    let rows = owned_rows(device, sync, window).await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| (!row.proven).then_some(row.id))
+        .collect())
+}
+
+/// A local row [`still_reported`] keeps.
+struct OwnedRow {
+    id: String,
+    /// The node reports it, or a complete list shows a take parked on its
+    /// bond; `false` when only a truncated list keeps it.
+    proven: bool,
+}
+
+/// The rows of the actor's own store that are, or may still be, theirs.
+async fn owned_rows(
+    device: &DeviceContext<'_>,
+    sync: bool,
+    window: MessageWindow,
+) -> Result<Vec<OwnedRow>, AdapterError> {
     if sync {
         // The node announces a range order's remainder to a fresh trade
         // key; `order sync` gives it a local row, as the app's restore does.
@@ -332,16 +364,17 @@ pub(crate) async fn owned(
 /// The local rows the node still reports to this user. A store keeps every
 /// row it ever wrote; an order whose take was undone, or that the node no
 /// longer counts as this user's, is not theirs any more -- as app v2 stops
-/// listing it. A row whose list is truncated cannot be judged and stays:
-/// dropping it would read an unproven absence as the order closing, or as
-/// never this user's, and failing would let one old row block the listing.
+/// listing it. A row whose list is truncated cannot be judged and stays,
+/// unproven: dropping it would read an unproven absence as the order
+/// closing, or as never this user's, and failing would let one old row
+/// block the listing.
 async fn still_reported(
     device: &DeviceContext<'_>,
     local: Vec<String>,
     window: MessageWindow,
-) -> Result<Vec<String>, AdapterError> {
+) -> Result<Vec<OwnedRow>, AdapterError> {
     if local.is_empty() {
-        return Ok(local);
+        return Ok(Vec::new());
     }
     let call = local
         .iter()
@@ -358,11 +391,16 @@ async fn still_reported(
         .collect();
     let mut owned = Vec::with_capacity(local.len());
     for id in local {
-        if reported.contains(&id.as_str())
-            || parked_on_bond(device, &id, window).await? != Some(false)
-        {
-            owned.push(id);
-        }
+        let proven = if reported.contains(&id.as_str()) {
+            true
+        } else {
+            match parked_on_bond(device, &id, window).await? {
+                Some(false) => continue,
+                Some(true) => true,
+                None => false,
+            }
+        };
+        owned.push(OwnedRow { id, proven });
     }
     Ok(owned)
 }

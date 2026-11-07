@@ -145,6 +145,11 @@ pub(super) fn journal(options: &DesktopOptions) -> Arc<dyn RecoveryJournal> {
     }
 }
 
+/// Registers for cleanup every order an actor's client lists that the
+/// actor's started submission did not know, and attributes each one the
+/// client proves the actor's to that submission. A row the client lists
+/// without proof is cleaned up too, but proves no submission: it stays open
+/// for the relay audit or the operator.
 pub(super) async fn discover(ctx: &Context, journal: &FileJournal) -> Result<(), String> {
     let history = journal.snapshot();
     for event in history
@@ -159,21 +164,49 @@ pub(super) async fn discover(ctx: &Context, journal: &FileJournal) -> Result<(),
         else {
             continue;
         };
-        let session = ctx.actor(*actor).map_err(|e| e.to_string())?;
-        let ids = ctx
-            .adapter
-            .owned_orders(&session.device(ctx.ui_timeout))
-            .await
-            .map_err(|e| e.to_string())?;
-        for id in ids.into_iter().filter(|id| !known_orders.contains(id)) {
-            let order = mortsom_app_contract::OrderReference::new(id);
+        for (order, proven) in new_orders(ctx, *actor, known_orders).await? {
             ctx.cleanup.register(*actor, &order);
-            if !history.events.iter().any(|event| matches!(event, RecoveryEvent::OrderFound { order: known, .. } if known.id == order.id)) {
+            if proven && !history.events.iter().any(|event| matches!(event, RecoveryEvent::OrderFound { order: known, .. } if known.id == order.id)) {
                 journal.record(RecoveryEvent::OrderFound { actor: *actor, order })?;
             }
         }
     }
     Ok(())
+}
+
+/// The orders `actor`'s client lists that `known_orders` does not hold,
+/// each with whether the client proves it the actor's.
+async fn new_orders(
+    ctx: &Context,
+    actor: Actor,
+    known_orders: &[String],
+) -> Result<Vec<(mortsom_app_contract::OrderReference, bool)>, String> {
+    let session = ctx.actor(actor).map_err(|e| e.to_string())?;
+    let device = session.device(ctx.ui_timeout);
+    let listed = ctx
+        .adapter
+        .owned_orders(&device)
+        .await
+        .map_err(|e| e.to_string())?;
+    let new: Vec<String> = listed
+        .into_iter()
+        .filter(|id| !known_orders.contains(id))
+        .collect();
+    if new.is_empty() {
+        return Ok(Vec::new());
+    }
+    let unproven = ctx
+        .adapter
+        .unproven_orders(&device)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(new
+        .into_iter()
+        .map(|id| {
+            let proven = !unproven.contains(&id);
+            (mortsom_app_contract::OrderReference::new(id), proven)
+        })
+        .collect())
 }
 
 /// Started submissions that no later order discovery or operator statement

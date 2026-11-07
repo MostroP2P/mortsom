@@ -262,6 +262,32 @@ async fn a_row_a_truncated_list_cannot_judge_stays_listed_and_reads_inconclusive
     assert_eq!(listed.category, FailureCategory::Relay);
 }
 
+/// The row a truncated list keeps is listed without proof: it is no proof
+/// that an order submission produced it. A row the node reports is proven,
+/// and one a complete list shows gone is not listed at all.
+#[tokio::test]
+async fn only_a_row_a_truncated_list_keeps_is_unproven() {
+    let (cli, session) = session();
+    cli.ok("order.sync", json!({"adopted": []}));
+    cli.ok(
+        "order.mine",
+        json!({"orders": [{"id": "o1"}, {"id": "old"}, {"id": "gone"}]}),
+    );
+    cli.ok(
+        "order.info",
+        json!({"orders": [{"id": "o1", "status": "active"}], "not_returned": ["old", "gone"]}),
+    );
+    cli.ok("message.list", json!({"messages": [], "truncated": true}));
+    cli.ok("message.list", json!({"messages": [], "truncated": false}));
+
+    let unproven = adapter()
+        .unproven_orders(&device(&session, Actor::Alice))
+        .await
+        .unwrap();
+
+    assert_eq!(unproven, ["old"]);
+}
+
 #[tokio::test]
 async fn a_take_parked_on_its_bond_is_not_read_from_a_truncated_list() {
     let (cli, session) = session();
