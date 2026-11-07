@@ -47,8 +47,10 @@ pub enum Aspect {
     Contract,
 }
 
-/// One accepted difference.
+/// One accepted difference. An unknown key is an error: a misspelt
+/// `profiles` would otherwise accept the difference between every pair.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Intentional {
     /// Scenario name.
     pub scenario: String,
@@ -74,8 +76,9 @@ impl Intentional {
     }
 }
 
-/// File listing intentional differences.
+/// File listing intentional differences; an unknown key is an error.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IntentionalFile {
     /// Entries.
     #[serde(default)]

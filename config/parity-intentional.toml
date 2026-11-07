@@ -1,9 +1,12 @@
 # Intentional cross-app differences (spec §12.3). Every entry is a product
 # decision, not a workaround: name the scenario, the compared aspect
 # (outcome | state-path | relay-path | wallet | cleanup | contract) and why.
+# An optional `profiles` list accepts the difference only between the listed
+# profiles; an unknown key is an error.
 # `mortsom parity` reports any other difference as a finding.
 
 # [[intentional]]
 # scenario = "happy_sell"
 # aspect = "state-path"
 # reason = "v2 shows pending-rating before completed; both map to Completed"
+# profiles = ["mobile-v2", "cli"]   # optional: accepted only between these profiles; omit for any pair

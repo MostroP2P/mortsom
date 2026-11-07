@@ -446,6 +446,61 @@ fn intentional_file_parses() {
 }
 
 #[test]
+fn an_entry_with_a_misspelt_key_is_refused_instead_of_accepting_every_pair() {
+    // Arrange: `profile` for `profiles` used to load as an unscoped entry.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("parity.toml");
+    std::fs::write(
+        &path,
+        "[[intentional]]\nscenario = \"happy_sell\"\naspect = \"state-path\"\nreason = \"r\"\nprofile = [\"mobile-v2\", \"cli\"]\n",
+    )
+    .unwrap();
+
+    // Act
+    let err = load_intentional(&path).unwrap_err();
+
+    // Assert
+    assert!(err.contains("unknown field `profile`"), "{err}");
+    assert!(err.contains("parity.toml"), "{err}");
+}
+
+#[test]
+fn a_misspelt_table_name_is_refused_instead_of_loading_no_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("parity.toml");
+    std::fs::write(
+        &path,
+        "[[intentionals]]\nscenario = \"happy_sell\"\naspect = \"state-path\"\nreason = \"r\"\n",
+    )
+    .unwrap();
+
+    let err = load_intentional(&path).unwrap_err();
+
+    assert!(err.contains("unknown field `intentionals`"), "{err}");
+}
+
+#[test]
+fn the_shipped_template_loads_and_its_commented_sample_parses() {
+    // Arrange
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/parity-intentional.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let (_, sample) = text.split_once("\n\n").unwrap();
+    let uncommented: Vec<&str> = sample
+        .lines()
+        .map(|line| line.strip_prefix("# ").unwrap_or(line))
+        .collect();
+
+    // Act
+    let shipped = load_intentional(&path).unwrap();
+    let sample: IntentionalFile = toml::from_str(&uncommented.join("\n")).unwrap();
+
+    // Assert: every key the sample documents is one the loader accepts.
+    assert!(shipped.is_empty());
+    assert_eq!(sample.intentional.len(), 1);
+    assert_eq!(sample.intentional[0].profiles, ["mobile-v2", "cli"]);
+}
+
+#[test]
 fn an_entry_scoped_to_profiles_applies_only_between_them() {
     let entry: Intentional = toml::from_str(
         "scenario = \"cancel_before_taken\"\naspect = \"state-path\"\nreason = \"the CLI reads the daemon's canceled\"\nprofiles = [\"mobile-v2\", \"cli\"]\n",
