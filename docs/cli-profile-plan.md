@@ -1,7 +1,6 @@
 # Plan: the `cli` client profile (mostro-cli)
 
-Status: specified; the implementation lands in PRs 5-12 of the stack that
-replaces #107 (the results below come from #107's tree, ef807d4).
+Status: implemented, 2026-11-06.
 Base: Mortsom `main` (9dbe627), mostro-cli `main` (6cff9b5).
 
 ## Progress
