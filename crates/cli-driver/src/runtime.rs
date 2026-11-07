@@ -51,12 +51,20 @@ pub fn reconcile(root: &Path) -> Result<(), CliError> {
     clear_verified_stop(root, Platform::Cli).map_err(|e| CliError::Storage(e.to_string()))
 }
 
+/// Where the process table is.
+const PROC: &str = "/proc";
+
+/// Whether `/proc` can prove a stop at all: it is the procfs of Mortsom's
+/// own PID namespace and lists every process of the operator's user.
+pub(crate) fn proc_lists_every_process() -> bool {
+    procfs::lists_every_process(Path::new(PROC), std::process::id(), procfs::in_group)
+}
+
 /// Why a process may still run with `MCLI_DIR=<mcli>`, as far as `/proc`
 /// can tell, or `None` when none can; see [`scan::any_process_uses`] for
 /// what a listed process proves.
 pub(crate) fn store_in_use(mcli: &Path) -> Option<&'static str> {
-    let proc_root = Path::new("/proc");
-    if !procfs::lists_every_process(proc_root, std::process::id(), procfs::in_group) {
+    if !proc_lists_every_process() {
         return Some(
             "/proc does not list every process of this user (it cannot be read, is mounted with \
              hidepid, or belongs to another PID namespace), so no stop of the actor's CLI can be \
@@ -66,7 +74,7 @@ pub(crate) fn store_in_use(mcli: &Path) -> Option<&'static str> {
     // The real user: a CLI that Mortsom started, in this run or in a killed
     // one, inherited it, and exec changes only the effective and saved
     // users (of a set-user-ID executable). The scan accepts any of the four.
-    any_process_uses(proc_root, getuid(), mcli)
+    any_process_uses(Path::new(PROC), getuid(), mcli)
         .then_some("a mostro-cli process still uses this actor's store; it must exit first")
 }
 
@@ -87,14 +95,31 @@ mod tests {
         (parent, root)
     }
 
+    /// Where `/proc` cannot prove a stop (mounted with `hidepid`, or the
+    /// procfs of another PID namespace) the storage stays refused instead:
+    /// a test that needs a stop proved checks that refusal there, and
+    /// returns.
+    fn refused_where_proc_proves_nothing(outcome: &Result<(), CliError>, root: &Path) -> bool {
+        if proc_lists_every_process() {
+            return false;
+        }
+        assert!(matches!(outcome, Err(CliError::Storage(_))), "{outcome:?}");
+        assert!(ensure_stopped(root).is_err());
+        true
+    }
+
     #[test]
     fn a_marker_no_process_stands_behind_is_reconciled() {
         let (_parent, root) = storage();
         let _left_behind = ActiveRuntime::begin(&root).unwrap();
         assert!(ensure_stopped(&root).is_err());
 
-        reconcile(&root).unwrap();
+        let reconciled = reconcile(&root);
 
+        if refused_where_proc_proves_nothing(&reconciled, &root) {
+            return;
+        }
+        reconciled.unwrap();
         ensure_stopped(&root).unwrap();
     }
 
@@ -202,7 +227,15 @@ mod tests {
     fn a_store_nobody_runs_with_is_free() {
         let (_parent, root) = storage();
 
-        assert_eq!(store_in_use(&root.join("mcli")), None);
+        let in_use = store_in_use(&root.join("mcli"));
+
+        // Without a marker there is nothing to reconcile, whatever /proc shows.
         reconcile(&root).unwrap();
+        if !proc_lists_every_process() {
+            // This host's /proc proves no stop: every store counts as in use.
+            assert!(in_use.is_some());
+            return;
+        }
+        assert_eq!(in_use, None);
     }
 }

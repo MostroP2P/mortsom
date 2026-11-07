@@ -197,7 +197,15 @@ async fn recovery_reopens_interrupted_storage_once_no_process_uses_it() {
     let client =
         CliClient::new(config(), cli.clone()).with_storage(ActorStorage::Resume(root.clone()));
 
-    client.ensure_open().unwrap();
+    let opened = client.ensure_open();
+    if !crate::runtime::proc_lists_every_process() {
+        // This host's /proc proves no stop (mounted with hidepid, or the
+        // procfs of another PID namespace): the storage stays refused.
+        assert!(matches!(opened, Err(CliError::Storage(_))), "{opened:?}");
+        assert!(mortsom_desktop_driver::storage::ensure_stopped(&root).is_err());
+        return;
+    }
+    opened.unwrap();
     client
         .invoke(Call::local(&["identity", "show"]))
         .await
