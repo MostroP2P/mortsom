@@ -1,43 +1,66 @@
 //! The scan of a process table for a process that may still run with an
-//! actor's store; see [`any_process_uses`].
+//! actor's store; see [`why_in_use`].
 
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use rustix::io::Errno;
 use rustix::process::Uid;
 
 use crate::process::EXECUTABLE;
 
-/// Whether any process in the process table at `proc_root` may run with
-/// `MCLI_DIR=<mcli>`.
+/// How long a check of another path to the store may take. A healthy one
+/// ends at once; one on an unresponsive mount (an NFS server that went
+/// away) can block for as long as the mount hangs.
+pub(super) const PATH_CHECK: Duration = Duration::from_secs(2);
+
+/// Why a process may run with the store, or the scan cannot tell.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum InUse {
+    /// What `/proc` shows of a process, or fails to show, ties it to the
+    /// store; or the process table cannot be listed.
+    Process,
+    /// A process sets the variable to another path whose check did not
+    /// complete within [`PATH_CHECK`]: that path may lead to the store.
+    Unchecked(PathBuf),
+}
+
+/// Why a process in the process table at `proc_root` may run with
+/// `MCLI_DIR=<mcli>`, or `None` when none may.
 ///
 /// A process whose environment can be read uses the store only when the
 /// environment sets that variable to the store's path, byte for byte, or to
 /// another absolute path to the same directory (a bind mount or a symbolic
-/// link). One whose environment cannot be
-/// read (it made itself non-dumpable, as ssh-agent and gpg-agent do, or its
-/// executable is not readable) proves nothing; it counts when `uid`, the
-/// user Mortsom runs the CLI as, is among its users (see [`runs_as`]) and
-/// its first argument names the [`EXECUTABLE`] or its command line cannot
-/// be read either. A process that has exited does not count, except a
-/// thread-group leader whose other threads still run: those are judged the
-/// same way. A process table that cannot be listed counts as in use. The
-/// table must list every process of `uid` for an absent one to prove
-/// anything; the caller checks that.
-pub(super) fn any_process_uses(proc_root: &Path, uid: Uid, mcli: &Path) -> bool {
-    let store = Store::new(mcli);
+/// link); one whose other path cannot be checked within [`PATH_CHECK`]
+/// counts. One whose environment cannot be read (it made itself
+/// non-dumpable, as ssh-agent and gpg-agent do, or its executable is not
+/// readable) proves nothing; it counts when `uid`, the user Mortsom runs
+/// the CLI as, is among its users (see [`runs_as`]) and its first argument
+/// names the [`EXECUTABLE`] or its command line cannot be read either. A
+/// process that has exited does not count, except a thread-group leader
+/// whose other threads still run: those are judged the same way. A process
+/// table that cannot be listed counts as in use. The table must list every
+/// process of `uid` for an absent one to prove anything; the caller checks
+/// that.
+pub(super) fn why_in_use(proc_root: &Path, uid: Uid, mcli: &Path) -> Option<InUse> {
+    scan(proc_root, uid, &Store::new(mcli))
+}
+
+/// [`why_in_use`], for the store as `store` names it.
+fn scan(proc_root: &Path, uid: Uid, store: &Store) -> Option<InUse> {
     let Ok(mut entries) = std::fs::read_dir(proc_root) else {
         // Without a process table nothing can be proved: assume in use.
-        return true;
+        return Some(InUse::Process);
     };
-    entries.any(|entry| match entry {
+    entries.find_map(|entry| match entry {
         // An entry that cannot be listed may be the one that uses it.
-        Err(_) => true,
-        Ok(entry) => is_pid(&entry.file_name()) && uses(&entry.path(), uid, &store, true),
+        Err(_) => Some(InUse::Process),
+        Ok(entry) if is_pid(&entry.file_name()) => uses(&entry.path(), uid, store, true),
+        Ok(_) => None,
     })
 }
 
@@ -48,12 +71,19 @@ fn is_pid(name: &OsStr) -> bool {
 /// The variable that names a CLI's store.
 const STORE_VARIABLE: &[u8] = b"MCLI_DIR=";
 
+/// The identity of another path to the store, or [`Incomplete`].
+type PathCheck = fn(&Path) -> Result<Option<(u64, u64)>, Incomplete>;
+
 /// The actor's store as an environment may name it.
 struct Store {
     /// `MCLI_DIR=<path>`, as bytes.
     variable: Vec<u8>,
-    /// The directory's device and inode, when it can be read.
+    /// The directory's device and inode, when it can be read. The store is
+    /// Mortsom's own, under the root whose marker was just read, so this
+    /// check is not bounded.
     identity: Option<(u64, u64)>,
+    /// How another path is checked.
+    check: PathCheck,
 }
 
 impl Store {
@@ -62,25 +92,37 @@ impl Store {
         Self {
             variable,
             identity: identity(mcli),
+            check: bounded_identity,
         }
     }
 
-    /// Whether a NUL-separated environment names the store.
-    fn named_in(&self, environ: &[u8]) -> bool {
-        environ
-            .split(|byte| *byte == 0)
-            .any(|var| var == self.variable || self.reached_by(var))
+    /// The same store, checking other paths with `check`.
+    #[cfg(test)]
+    fn checking_paths_with(self, check: PathCheck) -> Self {
+        Self { check, ..self }
     }
 
-    /// Whether `var` sets the variable to another absolute path to the
-    /// store's directory.
-    fn reached_by(&self, var: &[u8]) -> bool {
-        let Some(path) = var.strip_prefix(STORE_VARIABLE) else {
-            return false;
-        };
-        path.starts_with(b"/")
-            && self.identity.is_some()
-            && identity(Path::new(OsStr::from_bytes(path))) == self.identity
+    /// Why a NUL-separated environment names the store, if it does.
+    fn named_in(&self, environ: &[u8]) -> Option<InUse> {
+        environ.split(|byte| *byte == 0).find_map(|var| {
+            if var == self.variable {
+                Some(InUse::Process)
+            } else {
+                self.reached_by(var)
+            }
+        })
+    }
+
+    /// Why `var` may set the variable to another absolute path to the
+    /// store's directory, if it may.
+    fn reached_by(&self, var: &[u8]) -> Option<InUse> {
+        let path = var.strip_prefix(STORE_VARIABLE)?;
+        let identity = self.identity.filter(|_| path.starts_with(b"/"))?;
+        let path = Path::new(OsStr::from_bytes(path));
+        match (self.check)(path) {
+            Ok(found) => (found == Some(identity)).then_some(InUse::Process),
+            Err(Incomplete) => Some(InUse::Unchecked(path.to_path_buf())),
+        }
     }
 }
 
@@ -91,32 +133,75 @@ fn identity(path: &Path) -> Option<(u64, u64)> {
         .map(|meta| (meta.dev(), meta.ino()))
 }
 
-/// Whether the process or thread at `dir` may run with the store; `leader`
-/// says it is a process the table lists, not one of its threads.
-fn uses(dir: &Path, uid: Uid, store: &Store, leader: bool) -> bool {
+/// [`identity`], bounded by [`PATH_CHECK`].
+fn bounded_identity(path: &Path) -> Result<Option<(u64, u64)>, Incomplete> {
+    let path = path.to_path_buf();
+    bounded(PATH_CHECK, move || identity(&path))
+}
+
+/// A check that did not complete within its bound.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Incomplete;
+
+/// Runs `check` on a thread of its own and waits at most `limit` for its
+/// answer. A stat on a hung mount sleeps in the kernel and cannot be
+/// cancelled: its thread is left behind, blocked, and ends if the call ever
+/// returns. The scan stops at the first incomplete check, so each scan
+/// leaves at most one such thread. A check that cannot be started, or ends
+/// without an answer, is incomplete too.
+fn bounded<T: Send + 'static>(
+    limit: Duration,
+    check: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, Incomplete> {
+    let (answer, answered) = std::sync::mpsc::sync_channel(1);
+    let started = std::thread::Builder::new()
+        .name("mortsom-path-check".into())
+        .spawn(move || {
+            // The scan may have stopped waiting: the answer is dropped.
+            let _ = answer.send(check());
+        });
+    if let Err(error) = started {
+        tracing::warn!(%error, "could not start a check of another path to a CLI store");
+        return Err(Incomplete);
+    }
+    answered.recv_timeout(limit).map_err(|_| Incomplete)
+}
+
+/// Why the process or thread at `dir` may run with the store, if it may;
+/// `leader` says it is a process the table lists, not one of its threads.
+fn uses(dir: &Path, uid: Uid, store: &Store, leader: bool) -> Option<InUse> {
     match std::fs::read(dir.join("environ")) {
         Ok(environ) if !environ.is_empty() => store.named_in(&environ),
-        Err(error) if !gone(&error) => runs_as(dir, uid) && may_be_the_cli(dir),
+        Err(error) if !gone(&error) => {
+            (runs_as(dir, uid) && may_be_the_cli(dir)).then_some(InUse::Process)
+        }
         // Gone or empty: a leader that exited before its other threads is a
         // zombie whose own environment reads so while they still run.
-        _ => leader && a_thread_uses(dir, uid, store),
+        _ if leader => a_thread_uses(dir, uid, store),
+        _ => None,
     }
 }
 
-/// Whether a thread of the process may run with the store, when its status
+/// Why a thread of the process may run with the store, when its status
 /// counts more than one.
-fn a_thread_uses(process: &Path, uid: Uid, store: &Store) -> bool {
+fn a_thread_uses(process: &Path, uid: Uid, store: &Store) -> Option<InUse> {
     match std::fs::read_to_string(process.join("status")) {
-        Ok(status) if thread_count(&status).is_some_and(|threads| threads <= 1) => false,
+        Ok(status) if thread_count(&status).is_some_and(|threads| threads <= 1) => None,
         Ok(_) => match std::fs::read_dir(process.join("task")) {
-            Ok(mut threads) => threads.any(|thread| match thread {
-                Err(_) => true,
+            Ok(mut threads) => threads.find_map(|thread| match thread {
+                Err(_) => Some(InUse::Process),
                 Ok(thread) => uses(&thread.path(), uid, store, false),
             }),
-            Err(error) => !gone(&error),
+            Err(error) => still_there(&error),
         },
-        Err(error) => !gone(&error),
+        Err(error) => still_there(&error),
     }
+}
+
+/// A read that failed while the process still exists proves nothing, so
+/// the process counts.
+fn still_there(error: &std::io::Error) -> Option<InUse> {
+    (!gone(error)).then_some(InUse::Process)
 }
 
 /// The thread count on a status's `Threads:` line.

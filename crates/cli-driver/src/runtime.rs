@@ -33,7 +33,7 @@ use rustix::process::getuid;
 
 use crate::error::CliError;
 
-use scan::any_process_uses;
+use scan::{InUse, PATH_CHECK, why_in_use};
 
 /// Clears a marker left by an interrupted invocation once no process uses
 /// the actor's store; refuses while one may still do, and refuses storage
@@ -45,7 +45,7 @@ pub fn reconcile(root: &Path) -> Result<(), CliError> {
     }
     let mcli = root.join(CLI_STORE);
     if let Some(refusal) = store_in_use(&mcli) {
-        return Err(CliError::Storage(refusal.into()));
+        return Err(CliError::Storage(refusal));
     }
     tracing::info!(root = %root.display(), "no CLI process uses the actor's store; clearing its runtime marker");
     clear_verified_stop(root, Platform::Cli).map_err(|e| CliError::Storage(e.to_string()))
@@ -61,21 +61,36 @@ pub(crate) fn proc_lists_every_process() -> bool {
 }
 
 /// Why a process may still run with `MCLI_DIR=<mcli>`, as far as `/proc`
-/// can tell, or `None` when none can; see [`scan::any_process_uses`] for
-/// what a listed process proves.
-pub(crate) fn store_in_use(mcli: &Path) -> Option<&'static str> {
+/// can tell, or `None` when none can; see [`scan::why_in_use`] for what a
+/// listed process proves.
+pub(crate) fn store_in_use(mcli: &Path) -> Option<String> {
     if !proc_lists_every_process() {
         return Some(
             "/proc does not list every process of this user (it cannot be read, is mounted with \
              hidepid, or belongs to another PID namespace), so no stop of the actor's CLI can be \
-             proved",
+             proved"
+                .into(),
         );
     }
     // The real user: a CLI that Mortsom started, in this run or in a killed
     // one, inherited it, and exec changes only the effective and saved
     // users (of a set-user-ID executable). The scan accepts any of the four.
-    any_process_uses(Path::new(PROC), getuid(), mcli)
-        .then_some("a mostro-cli process still uses this actor's store; it must exit first")
+    why_in_use(Path::new(PROC), getuid(), mcli).map(refusal)
+}
+
+/// The refusal a reason to hold the store in use gives the operator.
+fn refusal(in_use: InUse) -> String {
+    match in_use {
+        InUse::Process => {
+            "a mostro-cli process still uses this actor's store; it must exit first".into()
+        }
+        InUse::Unchecked(path) => format!(
+            "a process sets MCLI_DIR to {}, which could not be checked within {PATH_CHECK:?} (an \
+             unresponsive mount?), so it may still use this actor's store; that path must answer, \
+             or the process exit, first",
+            path.display()
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -221,6 +236,16 @@ mod tests {
 
         assert!(matches!(refused, Err(CliError::Storage(_))), "{refused:?}");
         assert!(ensure_stopped(&root).is_err());
+    }
+
+    /// The operator must know which path to look at: a hung mount, or the
+    /// process that names it.
+    #[test]
+    fn a_refusal_names_the_path_that_did_not_answer() {
+        let refused = refusal(InUse::Unchecked("/mnt/hung/mcli".into()));
+
+        assert!(refused.contains("/mnt/hung/mcli"), "{refused}");
+        assert!(refusal(InUse::Process).contains("must exit first"));
     }
 
     #[test]
