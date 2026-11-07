@@ -53,11 +53,31 @@ jobs:
       - name: Build Mortsom
         run: cargo build --release --locked -p mortsom-coordinator --bin mortsom
       - name: Regtest stack
-        run: $MORTSOM stack up
+        # The bond family needs a bonded daemon, and every other family is
+        # skipped on one.
+        run: |
+          if [ "$TAG" = bond ]; then
+            $MORTSOM stack up --bond
+          else
+            $MORTSOM stack up
+          fi
       - name: Preflight
         run: $MORTSOM doctor --profile cli --ref "$CLI_REF"
       - name: Run
         run: $MORTSOM run --profile cli --ref "$CLI_REF" --tag "$TAG"
+      - name: Require an executed scenario
+        # A run whose every scenario was skipped tested nothing.
+        run: |
+          shopt -s nullglob
+          summaries=(artifacts/*/summary.json)
+          executed=0
+          if [ ${#summaries[@]} -gt 0 ]; then
+            executed=$(jq -s '[.[].results[]? | select(.outcome.outcome != "skipped")] | length' "${summaries[@]}")
+          fi
+          if [ "$executed" -eq 0 ]; then
+            echo "::error::no scenario of tag $TAG executed: every one was skipped, or none ran"
+            exit 1
+          fi
       - name: Cleanup what the run may have left
         if: always()
         run: |

@@ -353,9 +353,9 @@ request (`cli_ref` takes `https://github.com/MostroP2P/mostro-cli/pull/<number>`
 not run it yet: to test one you have reviewed, dispatch Mortsom's `mostro-cli e2e` workflow with the
 pull request's URL as `cli_ref` (the job builds and runs that pull request's code).
 
-`mortsom parity <mobile-v2 run> <cli run>` compares the two clients on shared scenarios. Accepted
-differences go in `config/parity-intentional.toml`, scoped to the pair with
-`profiles = ["mobile-v2", "cli"]`.
+`mortsom parity <mobile-v2 run> <cli run> --intentional config/parity-intentional.toml` compares the two
+clients on shared scenarios. Accepted differences go in that file, scoped to the pair with
+`profiles = ["mobile-v2", "cli"]`; without `--intentional`, no difference is accepted.
 
 ## What it tests
 
