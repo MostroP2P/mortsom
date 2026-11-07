@@ -62,12 +62,12 @@ An `invalid_arguments` from `order add-invoice` counts as the CLI refusing the i
 | cancel | `order cancel --order --yes` | `data.result`; refusals `node_refused` + `reason` (`order_already_canceled`, `not_allowed_by_status`, `is_not_your_order`), `order_unknown` |
 | rate | `order rate --order --rating --yes` | status only |
 | dispute | `dispute open --order --yes` | status only |
-| bond claim | `bond add-invoice --order --invoice - --yes` | status only; the claim reads `pending` until `bond-payout-completed` |
+| bond claim | `bond add-invoice --order --invoice - --yes` | status only; after the node's newest `add_bond_invoice` request the claim reads `pending`, `submitted` once this actor handed an invoice in, `acknowledged` on `bond-invoice-accepted` and `completed` on `bond-payout-completed` |
 | range children | `order sync` | (listed for the range capability) |
 
 Actions read from `message list`: `bond-slashed` (cause `dispute` when the order shows
 `dispute-initiated-by-you`, `dispute-initiated-by-peer`, `admin-took-dispute`, `admin-settled` or
-`admin-canceled`, else `timeout`), `bond-payout-completed`.
+`admin-canceled`, else `timeout`), `bond-invoice-accepted`, `bond-payout-completed`.
 
 The `message list` window is `--since 1440` during a run. Recovery reads from the run's start, recorded
 in the journal, to now, capped at 10080 minutes (the CLI's maximum). When the run started longer ago
@@ -79,9 +79,10 @@ new invoice) is left unresolved with that reason, never reported as cleaned up. 
 asked again until an invoice arrives, so a standing one is always inside the window.
 
 With `data.truncated` true the list may be incomplete (the relay returned its per-relay limit, or more
-than the record cap matched), so an absent action is inconclusive: a request, `bond-slashed` or
-`bond-payout-completed` missing from it proves nothing. A wait keeps polling within its deadline; a check
-that needs the absence fails as a relay failure instead of passing.
+than the record cap matched), so an absent action is inconclusive: a request, `bond-slashed`,
+`bond-invoice-accepted`, `bond-payout-completed` or a dispute action missing from it proves nothing. A
+wait keeps polling within its deadline; a check that needs the absence fails as a relay failure instead
+of passing.
 
 ## Required and optional commands
 

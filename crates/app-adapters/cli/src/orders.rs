@@ -493,7 +493,7 @@ async fn closed_after_refusal(
     }
 }
 
-/// Cancels instead of paying the hold invoice.
+/// Cancels the order instead of paying its hold invoice or bond.
 pub(crate) async fn cancel(
     device: &DeviceContext<'_>,
     order: &OrderReference,

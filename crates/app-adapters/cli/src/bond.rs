@@ -191,7 +191,7 @@ fn proven_slash_cause(inbox: &Inbox, order_id: &str) -> Result<Option<&'static s
         Some("dispute") => Ok(Some("dispute")),
         None => inbox.prove_absence(order_id, "bond-slashed").map(|()| None),
         timeout => inbox
-            .prove_absence(order_id, "a dispute action before the slash")
+            .prove_absence(order_id, "a dispute action on the order")
             .map(|()| timeout),
     }
 }
