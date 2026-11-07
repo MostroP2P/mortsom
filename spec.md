@@ -703,8 +703,9 @@ of a non-dumpable process even from that process's user. For such a process of t
 the users its status names or, when `hidepid=noaccess` hides the status too, by the owner of its `/proc`
 directory) it can go only by the command line: the process counts as running with the actor's `MCLI_DIR` when
 its first argument names an executable `mostro-cli`, or when its command line cannot be read either. A process
-that has exited does not count. While a process counts, or when `/proc` cannot be read, does not list every
-process of the operator's user, or belongs to another PID namespace, the storage stays refused.
+that has exited does not count, except a thread-group leader whose other threads still run, which is judged by
+those threads. While a process counts, or when `/proc` cannot be read, does not list every process of the
+operator's user, or belongs to another PID namespace, the storage stays refused.
 
 A killed run leaves active-runtime markers and later invocations fail closed. Markers are never removed just
 to bypass that refusal.

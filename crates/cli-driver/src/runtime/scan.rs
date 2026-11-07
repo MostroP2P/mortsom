@@ -21,10 +21,11 @@ use crate::process::EXECUTABLE;
 /// executable is not readable) proves nothing; it counts when `uid`, the
 /// user Mortsom runs the CLI as, is among its users (see [`runs_as`]) and
 /// its first argument names the [`EXECUTABLE`] or its command line cannot
-/// be read either. A process that has exited does not count, and a process
-/// table that cannot be listed counts as in use. The table must list every
-/// process of `uid` for an absent one to prove anything; the caller checks
-/// that.
+/// be read either. A process that has exited does not count, except a
+/// thread-group leader whose other threads still run: those are judged the
+/// same way. A process table that cannot be listed counts as in use. The
+/// table must list every process of `uid` for an absent one to prove
+/// anything; the caller checks that.
 pub(super) fn any_process_uses(proc_root: &Path, uid: Uid, mcli: &Path) -> bool {
     let wanted = format!("MCLI_DIR={}", mcli.display());
     let Ok(mut entries) = std::fs::read_dir(proc_root) else {
@@ -34,7 +35,9 @@ pub(super) fn any_process_uses(proc_root: &Path, uid: Uid, mcli: &Path) -> bool 
     entries.any(|entry| match entry {
         // An entry that cannot be listed may be the one that uses it.
         Err(_) => true,
-        Ok(entry) => is_pid(&entry.file_name()) && uses(&entry.path(), uid, wanted.as_bytes()),
+        Ok(entry) => {
+            is_pid(&entry.file_name()) && uses(&entry.path(), uid, wanted.as_bytes(), true)
+        }
     })
 }
 
@@ -42,13 +45,45 @@ fn is_pid(name: &OsStr) -> bool {
     !name.is_empty() && name.as_bytes().iter().all(u8::is_ascii_digit)
 }
 
-/// Whether the process at `process` may run with the `wanted` variable.
-fn uses(process: &Path, uid: Uid, wanted: &[u8]) -> bool {
-    match std::fs::read(process.join("environ")) {
-        Ok(environ) => environ.split(|byte| *byte == 0).any(|var| var == wanted),
-        Err(error) if gone(&error) => false,
-        Err(_) => runs_as(process, uid) && may_be_the_cli(process),
+/// Whether the process or thread at `dir` may run with the `wanted`
+/// variable; `leader` says it is a process the table lists, not one of its
+/// threads.
+fn uses(dir: &Path, uid: Uid, wanted: &[u8], leader: bool) -> bool {
+    match std::fs::read(dir.join("environ")) {
+        Ok(environ) if !environ.is_empty() => {
+            environ.split(|byte| *byte == 0).any(|var| var == wanted)
+        }
+        Err(error) if !gone(&error) => runs_as(dir, uid) && may_be_the_cli(dir),
+        // Gone or empty: a leader that exited before its other threads is a
+        // zombie whose own environment reads so while they still run.
+        _ => leader && a_thread_uses(dir, uid, wanted),
     }
+}
+
+/// Whether a thread of the process may run with the `wanted` variable,
+/// when its status counts more than one.
+fn a_thread_uses(process: &Path, uid: Uid, wanted: &[u8]) -> bool {
+    match std::fs::read_to_string(process.join("status")) {
+        Ok(status) if thread_count(&status).is_some_and(|threads| threads <= 1) => false,
+        Ok(_) => match std::fs::read_dir(process.join("task")) {
+            Ok(mut threads) => threads.any(|thread| match thread {
+                Err(_) => true,
+                Ok(thread) => uses(&thread.path(), uid, wanted, false),
+            }),
+            Err(error) => !gone(&error),
+        },
+        Err(error) => !gone(&error),
+    }
+}
+
+/// The thread count on a status's `Threads:` line.
+fn thread_count(status: &str) -> Option<u32> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Threads:"))?
+        .trim()
+        .parse()
+        .ok()
 }
 
 /// Whether `uid` is among the process's users. Its status names all four

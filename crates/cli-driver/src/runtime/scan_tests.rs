@@ -62,21 +62,34 @@ fn write_nul_joined(path: &Path, items: &[&str]) {
 }
 
 fn status(process: &Path, uid: u32) {
-    status_with_users(process, [uid; 4]);
+    status_with(process, [uid; 4], 1);
+}
+
+fn status_with_users(process: &Path, users: [u32; 4]) {
+    status_with(process, users, 1);
 }
 
 /// A status whose `Uid:` line names the real, effective, saved and
-/// filesystem users.
-fn status_with_users(process: &Path, [real, effective, saved, fs]: [u32; 4]) {
+/// filesystem users, and that counts the process's threads.
+fn status_with(process: &Path, [real, effective, saved, fs]: [u32; 4], threads: u32) {
     status_text(
         process,
-        &format!("Uid:\t{real}\t{effective}\t{saved}\t{fs}\nGid:\t100\t100\t100\t100\n"),
+        &format!(
+            "Uid:\t{real}\t{effective}\t{saved}\t{fs}\nGid:\t100\t100\t100\t100\nThreads:\t{threads}\n"
+        ),
     );
 }
 
 fn status_text(process: &Path, lines: &str) {
-    let text = format!("Name:\tx\nUmask:\t0022\n{lines}Threads:\t1\n");
+    let text = format!("Name:\tx\nUmask:\t0022\n{lines}");
     std::fs::write(process.join("status"), text).unwrap();
+}
+
+/// A thread of `process`, listed under its `task` directory.
+fn thread(process: &Path, tid: &str) -> PathBuf {
+    let dir = process.join("task").join(tid);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 fn unreadable(process: &Path, file: &str) {
@@ -256,6 +269,82 @@ fn a_process_gone_before_its_command_line_is_read_does_not() {
     status(&process, table.operator);
 
     assert!(!table.uses_store());
+}
+
+/// A thread-group leader that exits before its other threads is a zombie
+/// whose own environment reads as gone (ESRCH; the fake table can only say
+/// "not found") or, on older kernels, as empty, while its threads still
+/// run with the store.
+#[test]
+fn a_leader_that_exited_before_its_threads_is_judged_by_them() {
+    for leader_environ in [None, Some(&[][..])] {
+        let table = Proc::new();
+        let process = table.process("4242");
+        if let Some(variables) = leader_environ {
+            environ(&process, variables);
+        }
+        status_with(&process, [table.operator; 4], 2);
+        cmdline(&process, &[]);
+        thread(&process, "4242");
+        environ(&thread(&process, "4243"), &["MCLI_DIR=/state/run/bob/mcli"]);
+
+        assert!(table.uses_store(), "leader environ {leader_environ:?}");
+    }
+}
+
+#[test]
+fn a_hidden_thread_of_an_exited_leader_is_judged_by_its_command_line() {
+    let table = Proc::new();
+    let process = table.process("4242");
+    status_with(&process, [table.operator; 4], 2);
+    let live = thread(&process, "4243");
+    unreadable(&live, "environ");
+    status(&live, table.operator);
+    cmdline(&live, CLI);
+
+    assert!(table.uses_store());
+}
+
+#[test]
+fn an_exited_leader_whose_threads_do_not_use_the_store_does_not() {
+    let table = Proc::new();
+    let process = table.process("4242");
+    status_with(&process, [table.operator; 4], 2);
+    thread(&process, "4242");
+    environ(
+        &thread(&process, "4243"),
+        &["MCLI_DIR=/state/run/alice/mcli"],
+    );
+
+    assert!(!table.uses_store());
+}
+
+/// A single-threaded zombie, or a kernel thread with its empty
+/// environment, has no other thread to look at.
+#[test]
+fn a_process_with_no_other_thread_and_no_environment_does_not() {
+    for leader_environ in [None, Some(&[][..])] {
+        let table = Proc::new();
+        let process = table.process("4242");
+        if let Some(variables) = leader_environ {
+            environ(&process, variables);
+        }
+        status_with(&process, [table.operator; 4], 1);
+        environ(&thread(&process, "4243"), &["MCLI_DIR=/state/run/bob/mcli"]);
+
+        assert!(!table.uses_store(), "leader environ {leader_environ:?}");
+    }
+}
+
+/// With several threads and no list of them to read, nothing is proved.
+#[test]
+fn an_exited_leader_whose_threads_cannot_be_listed_counts() {
+    let table = Proc::new();
+    let process = table.process("4242");
+    status_with(&process, [table.operator; 4], 2);
+    std::fs::write(process.join("task"), "").unwrap();
+
+    assert!(table.uses_store());
 }
 
 #[test]
