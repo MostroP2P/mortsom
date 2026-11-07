@@ -77,7 +77,7 @@ impl UiSession for CliSession {
         self.client.settle().await.map_err(ui_error)
     }
     async fn activate_app(&self) -> Result<(), UiError> {
-        self.client.ensure_open().map_err(ui_error)
+        self.client.ensure_open().await.map_err(ui_error)
     }
     async fn clear_app(&self) -> Result<(), UiError> {
         self.client.start_fresh().map_err(ui_error)
