@@ -42,6 +42,20 @@ impl Proc {
     fn uses_store_as(&self, uid: u32) -> bool {
         any_process_uses(self.root.path(), Uid::from_raw(uid), Path::new(STORE))
     }
+
+    /// A real store directory beside the table's processes, and a second
+    /// path to it through a symbolic link.
+    fn real_store(&self) -> (PathBuf, PathBuf) {
+        let store = self.root.path().join("state/run/bob/mcli");
+        std::fs::create_dir_all(&store).unwrap();
+        let alias = self.root.path().join("alias");
+        std::os::unix::fs::symlink(self.root.path().join("state"), &alias).unwrap();
+        (store, alias.join("run/bob/mcli"))
+    }
+
+    fn uses(&self, store: &Path) -> bool {
+        any_process_uses(self.root.path(), Uid::from_raw(self.operator), store)
+    }
 }
 
 fn environ(process: &Path, variables: &[&str]) {
@@ -130,6 +144,54 @@ fn a_readable_environment_naming_another_store_does_not() {
     cmdline(&process, CLI);
 
     assert!(!table.uses_store());
+}
+
+/// The state directory may be reached through more than one path, such
+/// as a bind mount or a symbolic link: the variable names the store when
+/// its path leads to the store's directory.
+#[test]
+fn a_readable_environment_naming_the_store_by_another_path_uses_it() {
+    let table = Proc::new();
+    let (store, alias) = table.real_store();
+    let process = table.process("4242");
+    environ(&process, &[&format!("MCLI_DIR={}", alias.display())]);
+
+    assert!(table.uses(&store));
+}
+
+#[test]
+fn a_readable_environment_naming_another_real_directory_does_not() {
+    let table = Proc::new();
+    let (store, _) = table.real_store();
+    let elsewhere = table.root.path().join("state/run/alice/mcli");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let process = table.process("4242");
+    environ(
+        &process,
+        &[
+            &format!("MCLI_DIR={}", elsewhere.display()),
+            &format!("OLD_MCLI_DIR={}", store.display()),
+            "MCLI_DIR=run/bob/mcli",
+        ],
+    );
+
+    assert!(!table.uses(&store));
+}
+
+/// A path is bytes: one that is not UTF-8 is matched as it is, not as its
+/// lossy rendering.
+#[test]
+fn a_store_path_that_is_not_utf8_is_matched_by_its_bytes() {
+    let table = Proc::new();
+    let store = Path::new(OsStr::from_bytes(b"/state/run/b\xffb/mcli"));
+    let process = table.process("4242");
+    std::fs::write(
+        process.join("environ"),
+        b"MCLI_DIR=/state/run/b\xffb/mcli\0",
+    )
+    .unwrap();
+
+    assert!(table.uses(store));
 }
 
 #[test]

@@ -16,7 +16,9 @@ use crate::process::EXECUTABLE;
 /// `MCLI_DIR=<mcli>`.
 ///
 /// A process whose environment can be read uses the store only when the
-/// environment holds exactly that variable. One whose environment cannot be
+/// environment sets that variable to the store's path, byte for byte, or to
+/// another absolute path to the same directory (a bind mount or a symbolic
+/// link). One whose environment cannot be
 /// read (it made itself non-dumpable, as ssh-agent and gpg-agent do, or its
 /// executable is not readable) proves nothing; it counts when `uid`, the
 /// user Mortsom runs the CLI as, is among its users (see [`runs_as`]) and
@@ -27,7 +29,7 @@ use crate::process::EXECUTABLE;
 /// table must list every process of `uid` for an absent one to prove
 /// anything; the caller checks that.
 pub(super) fn any_process_uses(proc_root: &Path, uid: Uid, mcli: &Path) -> bool {
-    let wanted = format!("MCLI_DIR={}", mcli.display());
+    let store = Store::new(mcli);
     let Ok(mut entries) = std::fs::read_dir(proc_root) else {
         // Without a process table nothing can be proved: assume in use.
         return true;
@@ -35,9 +37,7 @@ pub(super) fn any_process_uses(proc_root: &Path, uid: Uid, mcli: &Path) -> bool 
     entries.any(|entry| match entry {
         // An entry that cannot be listed may be the one that uses it.
         Err(_) => true,
-        Ok(entry) => {
-            is_pid(&entry.file_name()) && uses(&entry.path(), uid, wanted.as_bytes(), true)
-        }
+        Ok(entry) => is_pid(&entry.file_name()) && uses(&entry.path(), uid, &store, true),
     })
 }
 
@@ -45,30 +45,73 @@ fn is_pid(name: &OsStr) -> bool {
     !name.is_empty() && name.as_bytes().iter().all(u8::is_ascii_digit)
 }
 
-/// Whether the process or thread at `dir` may run with the `wanted`
-/// variable; `leader` says it is a process the table lists, not one of its
-/// threads.
-fn uses(dir: &Path, uid: Uid, wanted: &[u8], leader: bool) -> bool {
-    match std::fs::read(dir.join("environ")) {
-        Ok(environ) if !environ.is_empty() => {
-            environ.split(|byte| *byte == 0).any(|var| var == wanted)
+/// The variable that names a CLI's store.
+const STORE_VARIABLE: &[u8] = b"MCLI_DIR=";
+
+/// The actor's store as an environment may name it.
+struct Store {
+    /// `MCLI_DIR=<path>`, as bytes.
+    variable: Vec<u8>,
+    /// The directory's device and inode, when it can be read.
+    identity: Option<(u64, u64)>,
+}
+
+impl Store {
+    fn new(mcli: &Path) -> Self {
+        let variable = [STORE_VARIABLE, mcli.as_os_str().as_bytes()].concat();
+        Self {
+            variable,
+            identity: identity(mcli),
         }
-        Err(error) if !gone(&error) => runs_as(dir, uid) && may_be_the_cli(dir),
-        // Gone or empty: a leader that exited before its other threads is a
-        // zombie whose own environment reads so while they still run.
-        _ => leader && a_thread_uses(dir, uid, wanted),
+    }
+
+    /// Whether a NUL-separated environment names the store.
+    fn named_in(&self, environ: &[u8]) -> bool {
+        environ
+            .split(|byte| *byte == 0)
+            .any(|var| var == self.variable || self.reached_by(var))
+    }
+
+    /// Whether `var` sets the variable to another absolute path to the
+    /// store's directory.
+    fn reached_by(&self, var: &[u8]) -> bool {
+        let Some(path) = var.strip_prefix(STORE_VARIABLE) else {
+            return false;
+        };
+        path.starts_with(b"/")
+            && self.identity.is_some()
+            && identity(Path::new(OsStr::from_bytes(path))) == self.identity
     }
 }
 
-/// Whether a thread of the process may run with the `wanted` variable,
-/// when its status counts more than one.
-fn a_thread_uses(process: &Path, uid: Uid, wanted: &[u8]) -> bool {
+/// The device and inode of the directory at `path`.
+fn identity(path: &Path) -> Option<(u64, u64)> {
+    std::fs::metadata(path)
+        .ok()
+        .map(|meta| (meta.dev(), meta.ino()))
+}
+
+/// Whether the process or thread at `dir` may run with the store; `leader`
+/// says it is a process the table lists, not one of its threads.
+fn uses(dir: &Path, uid: Uid, store: &Store, leader: bool) -> bool {
+    match std::fs::read(dir.join("environ")) {
+        Ok(environ) if !environ.is_empty() => store.named_in(&environ),
+        Err(error) if !gone(&error) => runs_as(dir, uid) && may_be_the_cli(dir),
+        // Gone or empty: a leader that exited before its other threads is a
+        // zombie whose own environment reads so while they still run.
+        _ => leader && a_thread_uses(dir, uid, store),
+    }
+}
+
+/// Whether a thread of the process may run with the store, when its status
+/// counts more than one.
+fn a_thread_uses(process: &Path, uid: Uid, store: &Store) -> bool {
     match std::fs::read_to_string(process.join("status")) {
         Ok(status) if thread_count(&status).is_some_and(|threads| threads <= 1) => false,
         Ok(_) => match std::fs::read_dir(process.join("task")) {
             Ok(mut threads) => threads.any(|thread| match thread {
                 Err(_) => true,
-                Ok(thread) => uses(&thread.path(), uid, wanted, false),
+                Ok(thread) => uses(&thread.path(), uid, store, false),
             }),
             Err(error) => !gone(&error),
         },
