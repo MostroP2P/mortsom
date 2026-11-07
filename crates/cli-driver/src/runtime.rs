@@ -85,9 +85,10 @@ fn refusal(in_use: InUse) -> String {
             "a mostro-cli process still uses this actor's store; it must exit first".into()
         }
         InUse::Unchecked(path) => format!(
-            "a process sets MCLI_DIR to {}, which could not be checked within {PATH_CHECK:?} (an \
-             unresponsive mount?), so it may still use this actor's store; that path must answer, \
-             or the process exit, first",
+            "a process sets MCLI_DIR to {}, which could not be checked against this actor's store \
+             (the check did not answer within {PATH_CHECK:?}, as on an unresponsive mount, or that \
+             path or the store could not be read), so it may still use the store; the process must \
+             exit, or both paths become readable, first",
             path.display()
         ),
     }
@@ -238,13 +239,15 @@ mod tests {
         assert!(ensure_stopped(&root).is_err());
     }
 
-    /// The operator must know which path to look at: a hung mount, or the
-    /// process that names it.
+    /// The operator must know which path to look at: a hung mount, one that
+    /// cannot be read, or the process that names it.
     #[test]
-    fn a_refusal_names_the_path_that_did_not_answer() {
+    fn a_refusal_names_the_path_that_could_not_be_checked() {
         let refused = refusal(InUse::Unchecked("/mnt/hung/mcli".into()));
 
         assert!(refused.contains("/mnt/hung/mcli"), "{refused}");
+        assert!(refused.contains("did not answer within"), "{refused}");
+        assert!(refused.contains("could not be read"), "{refused}");
         assert!(refusal(InUse::Process).contains("must exit first"));
     }
 
