@@ -59,7 +59,7 @@ An `invalid_arguments` from `order add-invoice` counts as the CLI refusing the i
 | node requests | `message list --order --since <minutes>` | `data.messages[]`: `action`, `next_step` (`pay_hold_invoice`, `add_invoice`, `pay_bond_invoice`, `add_bond_invoice`), `created_at_unix`, `payload.invoice`, `payload.amount`, `payload.order.sats_amount`; `data.truncated` |
 | buyer invoice | `order add-invoice --order --invoice - --yes` | refusals: `node_refused` + `reason`, `invalid_arguments` |
 | fiat sent / release | `order fiat-sent` / `order release --order --yes` | status only |
-| cancel | `order cancel --order --yes` | `data.result`; refusals `node_refused` + `reason` (`order_already_canceled`, `not_allowed_by_status`, `is_not_your_order`), `order_unknown` |
+| cancel | `order cancel --order --yes` | `data.result`; refusals `node_refused` + `reason` (`order_already_canceled`, `not_allowed_by_status`, `is_not_your_order`; `invalid_pubkey` when this side already asked for a cooperative cancel), `order_unknown` |
 | rate | `order rate --order --rating --yes` | status only |
 | dispute | `dispute open --order --yes` | status only |
 | bond claim | `bond add-invoice --order --invoice - --yes` | status only; the claim reads `pending` until `bond-payout-completed` |
@@ -70,10 +70,13 @@ Actions read from `message list`: `bond-slashed` (cause `dispute` when the order
 `admin-canceled`, else `timeout`), `bond-payout-completed`.
 
 The `message list` window is `--since 1440` during a run. Recovery reads from the run's start, recorded
-in the journal, to now, capped at 10080 minutes (the CLI's maximum). The daemon asks for a payout
+in the journal, to now, capped at 10080 minutes (the CLI's maximum). When the run started longer ago
+than that, an action missing from the list may be older than the window and proves nothing: a check
+that needs the absence fails as an environment failure instead of passing. The daemon asks for a payout
 replacement once, after its retries are spent, so a request older than that window cannot be read: an
-order whose `order info` still waits on the actor (a payout or a bond-claim invoice) is left unresolved
-with that reason, never reported as cleaned up.
+order whose `order info` still reads `settled-hold-invoice` (its buyer's payout failed and waits on a
+new invoice) is left unresolved with that reason, never reported as cleaned up. A bond-claim request is
+asked again until an invoice arrives, so a standing one is always inside the window.
 
 With `data.truncated` true the list may be incomplete (the relay returned its per-relay limit, or more
 than the record cap matched), so an absent action is inconclusive: a request, `bond-slashed` or
