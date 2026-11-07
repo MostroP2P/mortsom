@@ -103,7 +103,7 @@ mod tests {
         let (_parent, root) = storage();
         let _live = ActiveRuntime::begin(&root).unwrap();
         let mcli = root.join("mcli");
-        let mut child = spawn_reader(Path::new("/bin/sh"), &mcli);
+        let mut child = spawn_reader(Path::new("/bin/sh"), &mcli).unwrap();
 
         let refused = reconcile(&root);
         let in_use = store_in_use(&mcli);
@@ -120,27 +120,39 @@ mod tests {
     /// cannot be read, and that failure does not read as the process being
     /// gone, so it is judged by its user and command line. It is not named
     /// like the CLI, since a hidden CLI would hold every store meanwhile.
+    ///
+    /// The premise needs a host that hides the environment and shows the
+    /// rest; the test checks nothing where it does not hold: a user that
+    /// can read any file (root, `CAP_DAC_OVERRIDE`, `CAP_DAC_READ_SEARCH`),
+    /// a temporary directory mounted `noexec`, a process left dumpable or
+    /// traceable (`CAP_SYS_PTRACE`, `fs.suid_dumpable=1`), or a `/proc`
+    /// mounted with `hidepid=noaccess`, which hides the status too.
     #[test]
     fn a_hidden_environment_of_this_user_is_judged_by_its_command_line() {
         use std::os::unix::fs::PermissionsExt;
-        if rustix::process::geteuid().is_root() {
-            // Root reads every process's environment.
-            return;
-        }
         let parent = tempfile::tempdir().unwrap();
         let program = parent.path().join("hidden-sh");
         std::fs::copy("/bin/sh", &program).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o111)).unwrap();
-        let mut child = spawn_reader(&program, &parent.path().join("mcli"));
+        if std::fs::File::open(&program).is_ok() {
+            return;
+        }
+        let mut child = match spawn_reader(&program, &parent.path().join("mcli")) {
+            Err(error) if error.kind() == ErrorKind::PermissionDenied => return,
+            spawned => spawned.unwrap(),
+        };
         let process = Path::new("/proc").join(child.id().to_string());
 
         let environ = std::fs::read(process.join("environ"));
+        let status = std::fs::read(process.join("status"));
         let operator_s = runs_as(&process, getuid());
         let cli = may_be_the_cli(&process);
         child.kill().unwrap();
         child.wait().unwrap();
 
-        let error = environ.expect_err("a non-dumpable process hides its environment");
+        let (Err(error), Ok(_)) = (environ, status) else {
+            return;
+        };
         assert!(!gone(&error), "{error}");
         assert!(operator_s);
         assert!(!cli);
@@ -151,7 +163,7 @@ mod tests {
     /// however long a loaded host takes to scan /proc. A file just written
     /// may still be open in a child another test forked meanwhile, which
     /// makes it busy for a moment.
-    fn spawn_reader(program: &Path, mcli: &Path) -> std::process::Child {
+    fn spawn_reader(program: &Path, mcli: &Path) -> std::io::Result<std::process::Child> {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
         loop {
             let spawned = std::process::Command::new(program)
@@ -166,7 +178,7 @@ mod tests {
                 {
                     std::thread::yield_now();
                 }
-                other => return other.unwrap(),
+                other => return other,
             }
         }
     }
