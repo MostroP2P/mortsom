@@ -281,3 +281,57 @@ fn doctor_reads_the_ref_for_the_cli_profile_s_repository() {
         assert!(output.get_output().stdout.is_empty(), "{selection:?}");
     }
 }
+
+/// `doctor --no-network --json` with `mobile.profile` set in the local
+/// overlay of the example configuration, from an empty environment.
+fn doctor_with_configured_profile(profile: &str) -> assert_cmd::assert::Assert {
+    let dir = tempfile::tempdir().unwrap();
+    let config = example_config(&dir);
+    std::fs::write(
+        dir.path().join("mortsom.local.toml"),
+        format!("[mobile]\nprofile = \"{profile}\"\n"),
+    )
+    .unwrap();
+    Command::cargo_bin("mortsom")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap()])
+        .args(["doctor", "--no-network", "--json"])
+        .env_clear()
+        .env("PATH", "/nonexistent")
+        .assert()
+}
+
+/// A configured reference to an unset name is the one `client` failure,
+/// naming the variable; no client's tools are checked.
+#[test]
+fn doctor_with_an_unset_profile_reference_fails_only_the_client_check() {
+    let output = doctor_with_configured_profile("env:MORTSOM_PROFILE").code(1);
+
+    let stdout = &output.get_output().stdout;
+    let names = check_names(stdout);
+    assert_eq!(
+        names.iter().filter(|name| *name == "client").count(),
+        1,
+        "{names:?}"
+    );
+    for unwanted in ["docker", "git", "cargo", "flutter", "Xvfb"] {
+        assert!(
+            !names.iter().any(|name| name == unwanted),
+            "{unwanted}: {names:?}"
+        );
+    }
+    let report: serde_json::Value = serde_json::from_slice(stdout).unwrap();
+    let client = report["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|check| check["name"] == "client")
+        .unwrap();
+    assert!(
+        client["detail"]
+            .as_str()
+            .unwrap()
+            .contains("MORTSOM_PROFILE"),
+        "{client}"
+    );
+}
