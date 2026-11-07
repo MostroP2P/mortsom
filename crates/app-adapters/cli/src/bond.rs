@@ -125,7 +125,9 @@ fn created_at(message: &Value) -> Option<i64> {
         .and_then(|at| i64::try_from(at).ok())
 }
 
-/// Hands in the claim invoice; returns the claim's phase afterwards.
+/// Hands in the claim invoice; returns the claim's phase afterwards. No
+/// claim request showing after the hand-in leaves no phase to read: it is a
+/// contract failure, never a payout nobody saw.
 pub(crate) async fn submit_claim(
     device: &DeviceContext<'_>,
     memo: &Memo,
@@ -142,10 +144,13 @@ pub(crate) async fn submit_claim(
     memo.update(device.actor, &order.id, |r| {
         r.claim_submitted_at = Some(now)
     });
-    Ok(match claim(device, memo, order, window).await? {
-        Some(claim) => claim.status,
-        None => "completed".into(),
-    })
+    match claim(device, memo, order, window).await? {
+        Some(claim) => Ok(claim.status),
+        None => Err(AdapterError::contract(format!(
+            "no bond claim request shows on order {} after `bond add-invoice` succeeded",
+            order.id
+        ))),
+    }
 }
 
 /// Actions that put an order in a solver's hands.
