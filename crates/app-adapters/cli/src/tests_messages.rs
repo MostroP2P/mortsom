@@ -439,3 +439,108 @@ async fn a_capped_recovery_reads_a_week_back_and_proves_no_cancel_request_absent
     assert!(absent.message.contains("10080"), "{}", absent.message);
     assert_eq!(since_of(&cli), ["10080"]);
 }
+
+#[tokio::test]
+async fn a_bond_wait_keeps_polling_past_a_truncated_list() {
+    let (cli, session) = session();
+    cli.ok("message.list", json!({"messages": [], "truncated": true}));
+    cli.ok(
+        "message.list",
+        json!({"messages": [{"action": "pay-bond-invoice", "next_step": "pay_bond_invoice",
+            "created_at_unix": "100", "payload": {"kind": "payment_request",
+            "invoice": "lnbcrt1makerbond", "amount": null, "order": null}}], "truncated": true}),
+    );
+
+    let handoff = adapter()
+        .pay_bond_invoice(
+            &device(&session, Actor::Alice),
+            &order(OrderKind::Sell),
+            PaymentPath::ExternalWallet,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(handoff.invoice.unwrap().expose(), "lnbcrt1makerbond");
+    assert_eq!(cli.commands(), ["message.list", "message.list"]);
+}
+
+#[tokio::test]
+async fn bond_reads_on_a_truncated_list_fail_as_relay_failures() {
+    let (cli, session) = session();
+    let request = json!({"action": "add-bond-invoice", "next_step": "add_bond_invoice",
+        "created_at_unix": "100", "payload": {"kind": "bond_payout_request",
+        "order": {"sats_amount": "400"}}});
+    for messages in [
+        json!([]),
+        json!([{"action": "canceled"}, {"action": "bond-slashed"}]),
+        json!([request]),
+    ] {
+        cli.ok(
+            "message.list",
+            json!({"messages": messages, "truncated": true}),
+        );
+    }
+    cli.ok("bond.add-invoice", json!({"order_id": "o1"}));
+    let adapter = adapter();
+    let device = device(&session, Actor::Alice);
+    let o1 = order(OrderKind::Sell);
+
+    let claim = adapter.bond_claim(&device, &o1).await.unwrap_err();
+    let notice = adapter.bond_slash_notice(&device, &o1).await.unwrap_err();
+    let phase = adapter
+        .submit_bond_claim_invoice(&device, &o1, &Secret::new("lnbcrt1share"))
+        .await
+        .unwrap_err();
+
+    for error in [&claim, &notice, &phase] {
+        assert_eq!(error.category, FailureCategory::Relay);
+        assert!(error.message.contains("truncated"), "{}", error.message);
+    }
+    assert_eq!(
+        cli.commands(),
+        [
+            "message.list",
+            "message.list",
+            "bond.add-invoice",
+            "message.list"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn bond_reads_beyond_the_window_prove_no_absence() {
+    let (cli, session) = session();
+    for messages in [
+        json!([{"action": "canceled"}, {"action": "bond-slashed"}]),
+        json!([{"action": "admin-took-dispute"}, {"action": "bond-slashed"}]),
+    ] {
+        cli.ok(
+            "message.list",
+            json!({"messages": messages, "truncated": false}),
+        );
+    }
+    cli.always("message.list", json!({"messages": [], "truncated": false}));
+    cli.ok("bond.add-invoice", json!({"order_id": "o1"}));
+    let adapter = recovering(0);
+    let device = device(&session, Actor::Alice);
+    let o1 = order(OrderKind::Sell);
+
+    let timeout = adapter.bond_slash_notice(&device, &o1).await.unwrap_err();
+    let dispute = adapter.bond_slash_notice(&device, &o1).await.unwrap();
+    let claim = adapter.bond_claim(&device, &o1).await.unwrap_err();
+    let phase = adapter
+        .submit_bond_claim_invoice(&device, &o1, &Secret::new("lnbcrt1share"))
+        .await
+        .unwrap_err();
+    let bond = adapter
+        .pay_bond_invoice(&device, &o1, PaymentPath::ExternalWallet)
+        .await
+        .unwrap_err();
+
+    assert_eq!(dispute.as_deref(), Some("dispute"));
+    for error in [&timeout, &claim, &phase, &bond] {
+        assert_eq!(error.category, FailureCategory::EnvironmentMisconfiguration);
+        assert!(error.message.contains("10080"), "{}", error.message);
+    }
+    assert_eq!(since_of(&cli), ["10080"]);
+}

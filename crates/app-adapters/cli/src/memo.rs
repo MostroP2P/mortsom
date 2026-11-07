@@ -13,11 +13,15 @@ use mortsom_common::{Actor, Secret};
 pub(crate) struct Requests {
     /// The hold invoice the seller must pay.
     pub hold_invoice: Option<Secret>,
+    /// The anti-abuse bond invoice this actor must pay.
+    pub bond_invoice: Option<Secret>,
     /// Sats the node asked the buyer to invoice.
     pub payout_sats: Option<u64>,
     /// Unix seconds of this actor's last accepted payout invoice: a request
     /// for a new one must be newer.
     pub payout_submitted_at: Option<i64>,
+    /// Unix seconds of this actor's last handed-in claim invoice.
+    pub claim_submitted_at: Option<i64>,
 }
 
 /// Requests per actor and order.

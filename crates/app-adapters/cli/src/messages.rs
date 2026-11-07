@@ -84,6 +84,8 @@ pub(crate) const PAY_HOLD: &str = "pay_hold_invoice";
 pub(crate) const ADD_INVOICE: &str = "add_invoice";
 /// `next_step` of an anti-abuse bond to pay.
 pub(crate) const PAY_BOND: &str = "pay_bond_invoice";
+/// `next_step` of a slashed bond's share to claim.
+pub(crate) const ADD_BOND_INVOICE: &str = "add_bond_invoice";
 
 /// One request of the node.
 #[derive(Debug, Clone)]
