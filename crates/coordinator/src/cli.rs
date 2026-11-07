@@ -529,6 +529,7 @@ pub async fn run(cli: Cli) -> ExitCode {
                 &cli.config,
                 |name| RealHost.env(name),
                 client.source.selection().as_ref(),
+                profile.as_deref(),
             )
             .config
             {

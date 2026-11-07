@@ -9,6 +9,7 @@ use mortsom_common::env_resolve::{ENV_PREFIX, MissingEnv, resolve_env_lenient, r
 use mortsom_environment::config::ENV_ONLY_KEYS;
 use toml::Value;
 
+use super::profile_flag::replace_profile;
 use super::{AppSource, Config, ConfigError};
 
 /// Suffix of the gitignored overlay merged on top of the baseline file:
@@ -39,20 +40,24 @@ impl Config {
     where
         F: Fn(&str) -> Option<String>,
     {
-        Self::load_with_source(path, lookup, None)
+        Self::load_with_source(path, lookup, None, None)
     }
 
-    /// Loads and validates after replacing the configured source mode, if selected.
+    /// Loads and validates after replacing the configured source mode and
+    /// `mobile.profile` with the invocation's selections, if any: `source`
+    /// (`--ref`, `--source`) and `profile` (`--profile`, written only when
+    /// it names a known profile).
     pub fn load_with_source<F>(
         path: &Path,
         lookup: F,
         source: Option<&AppSource>,
+        profile: Option<&str>,
     ) -> Result<Self, ConfigError>
     where
         F: Fn(&str) -> Option<String>,
     {
         let raw = read_layered(path)?;
-        Self::from_toml_value(raw, lookup, source)
+        Self::from_toml_value(raw, lookup, source, profile)
     }
 
     /// Parses a complete configuration from TOML text; the injectable path
@@ -62,13 +67,14 @@ impl Config {
         F: Fn(&str) -> Option<String>,
     {
         let raw: Value = toml::from_str(text).map_err(|e| ConfigError::Parse(e.to_string()))?;
-        Self::from_toml_value(raw, lookup, None)
+        Self::from_toml_value(raw, lookup, None, None)
     }
 
     fn from_toml_value<F>(
         mut raw: Value,
         lookup: F,
         source: Option<&AppSource>,
+        profile: Option<&str>,
     ) -> Result<Self, ConfigError>
     where
         F: Fn(&str) -> Option<String>,
@@ -77,6 +83,7 @@ impl Config {
         if let Some(source) = source {
             source.remove_configured(&mut raw);
         }
+        replace_profile(&mut raw, profile);
         let resolved = resolve_env_with(raw, lookup)?;
         let mut config: Config = resolved
             .try_into()
@@ -94,15 +101,18 @@ impl Config {
     where
         F: Fn(&str) -> Option<String>,
     {
-        Self::diagnose_with_source(path, lookup, None)
+        Self::diagnose_with_source(path, lookup, None, None)
     }
 
-    /// Diagnoses the effective source selection, retaining every unrelated problem.
+    /// Diagnoses the effective source selection and profile, replaced as
+    /// [`Config::load_with_source`] replaces them, retaining every
+    /// unrelated problem.
     /// Never use the returned configuration to start anything.
     pub fn diagnose_with_source<F>(
         path: &Path,
         lookup: F,
         source: Option<&AppSource>,
+        profile: Option<&str>,
     ) -> ConfigDiagnosis
     where
         F: Fn(&str) -> Option<String>,
@@ -124,6 +134,7 @@ impl Config {
         if let Some(source) = source {
             source.remove_configured(&mut raw);
         }
+        replace_profile(&mut raw, profile);
         let (resolved, missing_env) = resolve_env_lenient(raw, lookup);
         let config = match resolved.try_into::<Config>() {
             Ok(mut config) => {
@@ -266,10 +277,10 @@ mod tests {
     use mortsom_common::Lane;
 
     const HEX: &str = "dbe0b1be7aafd3cfba92d7463edbd4e33b2969f61bd554d37ac56f032e13355a";
-    const ALICE: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=71a8c14c1407c113601079c4302dab36460f0ccd0ad506f1f2dc73b5100e4f3c";
+    pub(super) const ALICE: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=71a8c14c1407c113601079c4302dab36460f0ccd0ad506f1f2dc73b5100e4f3c";
     const BOB: &str = "nostr+walletconnect://b889ff5b1513b641e2a139f661a661364979c5beee91842f8f0ef42ab558e9d4?relay=wss%3A%2F%2Frelay.damus.io&secret=0000000000000000000000000000000000000000000000000000000000000001";
 
-    fn lookup(name: &str) -> Option<String> {
+    pub(super) fn lookup(name: &str) -> Option<String> {
         match name {
             "MORTSOM_MOSTRO_PUBKEY" => Some(HEX.into()),
             "MORTSOM_MOSTRO_SETTINGS_FILE" => Some("/tmp/settings.toml".into()),
@@ -279,7 +290,7 @@ mod tests {
         }
     }
 
-    fn example() -> String {
+    pub(super) fn example() -> String {
         std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../../mortsom.toml.example"
@@ -607,6 +618,11 @@ avd_image = \"x\"
         );
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[path = "profile_flag_tests.rs"]
+mod profile_flag_tests;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]

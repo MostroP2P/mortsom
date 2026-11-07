@@ -298,8 +298,10 @@ fails before any actor starts.
 
 `--artifact`, `--source` and `--ref` select the build of the client the profile drives: the app for
 `mobile-v2`, mostro-cli for `cli`. The profile is `--profile`, else `mobile.profile` (local overlay
-included). The three conflict, and a `--ref` outside the profile's repository is an argument error before
-anything starts.
+included). A known `--profile` replaces `mobile.profile` before the configuration is resolved and
+validated, so it also stands in for a reference to an unset variable or an unknown configured profile; an
+unknown one replaces nothing and is refused. The three conflict, and a `--ref` outside the profile's
+repository is an argument error before anything starts.
 
 For `mobile-v2`, without an explicit local source or prebuilt artifact, Mortsom fetches `main` from
 `https://github.com/MostroP2P/app.git`. `--ref` accepts a branch name or a canonical

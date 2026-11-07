@@ -381,3 +381,50 @@ fn assert_one_unresolved_client_and_no_tools(output: &assert_cmd::assert::Assert
         "{stderr}"
     );
 }
+
+/// `doctor --profile cli` over a configured reference to an unset name:
+/// the flag replaces `mobile.profile` before the configuration is resolved,
+/// as `run` loads it, so the variable is not reported, no configuration
+/// problem names the profile, and the CLI's checks run.
+#[test]
+fn doctor_with_profile_cli_stands_in_for_an_unset_profile_reference() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = example_config(&dir);
+    std::fs::write(
+        dir.path().join("mortsom.local.toml"),
+        "[mobile]\nprofile = \"env:MORTSOM_PROFILE\"\n",
+    )
+    .unwrap();
+
+    let output = Command::cargo_bin("mortsom")
+        .unwrap()
+        .args(["--config", config.to_str().unwrap()])
+        .args(["doctor", "--profile", "cli", "--no-network", "--json"])
+        .env_clear()
+        .env("PATH", "/nonexistent")
+        .assert()
+        .code(1);
+
+    let stdout = &output.get_output().stdout;
+    let report: serde_json::Value = serde_json::from_slice(stdout).unwrap();
+    for check in report["checks"].as_array().unwrap() {
+        assert_ne!(check["name"], "env MORTSOM_PROFILE", "{check}");
+        let detail = check["detail"].as_str().unwrap();
+        assert!(!detail.contains("mobile.profile"), "{check}");
+    }
+    let names = check_names(stdout);
+    for wanted in ["mostro-cli-source", "mostro-cli-commands"] {
+        assert!(
+            names.iter().any(|name| name == wanted),
+            "{wanted}: {names:?}"
+        );
+    }
+    for unwanted in ["client", "flutter", "Xvfb"] {
+        assert!(
+            !names.iter().any(|name| name == unwanted),
+            "{unwanted}: {names:?}"
+        );
+    }
+    let stderr = String::from_utf8_lossy(&output.get_output().stderr);
+    assert!(stderr.contains("doctor · cli · "), "{stderr}");
+}
