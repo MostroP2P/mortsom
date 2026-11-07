@@ -360,6 +360,20 @@ mod tests {
         (parent, root)
     }
 
+    /// A CLI actor's storage `proved` inactive no longer carries its marker,
+    /// unless this host's /proc proves no stop (mounted with hidepid, or the
+    /// procfs of another PID namespace): then the storage stays refused.
+    fn assert_proved_inactive(proved: Result<(), String>, root: &std::path::Path) {
+        if let Err(error) = &proved
+            && error.contains("/proc does not list every process")
+        {
+            assert!(mortsom_desktop_driver::storage::ensure_stopped(root).is_err());
+            return;
+        }
+        proved.unwrap();
+        mortsom_desktop_driver::storage::ensure_stopped(root).unwrap();
+    }
+
     /// A coordinator killed during a CLI actor's `identity init` leaves a
     /// marker and a journal without events: once no mostro-cli process uses
     /// the store, cleanup proves it inactive instead of refusing forever.
@@ -370,16 +384,7 @@ mod tests {
 
         let proved = ensure_inactive(mortsom_desktop_driver::Platform::Cli, &root);
 
-        if let Err(error) = &proved
-            && error.contains("/proc does not list every process")
-        {
-            // This host's /proc proves no stop (mounted with hidepid, or the
-            // procfs of another PID namespace): the storage stays refused.
-            assert!(mortsom_desktop_driver::storage::ensure_stopped(&root).is_err());
-            return;
-        }
-        proved.unwrap();
-        mortsom_desktop_driver::storage::ensure_stopped(&root).unwrap();
+        assert_proved_inactive(proved, &root);
     }
 
     /// An app actor's marker may stand for a client that still runs: it is
@@ -404,6 +409,19 @@ mod tests {
                 .await;
 
         assert!(checked.is_err());
+    }
+
+    /// A CLI actor's reconciliation runs on that blocking thread too, and
+    /// clears a marker no mostro-cli process backs.
+    #[tokio::test]
+    async fn the_check_off_the_async_runtime_reconciles_a_cli_marker() {
+        let (_parent, root) = retained_storage(mortsom_desktop_driver::Platform::Cli);
+        let _left_behind = mortsom_desktop_driver::storage::ActiveRuntime::begin(&root).unwrap();
+
+        let checked =
+            ensure_inactive_off_runtime(mortsom_desktop_driver::Platform::Cli, root.clone()).await;
+
+        assert_proved_inactive(checked, &root);
     }
 
     fn stack_snapshot() -> crate::stack::StackSnapshot {
