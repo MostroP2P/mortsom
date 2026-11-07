@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use mortsom_app_contract::{
     AdapterError, AppOrderState, CancelOutcome, DeviceContext, FiatAmount, OrderDraft, OrderKind,
-    OrderPrice, OrderReference, OrderState, VisibleOrder,
+    OrderPrice, OrderReference, OrderState, OwnedOrder, VisibleOrder,
 };
 use mortsom_cli_driver::{Call, CliError, Envelope};
 use mortsom_common::Secret;
@@ -311,34 +311,14 @@ pub(crate) async fn owned(
     Ok(rows.into_iter().map(|row| row.id).collect())
 }
 
-/// The ids [`owned`] lists without proof: rows the node no longer reports
-/// that only a truncated list keeps (see [`still_reported`]).
-pub(crate) async fn unproven(
+/// The rows of the actor's own store that are, or may still be, theirs,
+/// each proven when the node reports it or a complete list shows a take
+/// parked on its bond; unproven when only a truncated list keeps it.
+pub(crate) async fn owned_rows(
     device: &DeviceContext<'_>,
     sync: bool,
     window: MessageWindow,
-) -> Result<Vec<String>, AdapterError> {
-    let rows = owned_rows(device, sync, window).await?;
-    Ok(rows
-        .into_iter()
-        .filter_map(|row| (!row.proven).then_some(row.id))
-        .collect())
-}
-
-/// A local row [`still_reported`] keeps.
-struct OwnedRow {
-    id: String,
-    /// The node reports it, or a complete list shows a take parked on its
-    /// bond; `false` when only a truncated list keeps it.
-    proven: bool,
-}
-
-/// The rows of the actor's own store that are, or may still be, theirs.
-async fn owned_rows(
-    device: &DeviceContext<'_>,
-    sync: bool,
-    window: MessageWindow,
-) -> Result<Vec<OwnedRow>, AdapterError> {
+) -> Result<Vec<OwnedOrder>, AdapterError> {
     if sync {
         // The node announces a range order's remainder to a fresh trade
         // key; `order sync` gives it a local row, as the app's restore does.
@@ -372,7 +352,7 @@ async fn still_reported(
     device: &DeviceContext<'_>,
     local: Vec<String>,
     window: MessageWindow,
-) -> Result<Vec<OwnedRow>, AdapterError> {
+) -> Result<Vec<OwnedOrder>, AdapterError> {
     if local.is_empty() {
         return Ok(Vec::new());
     }
@@ -400,7 +380,7 @@ async fn still_reported(
                 None => false,
             }
         };
-        owned.push(OwnedRow { id, proven });
+        owned.push(OwnedOrder { id, proven });
     }
     Ok(owned)
 }

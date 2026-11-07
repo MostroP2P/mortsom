@@ -54,6 +54,25 @@ async fn a_row_listed_without_proof_never_resolves_a_submission() {
     assert!(cleanup.entries.iter().any(|e| e.order.id == "stale-row"));
 }
 
+/// A row a truncated list keeps that the next, complete list drops was
+/// never proven: discovery takes a row and its proof from one read, so the
+/// later read's silence about it cannot pass for proof.
+#[tokio::test]
+async fn a_row_a_later_read_drops_is_never_proven_by_that_read() {
+    let fixture = world(false);
+    let journal = second_submission(&fixture);
+    let adapter = listing(&["stale-row"]);
+    *adapter.proof_reads_left.lock().unwrap() = Some(1);
+
+    attempt(&fixture, adapter, journal.clone()).await;
+
+    assert!(!found(&journal, "stale-row"));
+    assert_eq!(
+        recovery_impl::open_submissions(&journal),
+        [(Actor::Alice, vec!["old-order".to_owned()])]
+    );
+}
+
 #[tokio::test]
 async fn a_proven_row_resolves_the_submission_that_did_not_know_it() {
     let fixture = world(false);

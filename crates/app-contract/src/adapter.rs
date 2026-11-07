@@ -26,6 +26,15 @@ pub struct DeviceContext<'a> {
     pub ui_timeout: Duration,
 }
 
+/// An order in the actor's own trades list, as one read lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OwnedOrder {
+    /// The order's id.
+    pub id: String,
+    /// Whether that read proves the order still the actor's.
+    pub proven: bool,
+}
+
 /// Business capabilities of one application generation.
 #[async_trait]
 pub trait AppAdapter: Send + Sync {
@@ -75,16 +84,20 @@ pub trait AppAdapter: Send + Sync {
             "own-order discovery is not supported",
         ))
     }
-    /// The orders of [`Self::owned_orders`] the client lists without proof
-    /// that they are still the actor's: rows it cannot judge, kept because
-    /// dropping one would read an unproven absence as the order closing.
-    /// Such a row proves no order submission. An app lists only what its
-    /// node shows, so by default there is none.
-    async fn unproven_orders(
+    /// [`Self::owned_orders`] with each row's proof, both from one read: a
+    /// row the client lists without proof that it is still the actor's (one
+    /// it cannot judge, kept because dropping it would read an unproven
+    /// absence as the order closing) proves no order submission. An app
+    /// lists only what its node shows, so by default every row is proven.
+    async fn owned_orders_with_proof(
         &self,
-        _device: &DeviceContext<'_>,
-    ) -> Result<Vec<String>, AdapterError> {
-        Ok(Vec::new())
+        device: &DeviceContext<'_>,
+    ) -> Result<Vec<OwnedOrder>, AdapterError> {
+        let listed = self.owned_orders(device).await?;
+        Ok(listed
+            .into_iter()
+            .map(|id| OwnedOrder { id, proven: true })
+            .collect())
     }
     /// Creates a fixed-price order.
     async fn create_order(

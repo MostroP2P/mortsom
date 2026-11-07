@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use mortsom_app_contract::{
     AdapterError, AppAdapter, AppOrderState, AppProfile, BondClaim, CancelOutcome, Capability,
     CapabilitySet, DeviceContext, Identity, InvoiceSubmission, OrderDraft, OrderReference,
-    PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
+    OwnedOrder, PaymentHandoff, PaymentPath, TestEnvironment, VisibleOrder, WalletConnection,
 };
 use mortsom_common::Secret;
 
@@ -189,11 +189,11 @@ impl AppAdapter for CliAdapter {
         .await
     }
 
-    async fn unproven_orders(
+    async fn owned_orders_with_proof(
         &self,
         device: &DeviceContext<'_>,
-    ) -> Result<Vec<String>, AdapterError> {
-        orders::unproven(
+    ) -> Result<Vec<OwnedOrder>, AdapterError> {
+        orders::owned_rows(
             device,
             self.offers("order.sync"),
             self.config.message_window,

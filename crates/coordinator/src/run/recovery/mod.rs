@@ -175,36 +175,27 @@ pub(super) async fn discover(ctx: &Context, journal: &FileJournal) -> Result<(),
 }
 
 /// The orders `actor`'s client lists that `known_orders` does not hold,
-/// each with whether the client proves it the actor's.
+/// each with whether the client proves it the actor's. Both come from one
+/// read: a later read that no longer lists a row says nothing of its proof.
 async fn new_orders(
     ctx: &Context,
     actor: Actor,
     known_orders: &[String],
 ) -> Result<Vec<(mortsom_app_contract::OrderReference, bool)>, String> {
     let session = ctx.actor(actor).map_err(|e| e.to_string())?;
-    let device = session.device(ctx.ui_timeout);
     let listed = ctx
         .adapter
-        .owned_orders(&device)
+        .owned_orders_with_proof(&session.device(ctx.ui_timeout))
         .await
         .map_err(|e| e.to_string())?;
-    let new: Vec<String> = listed
+    Ok(listed
         .into_iter()
-        .filter(|id| !known_orders.contains(id))
-        .collect();
-    if new.is_empty() {
-        return Ok(Vec::new());
-    }
-    let unproven = ctx
-        .adapter
-        .unproven_orders(&device)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(new
-        .into_iter()
-        .map(|id| {
-            let proven = !unproven.contains(&id);
-            (mortsom_app_contract::OrderReference::new(id), proven)
+        .filter(|row| !known_orders.contains(&row.id))
+        .map(|row| {
+            (
+                mortsom_app_contract::OrderReference::new(row.id),
+                row.proven,
+            )
         })
         .collect())
 }

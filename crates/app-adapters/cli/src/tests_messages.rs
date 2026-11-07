@@ -264,28 +264,54 @@ async fn a_row_a_truncated_list_cannot_judge_stays_listed_and_reads_inconclusive
 
 /// The row a truncated list keeps is listed without proof: it is no proof
 /// that an order submission produced it. A row the node reports is proven,
-/// and one a complete list shows gone is not listed at all.
+/// so is one a complete list shows parked on a live bond request, and one a
+/// complete list shows gone is not listed at all. One read answers both.
 #[tokio::test]
 async fn only_a_row_a_truncated_list_keeps_is_unproven() {
     let (cli, session) = session();
+    let bond = json!({"action": "pay-bond-invoice", "next_step": "pay_bond_invoice",
+        "payload": {"kind": "payment_request", "invoice": "not-a-bolt11", "amount": null, "order": null}});
     cli.ok("order.sync", json!({"adopted": []}));
     cli.ok(
         "order.mine",
-        json!({"orders": [{"id": "o1"}, {"id": "old"}, {"id": "gone"}]}),
+        json!({"orders": [{"id": "o1"}, {"id": "old"}, {"id": "gone"}, {"id": "parked"}]}),
     );
     cli.ok(
         "order.info",
-        json!({"orders": [{"id": "o1", "status": "active"}], "not_returned": ["old", "gone"]}),
+        json!({"orders": [{"id": "o1", "status": "active"}],
+            "not_returned": ["old", "gone", "parked"]}),
     );
     cli.ok("message.list", json!({"messages": [], "truncated": true}));
     cli.ok("message.list", json!({"messages": [], "truncated": false}));
+    cli.ok(
+        "message.list",
+        json!({"messages": [bond], "truncated": false}),
+    );
 
-    let unproven = adapter()
-        .unproven_orders(&device(&session, Actor::Alice))
+    let rows = adapter()
+        .owned_orders_with_proof(&device(&session, Actor::Alice))
         .await
         .unwrap();
 
-    assert_eq!(unproven, ["old"]);
+    let row = |id: &str, proven| OwnedOrder {
+        id: id.into(),
+        proven,
+    };
+    assert_eq!(
+        rows,
+        [row("o1", true), row("old", false), row("parked", true)]
+    );
+    assert_eq!(
+        cli.commands(),
+        [
+            "order.sync",
+            "order.mine",
+            "order.info",
+            "message.list",
+            "message.list",
+            "message.list"
+        ]
+    );
 }
 
 #[tokio::test]
