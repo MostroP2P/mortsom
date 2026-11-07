@@ -66,6 +66,7 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
     match command {
         Command::Run {
             platform,
+            profile,
             scenarios,
             tag,
             ..
@@ -77,7 +78,8 @@ pub fn caption(command: &Command, config: &Path, stack_dir: &Path) -> String {
             } else {
                 "every scenario".to_owned()
             };
-            format!("run · {selection} · {platform} · {config}")
+            let client = client_label(*platform, profile.as_deref());
+            format!("run · {selection} · {client} · {config}")
         }
         // The one command that reads no config at all.
         Command::List { .. } => "list · every scenario in the registry".to_owned(),
@@ -131,7 +133,8 @@ mod tests {
     fn a_run(scenarios: &[&str], tag: Option<&str>) -> Command {
         Command::Run {
             preserve_legacy_recovery: Vec::new(),
-            platform: mortsom_desktop_driver::Platform::Linux,
+            platform: None,
+            profile: None,
             build: Default::default(),
             rebuild: false,
             xvfb: PathBuf::from("Xvfb"),

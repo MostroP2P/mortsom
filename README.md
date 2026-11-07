@@ -305,7 +305,8 @@ selected scenarios; an older or incompatible PR reports the missing file/control
 `mobile.source_dir` also preserves the explicit local-checkout workflow and its intentional local changes.
 `mobile.app_ref` selects managed source instead; these config keys conflict. `--ref` or `--source`
 overrides the configured source mode. `--artifact` bypasses fetching and building; the three are mutually
-exclusive. Relative paths are resolved from the current directory.
+exclusive. Relative paths are resolved from the current directory. The same three flags select
+mostro-cli's build under `--profile cli`: they always mean the client of the profile in use.
 
 For Linux, point `--artifact` at the executable inside the complete bundle; for Web, at the output
 directory. Mortsom hashes and captures the whole bundle. Prebuilt source history is explicitly unknown.
@@ -318,6 +319,33 @@ cargo run -p mortsom-coordinator --example prepare_client -- web https://github.
 
 These commands use the default config and the stack selected by `MORTSOM_STACK_DIR` (or `stack`). They
 remove their temporary captured bundle on completion and create no order/payment.
+
+## Testing mostro-cli (profile `cli`)
+
+The same scenarios drive [mostro-cli](https://github.com/MostroP2P/mostro-cli) instead of the app with
+`--profile cli` (or `mobile.profile = "cli"`). Each actor action is one `mostro-cli --output json`
+subprocess with the actor's private `MCLI_DIR` and `HOME`; Mortsom pays and invoices from the stack's LND
+nodes, since the CLI has no wallet. The contract is [docs/cli-contract.md](docs/cli-contract.md).
+
+```sh
+./target/debug/mortsom doctor --profile cli                       # git and cargo for a source build
+./target/debug/mortsom run --profile cli --tag smoke              # builds main of MostroP2P/mostro-cli
+./target/debug/mortsom run --profile cli happy_sell \
+  --ref https://github.com/MostroP2P/mostro-cli/pull/123     # a branch or a pull request's head
+./target/debug/mortsom run --profile cli --tag smoke --source ../mostro-cli      # local checkout
+./target/debug/mortsom doctor --profile cli --artifact ../mostro-cli/target/release/mostro-cli
+./target/debug/mortsom run --profile cli --tag smoke --artifact ../mostro-cli/target/release/mostro-cli
+```
+
+`--ref`, `--source` and `--artifact` are the app's flags read for mostro-cli: `--ref` must name a branch
+or a pull request of `MostroP2P/mostro-cli`, and the three are mutually exclusive. `--platform` is refused
+with the CLI. Source builds run `cargo build --release --locked --bin mostro-cli` with a shared target directory
+under `.mortsom/mostro-cli/`. The run first reads the CLI's offline discovery (`mostro-cli schema`): a CLI
+without the commands the profile needs is refused before an actor starts, and a scenario needing a
+capability the CLI does not offer (rating without `order rate`, `pending_order_expires` without
+`order new --expires-in`, `unauthorized_actions_at_taken`, which reads offered actions a CLI has none of)
+is skipped with the reason. Each step keeps `cli.jsonl`, the sanitized transcript of the invocations it
+made, instead of a screenshot.
 
 ## What it tests
 

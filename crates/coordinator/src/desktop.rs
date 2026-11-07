@@ -39,9 +39,6 @@ pub async fn load_with_source(
         .snapshot()
         .validate_config(&config)
         .map_err(|e| e.to_string())?;
-    if config.mobile.profile != "mobile-v2" {
-        return Err("Linux and Web require mobile.profile = mobile-v2".into());
-    }
     Ok((config, stack.snapshot()))
 }
 
@@ -233,7 +230,7 @@ fn artifact_in(bundle: &Path, platform: Platform) -> PathBuf {
     match platform {
         Platform::Linux => bundle.join(LINUX_EXECUTABLE),
         Platform::Web => bundle.to_path_buf(),
-        Platform::Cli => bundle.join("mostro-cli"),
+        Platform::Cli => bundle.join(crate::mostro_cli::EXECUTABLE),
     }
 }
 
@@ -465,7 +462,7 @@ pub fn validate_artifact(
             Ok(())
         }
         Platform::Linux => Err("Linux artifact must be an executable regular file".into()),
-        Platform::Cli => Err("the cli profile is not available yet".into()),
+        Platform::Cli => crate::mostro_cli::validate_bundle(artifact),
     }
 }
 
@@ -610,18 +607,6 @@ mod tests {
         assert!(web.args.contains(&"--no-web-resources-cdn".into()));
         let linux = build_command(Path::new("/app"), Platform::Linux, "public", 7001, None);
         assert!(!linux.args.iter().any(|arg| arg.contains("web-resources")));
-    }
-
-    /// A journal may record the `cli` runtime before this build can run
-    /// it: its artifact is refused with an error, never a session.
-    #[test]
-    fn a_cli_artifact_is_refused_until_the_cli_profile_is_available() {
-        let artifact = artifact_in(Path::new("/bundle"), Platform::Cli);
-
-        let refused = validate_artifact(Platform::Cli, &artifact, &crate::doctor::RealHost);
-
-        assert_eq!(artifact, Path::new("/bundle/mostro-cli"));
-        assert_eq!(refused, Err("the cli profile is not available yet".into()));
     }
 }
 

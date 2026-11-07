@@ -114,33 +114,6 @@ async fn source_overrides_preserve_caps_credentials_and_other_validation() {
     }
 }
 
-/// Until `run` can drive the `cli` profile, a configuration naming it is
-/// refused at load, before anything is admitted, built or started.
-#[tokio::test]
-async fn run_and_recovery_refuse_a_cli_configuration() {
-    let (dir, docker, path) = ready_config().await;
-    std::fs::write(
-        dir.path().join("mortsom.local.toml"),
-        "[mobile]\nprofile = 'cli'\n",
-    )
-    .unwrap();
-    let refusal = "Linux and Web require mobile.profile = mobile-v2";
-
-    let Err(error) = desktop::load(&path, dir.path(), &docker, &RealHost).await else {
-        panic!("a cli configuration loaded");
-    };
-    assert!(error.contains(refusal), "{error}");
-    for selection in selections() {
-        let loaded =
-            desktop::load_with_source(&path, dir.path(), &docker, &RealHost, Some(&selection))
-                .await;
-        let Err(error) = loaded else {
-            panic!("a cli configuration loaded with {selection:?}");
-        };
-        assert!(error.contains(refusal), "{error}");
-    }
-}
-
 #[test]
 fn credential_references_live_under_the_stack_directory() {
     // Act / Assert

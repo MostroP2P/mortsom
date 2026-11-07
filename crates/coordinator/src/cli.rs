@@ -130,9 +130,14 @@ pub enum Command {
         /// verified Mortsom regtest stack. Repeat for every pending legacy run.
         #[arg(long, value_name = "RUN_ID")]
         preserve_legacy_recovery: Vec<mortsom_common::RunId>,
-        /// Client target for Alice and Bob.
-        #[arg(long, default_value = "linux")]
-        platform: mortsom_desktop_driver::Platform,
+        /// App platform for Alice and Bob (`linux` by default). Not with
+        /// profile `cli`, which drives mostro-cli.
+        #[arg(long)]
+        platform: Option<mortsom_desktop_driver::Platform>,
+        /// Client profile, overriding `mobile.profile`: `mobile-v2` (the
+        /// app) or `cli` (mostro-cli).
+        #[arg(long, value_name = "PROFILE")]
+        profile: Option<String>,
         /// The build of the profile's client.
         #[command(flatten)]
         build: ClientBuild,
@@ -475,11 +480,12 @@ pub async fn run(cli: Cli) -> ExitCode {
             scenarios,
             tag,
             platform,
+            profile,
             build,
             rebuild,
             xvfb,
         } => {
-            let client = match select_client(&cli.config, None, &build) {
+            let client = match select_client(&cli.config, profile.as_deref(), &build) {
                 Ok(client) => client,
                 Err(code) => return code,
             };
@@ -491,6 +497,8 @@ pub async fn run(cli: Cli) -> ExitCode {
                     scenarios,
                     tag,
                     platform,
+                    profile,
+                    cli: client.cli,
                     artifact: client.artifact,
                     policy: if rebuild {
                         crate::build_cache::Policy::Rebuild
@@ -569,6 +577,20 @@ pub async fn run(cli: Cli) -> ExitCode {
 /// The adapter of the app profile, `mobile-v2`.
 pub fn select_adapter() -> Arc<dyn mortsom_app_contract::AppAdapter> {
     Arc::new(MobileV2Adapter::new())
+}
+
+/// The adapter for the client `desktop` prepared: the CLI's, with what its
+/// discovery offers, or the app's.
+pub async fn adapter_for(
+    desktop: &crate::run::DesktopOptions,
+    config: &Config,
+) -> Result<Arc<dyn mortsom_app_contract::AppAdapter>, String> {
+    match desktop.platform {
+        mortsom_desktop_driver::Platform::Cli => {
+            crate::mostro_cli::adapter_for(desktop, config).await
+        }
+        _ => Ok(select_adapter()),
+    }
 }
 
 /// Reads `--artifact`, `--source` and `--ref` for the profile the
@@ -709,7 +731,8 @@ mod tests {
         assert!(matches!(
             cli.command,
             super::Command::Run {
-                platform: Platform::Linux,
+                platform: None,
+                profile: None,
                 ..
             }
         ));
@@ -729,10 +752,11 @@ mod tests {
             ])
             .unwrap();
             assert!(
-                matches!(cli.command, super::Command::Run { platform, .. } if platform == expected)
+                matches!(cli.command, super::Command::Run { platform, .. } if platform == Some(expected))
             );
             assert_eq!(cli.config, std::path::Path::new("explicit.local.toml"));
         }
+        assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "cli"]).is_err());
         assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "unknown"]).is_err());
         assert!(super::Cli::try_parse_from(["mortsom", "run", "--platform", "android"]).is_err());
         assert!(super::Cli::try_parse_from(["mortsom", "device", "smoke"]).is_err());

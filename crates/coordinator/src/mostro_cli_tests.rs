@@ -1,9 +1,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use super::*;
-use mortsom_cli_driver::TokioCliProcess;
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
 
 fn discovery_document(commands: Value) -> String {
     serde_json::json!({
@@ -180,6 +178,84 @@ async fn a_relative_executable_is_resolved_before_discovery() {
 }
 
 #[test]
+fn a_staged_build_holds_the_executable_and_the_node_it_points_at() {
+    let source = tempfile::tempdir().unwrap();
+    let staging = tempfile::tempdir().unwrap();
+    let binary = fake_cli(source.path(), "{}");
+    let node = NodeFile {
+        mostro_pubkey: "ab".repeat(32),
+        relays: vec!["ws://127.0.0.1:7500".into()],
+        reply_timeout_secs: Some(60),
+    };
+
+    stage(staging.path(), &binary, &node).unwrap();
+
+    let artifact = staging.path().join(EXECUTABLE);
+    validate_bundle(&artifact).unwrap();
+    assert_eq!(NodeFile::read(staging.path()).unwrap(), node);
+}
+
+/// The desktop example configuration, its node credentials stood up in
+/// `dir` as placeholder files.
+fn desktop_config(dir: &Path) -> Config {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/desktop.example.toml");
+    Config::load_with(&path, |name| {
+        Some(match name {
+            "MORTSOM_MOSTRO_PUBKEY" => {
+                "dbe0b1be7aafd3cfba92d7463edbd4e33b2969f61bd554d37ac56f032e13355a".into()
+            }
+            other if other.ends_with("_HOST") => "127.0.0.1:10501".into(),
+            other => {
+                let file = dir.join(other);
+                std::fs::write(&file, b"placeholder").unwrap();
+                file.display().to_string()
+            }
+        })
+    })
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_prepared_build_points_the_cli_at_the_configured_daemon_and_relay() {
+    let source = tempfile::tempdir().unwrap();
+    let binary = fake_cli(
+        source.path(),
+        &discovery_document(Value::Array(every_required())),
+    );
+    let config = desktop_config(source.path());
+
+    let options = prepare(&config, &binary, BuildProvenance::prebuilt())
+        .await
+        .unwrap();
+
+    assert_eq!(options.platform, Platform::Cli);
+    assert_eq!(options.artifact.file_name().unwrap(), EXECUTABLE);
+    validate_bundle(&options.artifact).unwrap();
+    let node = NodeFile::read(options.bundle.root()).unwrap();
+    assert_eq!(node.mostro_pubkey, config.mobile.mostro_pubkey);
+    assert_eq!(node.relays, ["ws://127.0.0.1:7500"]);
+    assert_eq!(node.reply_timeout_secs, Some(REPLY_TIMEOUT_SECS));
+    let session = session(&options, None).unwrap();
+    assert!(session.command_line().is_some());
+}
+
+#[tokio::test]
+async fn a_cli_without_the_profiles_commands_is_never_prepared() {
+    let source = tempfile::tempdir().unwrap();
+    let binary = fake_cli(source.path(), &discovery_document(Value::Array(vec![])));
+
+    let error = prepare(
+        &desktop_config(source.path()),
+        &binary,
+        BuildProvenance::prebuilt(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.contains("identity.init"), "{error}");
+}
+
+#[test]
 fn a_file_that_cannot_run_is_not_a_cli() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("mostro-cli");
@@ -187,4 +263,38 @@ fn a_file_that_cannot_run_is_not_a_cli() {
 
     assert!(validate_executable(&path).is_err());
     assert!(validate_executable(&dir.path().join("absent")).is_err());
+    assert!(validate_bundle(&path).is_err());
+}
+
+/// A run reads its own day of messages; a recovery reads back to the start
+/// its journal's run id records, so nothing the run received falls outside.
+#[test]
+fn a_run_reads_its_own_window_and_a_recovery_reads_back_to_the_recorded_start() {
+    let start = chrono::DateTime::parse_from_rfc3339("2026-11-06T12:00:00Z")
+        .unwrap()
+        .to_utc();
+    let run = RunId::at(start, uuid::Uuid::nil());
+
+    let during_the_run = message_window(None);
+    let recovering = message_window(Some(&run));
+
+    assert_eq!(during_the_run, MessageWindow::Run);
+    assert_eq!(
+        recovering,
+        MessageWindow::SinceRunStart {
+            started: u64::try_from(start.timestamp()).unwrap()
+        }
+    );
+}
+
+/// A run id that records no start cannot bound the window: it reads as
+/// started at the epoch, beyond the CLI's reach, so the window is capped.
+#[test]
+fn a_run_id_without_a_start_is_read_as_beyond_the_clis_reach() {
+    let run: RunId = "custom-id".parse().unwrap();
+
+    assert_eq!(
+        message_window(Some(&run)),
+        MessageWindow::SinceRunStart { started: 0 }
+    );
 }

@@ -7,15 +7,40 @@
 //! into it, so a recovery reopens the CLI against the same daemon.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
-use mortsom_cli_driver::{CliProcess, Envelope, ProcessRequest};
+use mortsom_adapter_cli::{CliAdapter, CliAdapterConfig, MessageWindow};
+use mortsom_app_contract::AppAdapter;
+use mortsom_cli_driver::{
+    CliClient, CliConfig, CliProcess, CliSession, Envelope, NodeTarget, ProcessRequest,
+    TokioCliProcess,
+};
+use mortsom_common::RunId;
 use mortsom_desktop_driver::Platform;
+use mortsom_desktop_driver::storage::ActorStorage;
+use mortsom_ui_driver::UiSession;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::Config;
+use crate::provenance::BuildProvenance;
+use crate::run::DesktopOptions;
 
 /// The profile name.
 pub const PROFILE: &str = mortsom_app_contract::config::CLI_PROFILE;
+/// The executable's name inside a CLI build.
+pub const EXECUTABLE: &str = mortsom_cli_driver::EXECUTABLE;
+/// The node file's name inside a CLI build.
+pub const NODE_FILE: &str = "mortsom-cli.json";
+/// Deadline of one CLI invocation, longer than the CLI's own deadlines
+/// (connection, probe, reply and cleanup add up to about 29 seconds).
+pub const INVOCATION_TIMEOUT: Duration = Duration::from_secs(90);
+/// How long the CLI waits for a node reply when it can be told
+/// (`--reply-timeout`): longer than the CLI's 15-second default, for a
+/// daemon slowed by its own database contention.
+pub const REPLY_TIMEOUT_SECS: u64 = 60;
 /// Deadline of the offline discovery.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -58,6 +83,46 @@ pub fn resolve_client(
             "unknown profile `{other}` (expected one of {})",
             mortsom_app_contract::config::KNOWN_PROFILES.join(", ")
         )),
+    }
+}
+
+/// The daemon and relays a CLI build is pointed at.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NodeFile {
+    /// Daemon public key, as configured.
+    pub mostro_pubkey: String,
+    /// The run relay, reached from this host.
+    pub relays: Vec<String>,
+    /// The reply budget passed to the CLI, when the build offers one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_timeout_secs: Option<u64>,
+}
+
+impl NodeFile {
+    /// The daemon and relay of `config`, as an app build embeds them, and
+    /// the reply budget when the CLI takes one.
+    pub fn for_config(config: &Config, discovery: &Discovery) -> Self {
+        Self {
+            mostro_pubkey: config.mobile.mostro_pubkey.clone(),
+            relays: vec![format!("ws://127.0.0.1:{}", config.relay.host_port)],
+            reply_timeout_secs: discovery.reply_timeout.then_some(REPLY_TIMEOUT_SECS),
+        }
+    }
+
+    /// Reads the node file of the build in `bundle`.
+    pub fn read(bundle: &Path) -> Result<Self, String> {
+        let text = std::fs::read_to_string(bundle.join(NODE_FILE))
+            .map_err(|e| format!("cannot read the CLI build's {NODE_FILE}: {e}"))?;
+        serde_json::from_str(&text).map_err(|e| format!("invalid {NODE_FILE}: {e}"))
+    }
+
+    fn target(&self) -> NodeTarget {
+        NodeTarget {
+            mostro_pubkey: self.mostro_pubkey.clone(),
+            relays: self.relays.clone(),
+            reply_timeout_secs: self.reply_timeout_secs,
+        }
     }
 }
 
@@ -185,6 +250,56 @@ pub fn require(discovery: &Discovery) -> Result<(), String> {
     Ok(())
 }
 
+/// Makes `executable` the run's CLI build, pointed at `config`'s daemon.
+pub async fn prepare(
+    config: &Config,
+    executable: &Path,
+    provenance: BuildProvenance,
+) -> Result<DesktopOptions, String> {
+    let staging = tempfile::Builder::new()
+        .prefix("mortsom-cli-build-")
+        .tempdir()
+        .map_err(|e| e.to_string())?;
+    let discovery = discover(executable, &TokioCliProcess).await?;
+    require(&discovery)?;
+    stage(
+        staging.path(),
+        executable,
+        &NodeFile::for_config(config, &discovery),
+    )?;
+    let root = staging.path().to_path_buf();
+    let bundle =
+        tokio::task::spawn_blocking(move || crate::fingerprint::CapturedBundle::capture(&root))
+            .await
+            .map_err(|_| "CLI build capture task failed".to_string())?
+            .map_err(|e| format!("cannot capture the CLI build: {e}"))?;
+    let artifact = bundle.root().join(EXECUTABLE);
+    Ok(DesktopOptions {
+        recovery: None,
+        resume: false,
+        platform: Platform::Cli,
+        artifact,
+        bundle: Arc::new(bundle),
+        provenance,
+        xvfb: PathBuf::new(),
+        chromedriver: PathBuf::new(),
+        browser: PathBuf::new(),
+        relay_audit: None,
+    })
+}
+
+/// Copies the executable and writes the node file into `dir`.
+fn stage(dir: &Path, executable: &Path, node: &NodeFile) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    validate_executable(executable)?;
+    let target = dir.join(EXECUTABLE);
+    std::fs::copy(executable, &target).map_err(|e| format!("cannot stage mostro-cli: {e}"))?;
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+        .map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(node).map_err(|e| e.to_string())?;
+    std::fs::write(dir.join(NODE_FILE), text).map_err(|e| e.to_string())
+}
+
 /// A regular, executable file.
 pub fn validate_executable(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
@@ -197,6 +312,69 @@ pub fn validate_executable(path: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// A captured CLI build: its executable and node file.
+pub fn validate_bundle(artifact: &Path) -> Result<(), String> {
+    validate_executable(artifact)?;
+    let bundle = artifact.parent().ok_or("CLI build has no directory")?;
+    NodeFile::read(bundle).map(|_| ())
+}
+
+/// The adapter for the CLI in `options`, with what its discovery offers; a
+/// recovery reads the actors' messages back to the recorded run's start.
+pub async fn adapter_for(
+    options: &DesktopOptions,
+    config: &Config,
+) -> Result<Arc<dyn AppAdapter>, String> {
+    let discovery = discover(&options.artifact, &TokioCliProcess).await?;
+    require(&discovery)?;
+    let resumed = options
+        .recovery
+        .as_ref()
+        .filter(|_| options.resume)
+        .map(|journal| journal.snapshot().run_id);
+    Ok(Arc::new(CliAdapter::new(CliAdapterConfig {
+        order_expiry_secs: config.mobile.order_expiry_secs,
+        commands: discovery.commands,
+        order_expiry_in_seconds: discovery.order_expiry_in_seconds,
+        message_window: message_window(resumed.as_ref()),
+    })))
+}
+
+/// How far back a CLI actor's messages are read: a run's own window, or,
+/// when recovering `resumed`, back to the start its id records. An id that
+/// records no start reads as started at the epoch: beyond the CLI's reach,
+/// so the window is capped.
+fn message_window(resumed: Option<&RunId>) -> MessageWindow {
+    let Some(run) = resumed else {
+        return MessageWindow::Run;
+    };
+    let started = run
+        .started_at()
+        .and_then(|start| u64::try_from(start.timestamp()).ok())
+        .unwrap_or(0);
+    MessageWindow::SinceRunStart { started }
+}
+
+/// One actor's CLI session, in retained storage when the run records one.
+pub fn session(
+    options: &DesktopOptions,
+    storage: Option<ActorStorage>,
+) -> Result<Arc<dyn UiSession>, String> {
+    let node = NodeFile::read(options.bundle.root())?;
+    let config = CliConfig {
+        binary: options.artifact.clone(),
+        node: node.target(),
+        timeout: INVOCATION_TIMEOUT,
+        path_env: None,
+    };
+    let client = CliClient::new(config, Arc::new(TokioCliProcess));
+    let client = match storage {
+        Some(storage) => client.with_storage(storage),
+        None => client,
+    };
+    Ok(Arc::new(CliSession::new(Arc::new(client))))
 }
 
 #[cfg(test)]

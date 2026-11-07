@@ -62,15 +62,18 @@ pub(super) fn prepare(
         run,
         std::time::Duration::from_secs(config.mostro.health_timeout_secs),
     )?);
-    let executable = (desktop.platform == mortsom_desktop_driver::Platform::Linux)
-        .then(|| {
-            desktop
-                .artifact
-                .file_name()
-                .and_then(|s| s.to_str())
-                .map(str::to_owned)
-        })
-        .flatten();
+    let executable = matches!(
+        desktop.platform,
+        mortsom_desktop_driver::Platform::Linux | mortsom_desktop_driver::Platform::Cli
+    )
+    .then(|| {
+        desktop
+            .artifact
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(str::to_owned)
+    })
+    .flatten();
     let journal = Arc::new(FileJournal::create(
         &base,
         RecoveryManifest {
