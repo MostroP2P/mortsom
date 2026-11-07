@@ -102,7 +102,10 @@ A killed coordinator leaves an active-runtime marker. Do not delete the marker, 
 the private directory to bypass the refusal: reconcile the owned client processes first. A `cli` profile
 actor reconciles its own marker on the next `cleanup` or `recovery abandon`, once no `mostro-cli` process
 runs with its `MCLI_DIR`; if `cleanup` reports that a process still uses the actor's store, find it with
-`pgrep -a mostro-cli`, let it finish or stop it, and run `cleanup` again. A stack mismatch
+`pgrep -a mostro-cli`, let it finish or stop it, and run `cleanup` again. If it reports instead that
+`/proc` does not list every process (mounted with `hidepid`, or the procfs of another PID namespace), that
+refusal never clears on that host: run `cleanup` or `recovery abandon` where `/proc` is the full procfs of
+the operator's PID namespace (on the host, not in a container, and without `hidepid`). A stack mismatch
 or missing protected files also refuses cleanup; keep the original stack available. `stack down` discards
 the environment and is never proof of cancellation or refund. While a journal is pending and its stack
 still exists, or cannot be proved gone, `stack up` and `stack down` are refused and name the `cleanup` to

@@ -35,7 +35,8 @@ pub const EXECUTABLE: &str = mortsom_cli_driver::EXECUTABLE;
 /// The node file's name inside a CLI build.
 pub const NODE_FILE: &str = "mortsom-cli.json";
 /// Deadline of one CLI invocation, longer than the CLI's own deadlines
-/// (connection, probe, reply and cleanup add up to about 29 seconds).
+/// (connection, probe, reply and cleanup add up to about 74 seconds with
+/// [`REPLY_TIMEOUT_SECS`], 29 with the CLI's 15-second reply default).
 pub const INVOCATION_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long the CLI waits for a node reply when it can be told
 /// (`--reply-timeout`): longer than the CLI's 15-second default, for a

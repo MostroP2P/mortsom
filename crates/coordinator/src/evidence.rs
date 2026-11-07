@@ -1,5 +1,6 @@
 //! Evidence checkpoints: screenshot plus accessibility hierarchy per actor
-//! step, numbered in order (spec §4.3, §11).
+//! step, numbered in order (spec §4.3, §11). A command-line session has no
+//! screen and keeps its transcript (`cli.jsonl`) instead.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -15,8 +16,10 @@ pub struct StepRecorder {
 }
 
 impl StepRecorder {
-    /// Records the current screen of `actor` under `name`. Failures are
-    /// logged, never fatal: evidence must not break the scenario.
+    /// Records the current screen of `actor` under `name`, or for a
+    /// command-line session the transcript of the step's invocations.
+    /// Failures are logged, never fatal: evidence must not break the
+    /// scenario.
     pub async fn checkpoint(
         &self,
         artifacts: &RunArtifacts,
