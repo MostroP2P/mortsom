@@ -415,7 +415,9 @@ pub(crate) async fn cancel_if_open(
         Ok(_) => Ok(CancelOutcome::Cancelled),
         Err(error) if error.code() == Some("order_unknown") => Ok(CancelOutcome::NotFound),
         Err(error) if is_closed_refusal(&error) => closed_after_refusal(device, order, error).await,
-        Err(error) if error.reason() == Some("invalid_pubkey") => {
+        Err(error)
+            if error.code() == Some("node_refused") && error.reason() == Some("invalid_pubkey") =>
+        {
             already_requested(device, order, error, window).await
         }
         Err(error) => Err(adapter_error(error)),

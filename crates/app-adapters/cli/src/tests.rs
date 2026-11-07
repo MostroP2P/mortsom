@@ -483,6 +483,37 @@ async fn a_repeated_cooperative_cancel_stands_and_a_strangers_does_not() {
 }
 
 #[tokio::test]
+async fn only_the_node_s_refusal_points_to_a_standing_cooperative_cancel() {
+    let (cli, session) = session();
+    cli.ok(
+        "order.info",
+        json!({"orders": [{"id": "o1", "status": "active"}]}),
+    );
+    cli.raw(
+        "order.cancel",
+        Ok(mortsom_cli_driver::testing::failure(
+            "order.cancel",
+            "error",
+            "invalid_arguments",
+            Some("invalid_pubkey"),
+        )),
+    );
+    cli.ok(
+        "message.list",
+        json!({"messages": [{"action": "cooperative-cancel-initiated-by-you"}], "truncated": false}),
+    );
+
+    let refused = adapter()
+        .cancel_if_open(&device(&session, Actor::Alice), &order(OrderKind::Sell))
+        .await;
+
+    assert_eq!(
+        refused.unwrap_err().category,
+        FailureCategory::AutomationContract
+    );
+}
+
+#[tokio::test]
 async fn own_orders_come_from_the_local_store_after_adopting_announced_ones() {
     let (cli, session) = session();
     cli.ok("order.sync", json!({"adopted": []}));
