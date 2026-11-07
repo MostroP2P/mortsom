@@ -145,7 +145,9 @@ fn scrubbed_failure(failure: ProcessFailure, secrets: &[&Secret]) -> ProcessFail
     match failure {
         ProcessFailure::Spawn(text) => ProcessFailure::Spawn(scrub(&text, secrets)),
         ProcessFailure::Io(text) => ProcessFailure::Io(scrub(&text, secrets)),
-        other => other,
+        // Listed, so that a new variant carrying text must say how it is
+        // scrubbed.
+        failure @ (ProcessFailure::Timeout(_) | ProcessFailure::Signaled) => failure,
     }
 }
 
@@ -215,15 +217,16 @@ fn scrub_key(key: &str, index: usize, secrets: &[&Secret], taken: &mut BTreeSet<
     name
 }
 
-/// The `ok` outcome, or the failure the CLI reported. Its message and
-/// reason reach the run's report, so they are scrubbed like any free text.
+/// The `ok` outcome, or the failure the CLI reported. Its code, message
+/// and reason reach the run's report, so they are scrubbed like any free
+/// text; a code that held a secret is no documented code anyway.
 fn outcome(command: String, envelope: Envelope, secrets: &[&Secret]) -> Result<Envelope, CliError> {
     let (code, message, reason) = envelope
         .error
         .as_ref()
         .map(|e| {
             let reason = e.reason.as_deref().map(|reason| scrub(reason, secrets));
-            (e.code.clone(), scrub(&e.message, secrets), reason)
+            (scrub(&e.code, secrets), scrub(&e.message, secrets), reason)
         })
         .unwrap_or_default();
     match envelope.status {
@@ -266,37 +269,81 @@ mod tests {
         );
     }
 
-    /// A process failure's text is free text too: a Lightning address on
-    /// standard input matches no invoice pattern, so only the invocation's
-    /// own secrets keep it out of the transcript and the error.
-    #[test]
-    fn a_process_failure_loses_the_invocation_s_secret() {
-        let address = Secret::new("someone@example.com");
-        let call = Call::node(&["order", "add-invoice"]).invoice(&address);
+    fn add_invoice(address: &Secret) -> (Call, Vec<String>) {
+        let call = Call::node(&["order", "add-invoice"]).invoice(address);
         let argv = call.argv(&crate::call::NodeTarget {
             mostro_pubkey: "ab".repeat(32),
             relays: vec!["ws://127.0.0.1:7500".into()],
             reply_timeout_secs: None,
         });
-        let evidence = Evidence::default();
-        let failure = ProcessFailure::Io("cannot write Someone@Example.com: broken pipe".into());
+        (call, argv)
+    }
 
-        let error = evidence
-            .interpret(&call, &argv, 1, Err(failure.into()))
-            .unwrap_err();
-
-        let read = evidence.take_transcript();
-        let (_, kept) = evidence
+    fn kept_transcript(evidence: &Evidence) -> String {
+        evidence
             .diagnostics()
             .into_iter()
             .find(|(name, _)| name == "cli-transcript.jsonl")
-            .unwrap();
-        for text in [&read, &kept, &error.to_string()] {
-            assert!(text.contains("broken pipe"), "{text}");
-            assert!(
-                !text.to_lowercase().contains("someone@example.com"),
-                "{text}"
+            .map(|(_, text)| text)
+            .unwrap()
+    }
+
+    /// A process failure's text is free text too: a Lightning address on
+    /// standard input matches no invoice pattern, so only the invocation's
+    /// own secrets keep it out of the transcript and the error, whichever
+    /// failure carries it.
+    #[test]
+    fn a_process_failure_loses_the_invocation_s_secret() {
+        let address = Secret::new("someone@example.com");
+        let (call, argv) = add_invoice(&address);
+        for failure in [
+            ProcessFailure::Spawn("cannot run Someone@Example.com: broken pipe".into()),
+            ProcessFailure::Io("cannot write Someone@Example.com: broken pipe".into()),
+        ] {
+            let evidence = Evidence::default();
+
+            let error = evidence
+                .interpret(&call, &argv, 1, Err(failure.into()))
+                .unwrap_err();
+
+            let read = evidence.take_transcript();
+            let kept = kept_transcript(&evidence);
+            for text in [&read, &kept, &error.to_string()] {
+                assert!(text.contains("broken pipe"), "{text}");
+                assert!(
+                    !text.to_lowercase().contains("someone@example.com"),
+                    "{text}"
+                );
+            }
+        }
+    }
+
+    /// The error's code reaches the run's report like its message, so a
+    /// secret the CLI echoed into it is scrubbed there too.
+    #[test]
+    fn a_refusal_s_code_loses_the_invocation_s_secret() {
+        let address = Secret::new("someone@example.com");
+        let (call, argv) = add_invoice(&address);
+        for status in ["error", "uncertain"] {
+            let stdout = format!(
+                r#"{{"schema_version":"1","command":"order.add-invoice","status":"{status}",
+                "error":{{"code":"bad_someone@example.com","message":"refused"}}}}"#
             );
+            let output = ProcessOutput {
+                code: Some(1),
+                stdout,
+                stderr: String::new(),
+            };
+
+            let error = Evidence::default()
+                .interpret(&call, &argv, 1, Ok(output))
+                .unwrap_err();
+
+            let code = error.code().unwrap_or_default();
+            assert!(code.starts_with("bad_"), "{code}");
+            for text in [code, &error.to_string()] {
+                assert!(!text.contains("someone@example.com"), "{text}");
+            }
         }
     }
 
