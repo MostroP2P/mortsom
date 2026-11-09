@@ -1,0 +1,170 @@
+# End-to-end run of the Mostro app (profile `mobile-v2`, Linux desktop)
+# against a regtest stack this job builds itself: worthless sats and no
+# secrets, so it runs on GitHub-hosted runners.
+#
+# - Reusable (`workflow_call`): MostroP2P/app's Mortsom pull request gate
+#   calls it with the app ref and the scenarios its map selected.
+# - By hand (`workflow_dispatch`) for any app branch or pull request.
+# - On pull requests that change this file, with the smoke suite, so a
+#   change to the job is exercised before it merges.
+#
+# Every input reaches the scripts through the environment, never through
+# expression interpolation, and the job holds no secret and a read-only
+# token: the app code it builds and runs is untrusted.
+name: app e2e
+
+on:
+  workflow_call:
+    inputs:
+      app_ref:
+        description: App branch or https://github.com/MostroP2P/app/pull/<number>
+        type: string
+        required: true
+      scenarios:
+        description: Scenario names, space separated; empty runs `tag`
+        type: string
+        default: ""
+      tag:
+        description: Scenario tag to run when `scenarios` is empty
+        type: string
+        default: smoke
+      bond:
+        description: Run on a daemon with anti-abuse bonds (the `bond` family)
+        type: boolean
+        default: false
+      mortsom_ref:
+        description: Mortsom ref to build (the caller pins it)
+        type: string
+        default: main
+      artifact_name:
+        description: Name of the uploaded summaries artifact
+        type: string
+        default: app-e2e-summaries
+  workflow_dispatch:
+    inputs:
+      app_ref:
+        description: App branch or https://github.com/MostroP2P/app/pull/<number>
+        required: false
+        default: main
+      scenarios:
+        description: Scenario names, space separated; empty runs `tag`
+        required: false
+        default: ""
+      tag:
+        description: Scenario tag to run when `scenarios` is empty
+        required: false
+        default: smoke
+      bond:
+        description: Run on a daemon with anti-abuse bonds (the `bond` family)
+        type: boolean
+        default: false
+  pull_request:
+    paths:
+      - ".github/workflows/app-e2e.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: mobile-v2 on Linux (${{ inputs.app_ref || 'main' }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      APP_REF: ${{ inputs.app_ref || 'main' }}
+      SCENARIOS: ${{ inputs.scenarios || '' }}
+      TAG: ${{ inputs.tag || 'smoke' }}
+      BOND: ${{ inputs.bond && 'true' || 'false' }}
+      MORTSOM: ./target/release/mortsom
+      # Versions the app's own CI pins (MostroP2P/app .github/workflows/ci.yml).
+      FLUTTER_VERSION: "3.41.9"
+      FRB_VERSION: "2.11.1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Called from the app, the default would be the app repository.
+          repository: MostroP2P/mortsom
+          ref: ${{ inputs.mortsom_ref || github.sha }}
+          persist-credentials: false
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends protobuf-compiler \
+            clang libclang-dev lld cmake ninja-build pkg-config libgtk-3-dev libsecret-1-dev \
+            xvfb dbus dbus-x11 gnome-keyring at-spi2-core imagemagick
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # Only runs of Mortsom's own main save the cache.
+          save-if: ${{ github.repository == 'MostroP2P/mortsom' && github.ref == 'refs/heads/main' }}
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-expand,flutter_rust_bridge_codegen@${{ env.FRB_VERSION }}
+      - name: Build Mortsom
+        run: cargo build --release --locked -p mortsom-coordinator --bin mortsom
+      - name: Regtest stack
+        run: |
+          if [ "$BOND" = true ]; then
+            $MORTSOM stack up --bond
+          else
+            $MORTSOM stack up
+          fi
+      - name: Preflight
+        run: $MORTSOM doctor --platform linux --ref "$APP_REF"
+      - name: Run
+        run: |
+          start=$(date +%s)
+          if [ -n "$SCENARIOS" ]; then
+            # Word splitting is intended: SCENARIOS is a space-separated list
+            # of names the selection step built from the committed catalog.
+            # shellcheck disable=SC2086
+            $MORTSOM run --platform linux --ref "$APP_REF" $SCENARIOS || status=$?
+          else
+            $MORTSOM run --platform linux --ref "$APP_REF" --tag "$TAG" || status=$?
+          fi
+          echo "run took $(( $(date +%s) - start )) s" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit "${status:-0}"
+      - name: Collect summaries
+        if: always()
+        run: |
+          mkdir -p summaries
+          shopt -s nullglob
+          for f in artifacts/*/summary.json; do
+            cp "$f" "summaries/$(basename "$(dirname "$f")").json"
+          done
+          ls summaries
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.artifact_name || 'app-e2e-summaries' }}
+          path: summaries
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Cleanup what the run may have left
+        if: always()
+        run: |
+          for run in $(ls -1 artifacts 2>/dev/null | grep -v '^\.' | grep -v '^accounting'); do
+            $MORTSOM cleanup "$run" || true
+          done
+      - name: Publish sanitized evidence
+        if: always()
+        run: |
+          mkdir -p bundle
+          for run in $(ls -1 artifacts 2>/dev/null | grep -v '^\.' | grep -v '^accounting'); do
+            $MORTSOM publish "$run" --out "bundle/$run" --screenshots all || true
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ${{ inputs.artifact_name || 'app-e2e-summaries' }}-evidence
+          path: bundle
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Stack down
+        if: always()
+        run: $MORTSOM stack down || true
