@@ -74,6 +74,10 @@ pub enum Command {
         /// deadline that aborts a stuck attempt.
         #[arg(long)]
         details: bool,
+        /// Print the registry as one JSON document (the catalog pull request
+        /// gates select scenarios from) instead of the listing.
+        #[arg(long, conflicts_with = "details")]
+        json: bool,
     },
     /// Recover retained desktop identities and orders of an interrupted run.
     /// Refuses unresolved ownership and changed stack identities.
@@ -451,7 +455,7 @@ pub async fn run(cli: Cli) -> ExitCode {
     };
     match cli.command {
         Command::Stack { action } => stack_cli(&cli.stack_dir, action).await,
-        Command::List { details } => list_scenarios(details),
+        Command::List { details, json } => list_scenarios(details, json),
         Command::Cleanup {
             run,
             attribute_order,
@@ -696,13 +700,18 @@ fn relay_down_targets(names: Vec<String>, exact: Option<&str>) -> Vec<String> {
     }
 }
 
-fn list_scenarios(details: bool) -> ExitCode {
+fn list_scenarios(details: bool, json: bool) -> ExitCode {
     mortsom_scenarios::link();
     if let Err(e) = mortsom_scenario_kit::registry::validate() {
         eprintln!("{e}");
         return ExitCode::from(2);
     }
     let defs = mortsom_scenario_kit::registry::all();
+    if json {
+        let catalog = crate::scenario_list::Catalog::from_defs(&defs, env!("CARGO_PKG_VERSION"));
+        print!("{}", catalog.to_json());
+        return ExitCode::SUCCESS;
+    }
     let listing = crate::scenario_list::Listing::from_defs(&defs);
     let detail = if details {
         crate::scenario_list::Detail::Full

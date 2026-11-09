@@ -6,6 +6,7 @@
 
 mod attribution;
 mod bond_gate;
+pub use bond_gate::BOND_FAMILY;
 mod chain_tip;
 mod execute;
 mod maintenance;

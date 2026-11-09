@@ -265,3 +265,108 @@ fn a_scenario_needing_an_interruption_shows_it() {
         assert!(text.contains("interrupts = "), "{text}");
     }
 }
+
+mod catalog {
+    //! What `mortsom list --json` promises a machine reader: the pull request
+    //! gates that pick scenarios from it commit this output and parse it.
+
+    use super::super::*;
+    use mortsom_app_contract::Capability;
+    use mortsom_scenario_kit::context::Context;
+    use mortsom_scenario_kit::registry::{Need, ScenarioFuture};
+
+    fn noop(_ctx: &Context) -> ScenarioFuture<'_> {
+        Box::pin(async { Ok(()) })
+    }
+
+    static HAPPY: ScenarioDef = ScenarioDef {
+        name: "happy_sell",
+        tags: &["happy-path", "smoke", "parity"],
+        requires: &[Capability::Onboarding, Capability::CreateOrder],
+        timeout_secs: 1800,
+        moves_value: true,
+        needs_app_wallet: false,
+        needs_solver: false,
+        needs: &[],
+        run: noop,
+    };
+
+    static BOND: ScenarioDef = ScenarioDef {
+        name: "taker_bond_slashed_by_solver",
+        tags: &["bond"],
+        requires: &[Capability::Onboarding],
+        timeout_secs: 2400,
+        moves_value: true,
+        needs_app_wallet: false,
+        needs_solver: true,
+        needs: &[],
+        run: noop,
+    };
+
+    static BACKGROUND: ScenarioDef = ScenarioDef {
+        name: "background_at_taken",
+        tags: &["recovery", "interruption"],
+        requires: &[],
+        timeout_secs: 1200,
+        moves_value: false,
+        needs_app_wallet: true,
+        needs_solver: false,
+        needs: &[Need::Background],
+        run: noop,
+    };
+
+    fn catalog() -> Catalog {
+        Catalog::from_defs(&[&HAPPY, &BOND, &BACKGROUND], "9.9.9")
+    }
+
+    #[test]
+    fn the_catalog_carries_its_schema_and_the_mortsom_version() {
+        let c = catalog();
+
+        assert_eq!(c.schema, CATALOG_SCHEMA);
+        assert_eq!(c.mortsom_version, "9.9.9");
+        assert_eq!(c.scenarios.len(), 3);
+    }
+
+    #[test]
+    fn every_entry_says_what_a_gate_needs_to_select_or_skip_it() {
+        let c = catalog();
+        let happy = &c.scenarios[0];
+
+        assert_eq!(happy.name, "happy_sell");
+        assert_eq!(happy.family, "happy-path");
+        assert_eq!(happy.tags, ["happy-path", "smoke", "parity"]);
+        assert!(happy.moves_value);
+        assert!(!happy.needs_bonded_daemon);
+        assert_eq!(happy.timeout_secs, 1800);
+        assert_eq!(happy.requires, ["onboarding", "create-order"]);
+    }
+
+    #[test]
+    fn the_bond_family_is_flagged_as_needing_a_bonded_daemon() {
+        let c = catalog();
+
+        assert!(c.scenarios[1].needs_bonded_daemon);
+        assert!(c.scenarios[1].needs_solver);
+    }
+
+    #[test]
+    fn interruptions_and_the_app_wallet_are_listed() {
+        let c = catalog();
+        let bg = &c.scenarios[2];
+
+        assert_eq!(bg.needs, ["background"]);
+        assert!(bg.needs_app_wallet);
+    }
+
+    #[test]
+    fn the_json_round_trips_with_stable_field_names() {
+        let json = catalog().to_json();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(value["schema"], CATALOG_SCHEMA);
+        assert_eq!(value["scenarios"][1]["needs_bonded_daemon"], true);
+        assert_eq!(value["scenarios"][2]["needs"][0], "background");
+        assert!(json.ends_with('\n'), "{json:?}");
+    }
+}

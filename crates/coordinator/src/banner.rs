@@ -305,7 +305,14 @@ mod tests {
     #[test]
     fn the_one_command_that_reads_no_config_names_what_it_reads_instead() {
         // Arrange / Act
-        let list = caption(&Command::List { details: false }, &config(), &stack_dir());
+        let list = caption(
+            &Command::List {
+                details: false,
+                json: false,
+            },
+            &config(),
+            &stack_dir(),
+        );
 
         // Assert
         assert!(!list.contains("desktop.example.toml"), "{list}");

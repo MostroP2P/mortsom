@@ -65,6 +65,7 @@ cargo build -p mortsom-coordinator --bin mortsom
 ./target/debug/mortsom run --tag smoke   # the cheap subset: three scenarios, one run each
 ./target/debug/mortsom run               # the whole catalogue: every scenario, one run each
 ./target/debug/mortsom list              # scenarios by family; --details adds capabilities and deadlines
+./target/debug/mortsom list --json       # the same registry as JSON (docs/gate-contract.md)
 ```
 
 Every `run` creates fresh Alice and Bob identities, runs one scenario, resolves every order it created and

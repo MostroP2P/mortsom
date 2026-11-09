@@ -379,7 +379,8 @@ narrative; scenario bodies contain no AT-SPI or WebDriver detail.
 
 The catalogue is organised in families. Each scenario carries its family name as a tag, and `--tag` runs
 a whole family; `smoke` cuts across families to mark the cheap subset (`happy_sell`, `happy_buy` and
-`cancel_before_taken`). `mortsom list` prints every scenario with its tags and requirements. `run` with
+`cancel_before_taken`). `mortsom list` prints every scenario with its tags and requirements; `mortsom list --json` prints the same
+registry as one JSON document, the catalog pull request gates select scenarios from (docs/gate-contract.md). `run` with
 neither scenario names nor `--tag` selects every registered scenario, in registry (alphabetical) order. Every
 selection runs one scenario per run, each with fresh actors; an unknown name or a tag no scenario carries is
 an error, never a smaller run.
