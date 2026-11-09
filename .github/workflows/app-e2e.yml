@@ -139,6 +139,20 @@ jobs:
           fi
           echo "run took $(( $(date +%s) - start )) s" | tee -a "$GITHUB_STEP_SUMMARY"
           exit "${status:-0}"
+      - name: Require an executed scenario
+        # A run whose every scenario was skipped (a bond selection on a plain
+        # stack, an interruption scenario on Linux) tested nothing.
+        run: |
+          shopt -s nullglob
+          summaries=(artifacts/*/summary.json)
+          executed=0
+          if [ ${#summaries[@]} -gt 0 ]; then
+            executed=$(jq -s '[.[].results[]? | select(.outcome.outcome != "skipped")] | length' "${summaries[@]}")
+          fi
+          if [ "$executed" -eq 0 ]; then
+            echo "::error::no selected scenario executed: every one was skipped, or none ran"
+            exit 1
+          fi
       - name: Collect summaries
         if: always()
         run: |
@@ -158,14 +172,20 @@ jobs:
       - name: Cleanup what the run may have left
         if: always()
         run: |
-          for run in $(ls -1 artifacts 2>/dev/null | grep -v '^\.' | grep -v '^accounting'); do
+          shopt -s nullglob
+          for dir in artifacts/*/; do
+            run=$(basename "$dir")
+            [ "$run" = accounting ] && continue
             $MORTSOM cleanup "$run" || echo "::warning::cleanup of $run failed; the stack is discarded with the runner"
           done
       - name: Publish sanitized evidence
         if: always()
         run: |
           mkdir -p bundle
-          for run in $(ls -1 artifacts 2>/dev/null | grep -v '^\.' | grep -v '^accounting'); do
+          shopt -s nullglob
+          for dir in artifacts/*/; do
+            run=$(basename "$dir")
+            [ "$run" = accounting ] && continue
             $MORTSOM publish "$run" --out "bundle/$run" --screenshots all || true
           done
       - uses: actions/upload-artifact@v4

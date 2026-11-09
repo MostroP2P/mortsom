@@ -69,7 +69,9 @@ reports them as inconclusive, never as the pull request's regression.
 A reusable workflow (`workflow_call`) with inputs `app_ref` (branch or
 pull request URL), `scenarios` (space-separated names) or `tag`, `bond`
 (bonded daemon), `mortsom_ref` (the Mortsom revision to build) and
-`artifact_name`. It builds the app from `app_ref` on a GitHub-hosted
+`artifact_name`; `mortsom_ref` and `artifact_name` exist only for
+`workflow_call` (a manual `workflow_dispatch` builds the dispatched
+revision and uses the default artifact name). It builds the app from `app_ref` on a GitHub-hosted
 runner, runs the selection on Linux against a fresh regtest stack and
 uploads the summaries as `<artifact_name>` (one `<run-id>.json` each) and
 the sanitized evidence as `<artifact_name>-evidence`. It holds no secret
