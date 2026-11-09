@@ -283,7 +283,8 @@ pub struct CatalogEntry {
     pub name: String,
     /// Family the scenario is grouped under.
     pub family: String,
-    /// Every tag, family first as registered; `--tag` selects by any.
+    /// Every tag, in registry order (the family is not necessarily first);
+    /// `--tag` selects by any.
     pub tags: Vec<String>,
     /// True when the scenario moves sats.
     pub moves_value: bool,
@@ -329,12 +330,11 @@ impl Catalog {
     }
 
     /// Pretty JSON with a trailing newline, so a committed copy diffs
-    /// cleanly. Serializing plain strings, bools and numbers cannot fail.
-    pub fn to_json(&self) -> String {
-        let mut json = serde_json::to_string_pretty(self)
-            .unwrap_or_else(|e| unreachable!("a catalog always serializes: {e}"));
+    /// cleanly.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        let mut json = serde_json::to_string_pretty(self)?;
         json.push('\n');
-        json
+        Ok(json)
     }
 }
 

@@ -700,6 +700,27 @@ fn relay_down_targets(names: Vec<String>, exact: Option<&str>) -> Vec<String> {
     }
 }
 
+/// `mortsom list --json`. A reader that closes the pipe early (`| head`)
+/// is not an error.
+fn print_catalog(defs: &[&'static mortsom_scenario_kit::registry::ScenarioDef]) -> ExitCode {
+    use std::io::Write;
+    let catalog = crate::scenario_list::Catalog::from_defs(defs, env!("CARGO_PKG_VERSION"));
+    let json = match catalog.to_json() {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("cannot serialize the scenario catalog: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    match std::io::stdout().write_all(json.as_bytes()) {
+        Err(e) if e.kind() != std::io::ErrorKind::BrokenPipe => {
+            eprintln!("cannot write the scenario catalog: {e}");
+            ExitCode::from(2)
+        }
+        _ => ExitCode::SUCCESS,
+    }
+}
+
 fn list_scenarios(details: bool, json: bool) -> ExitCode {
     mortsom_scenarios::link();
     if let Err(e) = mortsom_scenario_kit::registry::validate() {
@@ -708,9 +729,7 @@ fn list_scenarios(details: bool, json: bool) -> ExitCode {
     }
     let defs = mortsom_scenario_kit::registry::all();
     if json {
-        let catalog = crate::scenario_list::Catalog::from_defs(&defs, env!("CARGO_PKG_VERSION"));
-        print!("{}", catalog.to_json());
-        return ExitCode::SUCCESS;
+        return print_catalog(&defs);
     }
     let listing = crate::scenario_list::Listing::from_defs(&defs);
     let detail = if details {

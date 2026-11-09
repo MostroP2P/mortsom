@@ -79,6 +79,7 @@ jobs:
       # Versions the app's own CI pins (MostroP2P/app .github/workflows/ci.yml).
       FLUTTER_VERSION: "3.41.9"
       FRB_VERSION: "2.11.1"
+      CARGO_EXPAND_VERSION: "1.0.123"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -101,10 +102,12 @@ jobs:
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
-          cache: true
+          # The app code this job builds is untrusted: never save a cache it
+          # could have written into.
+          cache: false
       - uses: taiki-e/install-action@v2
         with:
-          tool: cargo-expand,flutter_rust_bridge_codegen@${{ env.FRB_VERSION }}
+          tool: cargo-expand@${{ env.CARGO_EXPAND_VERSION }},flutter_rust_bridge_codegen@${{ env.FRB_VERSION }}
       - name: Build Mortsom
         run: cargo build --release --locked -p mortsom-coordinator --bin mortsom
       - name: Regtest stack
@@ -120,10 +123,17 @@ jobs:
         run: |
           start=$(date +%s)
           if [ -n "$SCENARIOS" ]; then
-            # Word splitting is intended: SCENARIOS is a space-separated list
-            # of names the selection step built from the committed catalog.
-            # shellcheck disable=SC2086
-            $MORTSOM run --platform linux --ref "$APP_REF" $SCENARIOS || status=$?
+            # Split into names without globbing, and accept only scenario
+            # names: nothing here may become a flag.
+            set -f
+            read -r -a names <<< "$SCENARIOS"
+            for name in "${names[@]}"; do
+              if ! [[ "$name" =~ ^[a-z0-9_]+$ ]]; then
+                echo "::error::not a scenario name: $name"
+                exit 2
+              fi
+            done
+            $MORTSOM run --platform linux --ref "$APP_REF" "${names[@]}" || status=$?
           else
             $MORTSOM run --platform linux --ref "$APP_REF" --tag "$TAG" || status=$?
           fi
@@ -149,7 +159,7 @@ jobs:
         if: always()
         run: |
           for run in $(ls -1 artifacts 2>/dev/null | grep -v '^\.' | grep -v '^accounting'); do
-            $MORTSOM cleanup "$run" || true
+            $MORTSOM cleanup "$run" || echo "::warning::cleanup of $run failed; the stack is discarded with the runner"
           done
       - name: Publish sanitized evidence
         if: always()

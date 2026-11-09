@@ -361,7 +361,7 @@ mod catalog {
 
     #[test]
     fn the_json_round_trips_with_stable_field_names() {
-        let json = catalog().to_json();
+        let json = catalog().to_json().unwrap();
         let value: serde_json::Value = serde_json::from_str(&json).unwrap();
 
         assert_eq!(value["schema"], CATALOG_SCHEMA);

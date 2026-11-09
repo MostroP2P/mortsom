@@ -6,7 +6,6 @@
 
 mod attribution;
 mod bond_gate;
-pub use bond_gate::BOND_FAMILY;
 mod chain_tip;
 mod execute;
 mod maintenance;
@@ -17,6 +16,7 @@ pub(crate) mod recovery;
 mod report;
 pub mod timings;
 mod world_execution;
+pub use bond_gate::BOND_FAMILY;
 pub use observer::{LiveObserver, ObserverFactory};
 pub use report::RunSummary;
 use report::finish;
