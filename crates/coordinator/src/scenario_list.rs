@@ -21,7 +21,9 @@
 use std::collections::BTreeMap;
 
 use mortsom_scenario_kit::registry::ScenarioDef;
+use serde::Serialize;
 
+use crate::run::BOND_FAMILY;
 use crate::style::{self, Style};
 
 /// Tags that label a scenario without naming its family; a scenario is
@@ -252,6 +254,87 @@ impl Row {
             detail = format!("+ {} | {detail}", self.extras.join(", "));
         }
         format!("\n{}{}", " ".repeat(NAME_COLUMN + 2), paint(DIM, &detail))
+    }
+}
+
+/// Version of the `mortsom list --json` document. Bumped on any change a
+/// reader would have to handle: a removed or renamed field, a new meaning.
+pub const CATALOG_SCHEMA: u32 = 1;
+
+/// The registry as a machine reads it (`mortsom list --json`).
+///
+/// Pull request gates commit this document and select scenarios from it,
+/// so it carries everything selection and skipping depend on and nothing
+/// that is only layout.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Catalog {
+    /// [`CATALOG_SCHEMA`].
+    pub schema: u32,
+    /// Version of the Mortsom that produced it.
+    pub mortsom_version: String,
+    /// Scenarios, in registry order.
+    pub scenarios: Vec<CatalogEntry>,
+}
+
+/// One scenario of the [`Catalog`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CatalogEntry {
+    /// Name `mortsom run` takes.
+    pub name: String,
+    /// Family the scenario is grouped under.
+    pub family: String,
+    /// Every tag, in registry order (the family is not necessarily first);
+    /// `--tag` selects by any.
+    pub tags: Vec<String>,
+    /// True when the scenario moves sats.
+    pub moves_value: bool,
+    /// True when it needs a dispute solver registered with the daemon.
+    pub needs_solver: bool,
+    /// True when it drives the app's own connected wallet; a run whose
+    /// payer is a node Mortsom holds skips it.
+    pub needs_app_wallet: bool,
+    /// True when it is written for a daemon with anti-abuse bonds
+    /// (`stack up --bond`); every other scenario is skipped on one.
+    pub needs_bonded_daemon: bool,
+    /// Interruptions it causes outside the app; Linux and Web runs skip it.
+    pub needs: Vec<String>,
+    /// Capabilities the app profile must support.
+    pub requires: Vec<String>,
+    /// Deadline that aborts one attempt; not how long the scenario takes.
+    pub timeout_secs: u64,
+}
+
+impl Catalog {
+    /// Builds the catalog from registry definitions.
+    pub fn from_defs(defs: &[&'static ScenarioDef], mortsom_version: &str) -> Self {
+        let scenarios = defs
+            .iter()
+            .map(|def| CatalogEntry {
+                name: def.name.to_owned(),
+                family: family_of(def.tags).to_owned(),
+                tags: def.tags.iter().map(|t| (*t).to_owned()).collect(),
+                moves_value: def.moves_value,
+                needs_solver: def.needs_solver,
+                needs_app_wallet: def.needs_app_wallet,
+                needs_bonded_daemon: def.tags.contains(&BOND_FAMILY),
+                needs: def.needs.iter().map(|n| n.as_str().to_owned()).collect(),
+                requires: def.requires.iter().map(|c| c.as_str().to_owned()).collect(),
+                timeout_secs: def.timeout_secs,
+            })
+            .collect();
+        Self {
+            schema: CATALOG_SCHEMA,
+            mortsom_version: mortsom_version.to_owned(),
+            scenarios,
+        }
+    }
+
+    /// Pretty JSON with a trailing newline, so a committed copy diffs
+    /// cleanly.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        let mut json = serde_json::to_string_pretty(self)?;
+        json.push('\n');
+        Ok(json)
     }
 }
 

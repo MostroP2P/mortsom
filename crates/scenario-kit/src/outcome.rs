@@ -66,4 +66,27 @@ mod tests {
         assert!(!failed.is_passed());
         assert!(Outcome::Passed.is_passed());
     }
+
+    /// Pull request gates read these exact field names from `summary.json`
+    /// (docs/gate-contract.md); renaming one is a contract change.
+    #[test]
+    fn a_result_keeps_the_field_names_gates_read() {
+        let result = ScenarioResult {
+            name: "happy_sell".into(),
+            app_profile: "mobile-v2".into(),
+            app_version: Some("2.1.2".into()),
+            outcome: Outcome::Skipped {
+                reason: "needs a bonded daemon".into(),
+            },
+            attempts: 1,
+            duration: Duration::from_secs(3),
+        };
+        let value = serde_json::to_value(&result).unwrap_or_default();
+
+        assert_eq!(value["name"], "happy_sell");
+        assert_eq!(value["outcome"]["outcome"], "skipped");
+        assert_eq!(value["outcome"]["reason"], "needs a bonded daemon");
+        assert_eq!(value["attempts"], 1);
+        assert_eq!(value["duration"]["secs"], 3);
+    }
 }

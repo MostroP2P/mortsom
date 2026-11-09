@@ -12,7 +12,7 @@ use mortsom_scenario_kit::registry::ScenarioDef;
 use super::{Outcome, ScenarioResult};
 
 /// The family whose scenarios need a bonded daemon.
-pub(super) const BOND_FAMILY: &str = "bond";
+pub const BOND_FAMILY: &str = "bond";
 
 /// Splits `selected` into the scenarios written for the stack's daemon and
 /// the rest, skipped with the reason. `bonded` is whether the stack declares
