@@ -122,11 +122,12 @@ jobs:
       - name: Run
         run: |
           start=$(date +%s)
-          if [ -n "$SCENARIOS" ]; then
-            # Split into names without globbing, and accept only scenario
-            # names: nothing here may become a flag.
-            set -f
-            read -r -a names <<< "$SCENARIOS"
+          # Split into names without globbing, and accept only scenario
+          # names: nothing here may become a flag. A blank list falls back
+          # to the tag, never to the whole registry.
+          set -f
+          read -r -a names <<< "$SCENARIOS"
+          if [ ${#names[@]} -gt 0 ]; then
             for name in "${names[@]}"; do
               if ! [[ "$name" =~ ^[a-z0-9_]+$ ]]; then
                 echo "::error::not a scenario name: $name"
