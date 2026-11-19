@@ -185,7 +185,7 @@ async fn fetch_errors_are_redacted_and_never_continue_to_a_checkout() {
         &root.path().join("repository.git").display().to_string(),
     );
     runner.script_failure(
-        &git_command(&root.path().join("repository.git"), &["fetch"]).display(),
+        &git_command(&root.path().join("repository.git"), FETCH).display(),
         "network failed secret=private-fixture",
     );
     let error = prepare_from(
@@ -354,10 +354,7 @@ async fn the_fetch_never_leaves_maintenance_writing_the_cache_behind_it() {
     )
     .await;
     let calls = runner.calls();
-    let fetch = calls
-        .iter()
-        .find(|call| call.contains(" fetch "))
-        .expect("the source is fetched");
+    let fetch = calls.iter().find(|call| call.contains(" fetch ")).unwrap();
     // Either key alone leaves one Git generation detaching: 2.47 moved the
     // switch from `gc` to `maintenance`.
     for foreground in ["gc.autoDetach=false", "maintenance.autoDetach=false"] {
