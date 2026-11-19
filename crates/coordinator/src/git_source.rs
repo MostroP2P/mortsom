@@ -202,6 +202,21 @@ impl PreparedSource {
     }
 }
 
+/// `git fetch` with its automatic maintenance kept in the foreground.
+///
+/// Left to detach, it is still writing the cache (a commit-graph, a repack)
+/// when the checkout's local clone hardlinks those files, and the clone dies
+/// with "hardlink different from source". Run here it finishes under the
+/// cache lock, and the cache is still maintained. Git 2.47 moved the switch
+/// from `gc` to `maintenance`; each generation ignores the other's key.
+const FETCH: &[&str] = &[
+    "-c",
+    "gc.autoDetach=false",
+    "-c",
+    "maintenance.autoDetach=false",
+    "fetch",
+];
+
 /// Fetches the requested head, including GitHub's head ref for fork PRs.
 pub async fn prepare<U: Upstream>(
     selector: &Selector<U>,
@@ -224,12 +239,9 @@ pub(crate) async fn prepare_from<U: Upstream>(
     ignore_managed_contents(&root)?;
     let cache = cache(&root, U::COMPONENT, runner).await?;
     let reference = format!("+{}:refs/mortsom/selected", selector.git_ref());
-    run_git::<U>(
-        runner,
-        &cache,
-        &["fetch", "--no-tags", "--force", repository, &reference],
-    )
-    .await?;
+    let mut fetch = FETCH.to_vec();
+    fetch.extend(["--no-tags", "--force", repository, &reference]);
+    run_git::<U>(runner, &cache, &fetch).await?;
     let revision = run_git::<U>(
         runner,
         &cache,

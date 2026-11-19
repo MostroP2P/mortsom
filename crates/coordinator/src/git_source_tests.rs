@@ -185,7 +185,7 @@ async fn fetch_errors_are_redacted_and_never_continue_to_a_checkout() {
         &root.path().join("repository.git").display().to_string(),
     );
     runner.script_failure(
-        &git_command(&root.path().join("repository.git"), &["fetch"]).display(),
+        &git_command(&root.path().join("repository.git"), FETCH).display(),
         "network failed secret=private-fixture",
     );
     let error = prepare_from(
@@ -329,4 +329,38 @@ async fn managed_files_are_ignored_even_outside_the_mortsom_checkout() {
             .await
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn the_fetch_never_leaves_maintenance_writing_the_cache_behind_it() {
+    use mortsom_ui_driver::process::tests_support::FakeRunner;
+    let root = tempfile::tempdir().unwrap();
+    let runner = FakeRunner::default();
+    runner.script("env", "true");
+    runner.script(
+        &git_command(
+            &root.path().join("repository.git"),
+            &["rev-parse", "--absolute-git-dir"],
+        )
+        .display(),
+        &root.path().join("repository.git").display().to_string(),
+    );
+    // The scripted rev-parse is no commit ID, so this stops after the fetch.
+    let _ = prepare_from(
+        root.path(),
+        REPOSITORY,
+        &Selector::parse("main").unwrap(),
+        &runner,
+    )
+    .await;
+    let calls = runner.calls();
+    let fetch = calls.iter().find(|call| call.contains(" fetch ")).unwrap();
+    // Either key alone leaves one Git generation detaching: 2.47 moved the
+    // switch from `gc` to `maintenance`.
+    for foreground in ["gc.autoDetach=false", "maintenance.autoDetach=false"] {
+        assert!(
+            fetch.contains(&format!("-c {foreground}")),
+            "{foreground} missing from: {fetch}"
+        );
+    }
 }
